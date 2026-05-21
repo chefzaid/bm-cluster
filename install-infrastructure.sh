@@ -11,6 +11,7 @@ VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 AUTO_APPROVE=false
 SERVER_IP="${SERVER_IP:-51.68.232.240}"
+SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 
 for arg in "$@"; do
     case "$arg" in
@@ -55,6 +56,42 @@ ask_with_default() {
     read -rp "$(echo -e "${YELLOW}$prompt $suffix${NC} ")" answer
     answer="${answer:-$default_choice}"
     [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+normalize_server_exposure() {
+    local exposure="${1,,}"
+
+    case "$exposure" in
+        internet|internet-exposed|public|external)
+            echo "internet"
+            ;;
+        local|local-only|private|internal|lan)
+            echo "local"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ask_server_exposure() {
+    local default_exposure raw_answer normalized
+    default_exposure="$(normalize_server_exposure "$1")" || error "Invalid SERVER_EXPOSURE value: $1"
+
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        echo "$default_exposure"
+        return 0
+    fi
+
+    while true; do
+        read -rp "$(echo -e "${YELLOW}Will this server be internet-exposed or local-only? [internet/local]${NC} ")" raw_answer
+        raw_answer="${raw_answer:-$default_exposure}"
+        if normalized="$(normalize_server_exposure "$raw_answer")"; then
+            echo "$normalized"
+            return 0
+        fi
+        warn "Please answer 'internet' or 'local'."
+    done
 }
 
 ensure_tls_secret() {
@@ -142,12 +179,21 @@ echo ""
 echo "This script will:"
 echo "  - Prompt you for each install feature group one by one"
 echo "  - Install only selected components"
-echo "  - Run Vault bootstrap and node security scripts only when selected"
+echo "  - Apply host security tooling automatically for internet-exposed servers"
 echo ""
 
 ask_with_default "Proceed with installation and deployment?" "Y" || { info "Aborted."; exit 0; }
 
 step "Select features to install (answer each prompt)"
+SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
+if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
+    APPLY_HOST_SECURITY=true
+    info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and Lynis."
+else
+    APPLY_HOST_SECURITY=false
+    info "Local-only mode selected: skipping internet-facing host security tooling."
+fi
+
 if command -v k3s &>/dev/null; then
     warn "K3s detected: $(k3s --version | head -1)"
     K3S_DEFAULT="N"
@@ -158,7 +204,6 @@ fi
 ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
 ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
 ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
-ask_with_default "Apply node firewall hardening baseline now?" "N" && APPLY_FIREWALL=true || APPLY_FIREWALL=false
 ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
@@ -246,12 +291,12 @@ if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
 fi
 
-if [[ "$APPLY_FIREWALL" == "true" ]]; then
+if [[ "$APPLY_HOST_SECURITY" == "true" ]]; then
     if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then
-        step "Applying host firewall hardening (UFW baseline)..."
-        "$SECURITY_HARDEN_SCRIPT" --apply
+        step "Applying host security tooling for internet-exposed server..."
+        "$SECURITY_HARDEN_SCRIPT" --apply --server-exposure "$SERVER_EXPOSURE"
     else
-        warn "Firewall hardening script not found at $SECURITY_HARDEN_SCRIPT"
+        warn "Host security script not found at $SECURITY_HARDEN_SCRIPT"
     fi
 fi
 

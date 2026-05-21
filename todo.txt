@@ -1,8 +1,0 @@
-Ansible script to run for securing the server:
-fail2ban
-crowdsec + bouncer
-auto install stable updates
-lynis ....
-malware/antivirus
-auditd recorded...
-and the whole EDR / IDS / WAF setup

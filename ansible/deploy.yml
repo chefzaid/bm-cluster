@@ -6,17 +6,31 @@
   vars:
     infra_namespace: "{{ infra_ns | default('infra') }}"
     k8s_dir: "{{ playbook_dir }}/../deployments"
-    apply_firewall_hardening: "{{ harden_firewall | default(true) }}"
+    server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
+    apply_host_security_suite: "{{ harden_firewall | default(server_exposure_mode == 'internet') }}"
 
   tasks:
+    - name: Validate server exposure mode
+      assert:
+        that:
+          - server_exposure_mode in ['internet', 'local']
+        fail_msg: "server_exposure must be either 'internet' or 'local'."
+
     - name: Ensure namespaces exist
       shell: kubectl create namespace {{ item }} --dry-run=client -o yaml | kubectl apply -f -
       loop:
         - "{{ infra_namespace }}"
 
-    - name: Apply host firewall hardening baseline
-      command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply"
-      when: apply_firewall_hardening | bool
+    - name: Apply internet-facing host security tooling
+      command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply --server-exposure {{ server_exposure_mode }}"
+      when:
+        - server_exposure_mode == 'internet'
+        - apply_host_security_suite | bool
+
+    - name: Skip internet-facing host security tooling for local-only servers
+      debug:
+        msg: "server_exposure=local, skipping UFW, Fail2ban, CrowdSec, and Lynis automation."
+      when: server_exposure_mode == 'local'
 
     - name: Add Helm repositories
       shell: |

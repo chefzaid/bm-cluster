@@ -1,0 +1,14 @@
+filenames:
+  - /var/log/auth.log
+labels:
+  type: syslog
+---
+filenames:
+  - /var/log/syslog
+labels:
+  type: syslog
+---
+filenames:
+  - /var/log/ufw.log
+labels:
+  type: syslog

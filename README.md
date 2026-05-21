@@ -108,7 +108,7 @@ chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
 
-The installer now prompts feature-by-feature (prereqs, K3s, Longhorn, security baseline, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD) so you can install only what is needed.
+The installer now asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec, Lynis); local-only servers skip it. The remaining installer prompts still run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD).
 
 ### Manual Installation
 
@@ -121,10 +121,10 @@ sudo usermod -aG docker $USER
 sudo systemctl enable --now iscsid
 ```
 
-#### 1.1 Apply Host Firewall Hardening (Recommended)
+#### 1.1 Apply Host Security Tooling (Recommended for Internet-Exposed Servers)
 ```bash
 chmod +x scripts/configure-node-security.sh
-./scripts/configure-node-security.sh --apply
+./scripts/configure-node-security.sh --apply --server-exposure internet
 ```
 
 #### 2. Install Kubernetes
@@ -336,7 +336,8 @@ kubectl edit settings -n longhorn-system default-replica-count
 
 ## 🔒 Host Security Baseline
 
-- UFW firewall baseline is supported via `scripts/configure-node-security.sh` and should be enabled on every node.
+- Internet-exposed servers automatically install and configure UFW, Fail2ban, CrowdSec, and Lynis via `scripts/configure-node-security.sh`.
+- Local-only servers skip that internet-facing host security suite.
 - Keep only required public ports open (`22`, `80`, `443`, `6443`, plus node-internal overlay ports).
 - Rotate Vault-stored secrets regularly and restart workloads that consume rotated credentials.
 - Keep Kubernetes/Helm chart versions updated and avoid running long-lived default credentials.
@@ -359,6 +360,9 @@ This single script performs both prerequisite installation and infrastructure de
 
 ```bash
 ansible-playbook ansible/deploy.yml
+
+# Local-only host (skips UFW, Fail2ban, CrowdSec, Lynis automation)
+ansible-playbook ansible/deploy.yml -e server_exposure=local
 ```
 
 Ansible excels when managing multiple servers (inventory-based), enforcing idempotent state, and integrating with existing automation.
