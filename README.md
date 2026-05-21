@@ -108,7 +108,7 @@ chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
 
-The installer now asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec, Lynis); local-only servers skip it. The remaining installer prompts still run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD).
+The installer now asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec with the nftables firewall bouncer, Lynis); local-only servers skip it. The remaining installer prompts still run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD).
 
 ### Manual Installation
 
@@ -126,6 +126,8 @@ sudo systemctl enable --now iscsid
 chmod +x scripts/configure-node-security.sh
 ./scripts/configure-node-security.sh --apply --server-exposure internet
 ```
+
+This config is written directly by the script: Fail2ban uses the `systemd` backend with UFW actions for `sshd`, and CrowdSec uses the nftables firewall bouncer with local API credentials generated or preserved on the host.
 
 #### 2. Install Kubernetes
 ```bash
@@ -336,7 +338,7 @@ kubectl edit settings -n longhorn-system default-replica-count
 
 ## 🔒 Host Security Baseline
 
-- Internet-exposed servers automatically install and configure UFW, Fail2ban, CrowdSec, and Lynis via `scripts/configure-node-security.sh`.
+- Internet-exposed servers automatically install and configure UFW, Fail2ban, CrowdSec with the nftables bouncer, and Lynis via `scripts/configure-node-security.sh`.
 - Local-only servers skip that internet-facing host security suite.
 - Keep only required public ports open (`22`, `80`, `443`, `6443`, plus node-internal overlay ports).
 - Rotate Vault-stored secrets regularly and restart workloads that consume rotated credentials.

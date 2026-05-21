@@ -1,8 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_ROOT="$SCRIPT_DIR/../configs/security"
 APPLY=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 APT_UPDATED=false
@@ -58,12 +56,24 @@ ensure_packages() {
   fi
 }
 
-install_config() {
-  local source_path="$1"
-  local destination_path="$2"
+backup_file_if_exists() {
+  local path="$1"
+  local backup_path="${path}.bak-ds-cluster"
 
-  [[ -f "$source_path" ]] || err "Missing config file: $source_path"
-  sudo install -D -m 0644 "$source_path" "$destination_path"
+  if sudo test -f "$path" && ! sudo test -f "$backup_path"; then
+    sudo cp "$path" "$backup_path"
+  fi
+}
+
+write_root_file() {
+  local destination_path="$1"
+  local mode="${2:-0644}"
+  local tmp_file
+
+  tmp_file="$(mktemp)"
+  cat > "$tmp_file"
+  sudo install -D -m "$mode" "$tmp_file" "$destination_path"
+  rm -f "$tmp_file"
 }
 
 ensure_service() {
@@ -75,7 +85,7 @@ ensure_service() {
 ensure_crowdsec_repo() {
   local candidate
 
-  candidate="$(apt-cache policy crowdsec 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  candidate="$(apt-cache policy crowdsec 2>/dev/null | awk '/Candidate:/ {candidate=$2} END {print candidate}')"
   if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
     return 0
   fi
@@ -89,12 +99,136 @@ ensure_crowdsec_repo() {
 ensure_crowdsec_collection() {
   local collection="$1"
 
-  if sudo cscli collections list 2>/dev/null | grep -q "^${collection}[[:space:]]"; then
+  if sudo cscli collections list -o raw 2>/dev/null | awk -v target="$collection" '$1 == target {found=1} END {exit(found ? 0 : 1)}'; then
     return 0
   fi
 
   info "Installing CrowdSec collection ${collection}..."
   sudo cscli collections install "$collection" >/dev/null
+}
+
+write_fail2ban_config() {
+  backup_file_if_exists /etc/fail2ban/jail.local
+  write_root_file /etc/fail2ban/jail.local <<'EOF'
+# Managed by scripts/configure-node-security.sh
+[DEFAULT]
+bantime = 1h
+bantime.increment = true
+bantime.rndtime = 5m
+bantime.maxtime = 24h
+findtime = 10m
+maxretry = 5
+backend = systemd
+usedns = warn
+banaction = ufw
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+backend = systemd
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+EOF
+}
+
+write_crowdsec_acquisitions() {
+  backup_file_if_exists /etc/crowdsec/acquis.d/setup.linux.yaml
+  backup_file_if_exists /etc/crowdsec/acquis.d/setup.sshd.yaml
+  backup_file_if_exists /etc/crowdsec/acquis.yaml
+  sudo rm -f /etc/crowdsec/acquis.yaml
+
+  write_root_file /etc/crowdsec/acquis.d/setup.linux.yaml <<'EOF'
+# Managed by scripts/configure-node-security.sh
+filenames:
+  - /var/log/messages
+  - /var/log/syslog
+  - /var/log/kern.log
+labels:
+  type: syslog
+  source: file
+EOF
+
+  write_root_file /etc/crowdsec/acquis.d/setup.sshd.yaml <<'EOF'
+# Managed by scripts/configure-node-security.sh
+filenames:
+  - /var/log/auth.log
+  - /var/log/secure
+labels:
+  type: syslog
+  source: file
+EOF
+}
+
+get_crowdsec_bouncer_api_key() {
+  local config_path="/etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml"
+  local api_key=""
+  local bouncer_name=""
+
+  if sudo test -f "$config_path"; then
+    api_key="$(sudo awk -F': ' '$1=="api_key"{gsub(/"/,"",$2); print $2; exit}' "$config_path")"
+  fi
+
+  if [[ -z "$api_key" ]]; then
+    bouncer_name="ds-cluster-$(hostname -s)-firewall-bouncer-$(date +%s)"
+    api_key="$(sudo cscli bouncers add "$bouncer_name" -o raw 2>/dev/null || true)"
+  fi
+
+  [[ -n "$api_key" ]] || err "Unable to determine CrowdSec bouncer API key"
+  printf '%s\n' "$api_key"
+}
+
+write_crowdsec_bouncer_config() {
+  local api_key="$1"
+
+  backup_file_if_exists /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+  write_root_file /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml <<EOF
+# Managed by scripts/configure-node-security.sh
+mode: nftables
+update_frequency: 10s
+log_mode: file
+log_dir: /var/log/
+log_level: info
+log_compression: true
+log_max_size: 100
+log_max_backups: 3
+log_max_age: 30
+api_url: http://127.0.0.1:8080/
+api_key: ${api_key}
+insecure_skip_verify: false
+disable_ipv6: false
+deny_action: DROP
+deny_log: false
+supported_decisions_types:
+  - ban
+blacklists_ipv4: crowdsec-blacklists
+blacklists_ipv6: crowdsec6-blacklists
+ipset_type: nethash
+iptables_chains:
+  - INPUT
+iptables_add_rule_comments: true
+nftables:
+  ipv4:
+    enabled: true
+    set-only: false
+    table: crowdsec
+    chain: crowdsec-chain
+    priority: -10
+  ipv6:
+    enabled: true
+    set-only: false
+    table: crowdsec6
+    chain: crowdsec6-chain
+    priority: -10
+nftables_hooks:
+  - input
+  - forward
+pf:
+  anchor_name: ""
+prometheus:
+  enabled: false
+  listen_addr: 127.0.0.1
+  listen_port: 60601
+EOF
 }
 
 configure_ufw() {
@@ -127,19 +261,20 @@ configure_ufw() {
 
 configure_fail2ban() {
   ensure_packages fail2ban
-  install_config "$CONFIG_ROOT/fail2ban/jail.local" /etc/fail2ban/jail.local
+  write_fail2ban_config
   ensure_service fail2ban
 }
 
 configure_crowdsec() {
   ensure_crowdsec_repo
-  ensure_packages crowdsec crowdsec-firewall-bouncer-iptables
+  ensure_packages crowdsec crowdsec-firewall-bouncer-nftables
 
-  install_config "$CONFIG_ROOT/crowdsec/acquis.yaml" /etc/crowdsec/acquis.yaml
+  write_crowdsec_acquisitions
   sudo cscli hub update >/dev/null
   ensure_crowdsec_collection crowdsecurity/linux
   ensure_crowdsec_collection crowdsecurity/sshd
   ensure_service crowdsec
+  write_crowdsec_bouncer_config "$(get_crowdsec_bouncer_api_key)"
   ensure_service crowdsec-firewall-bouncer
 }
 
