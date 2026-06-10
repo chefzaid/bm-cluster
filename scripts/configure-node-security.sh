@@ -112,12 +112,15 @@ write_fail2ban_config() {
   write_root_file /etc/fail2ban/jail.local <<'EOF'
 # Managed by scripts/configure-node-security.sh
 [DEFAULT]
-bantime = 1h
+# Stricter SSH brute-force policy: fewer attempts, longer observation window,
+# longer bans, and exponential repeat-offender escalation.
+bantime = 24h
 bantime.increment = true
-bantime.rndtime = 5m
-bantime.maxtime = 24h
-findtime = 10m
-maxretry = 5
+bantime.factor = 2
+bantime.rndtime = 10m
+bantime.maxtime = 30d
+findtime = 1h
+maxretry = 3
 backend = systemd
 usedns = warn
 banaction = ufw
@@ -125,10 +128,112 @@ banaction = ufw
 [sshd]
 enabled = true
 port = ssh
-filter = sshd
+filter = sshd[mode=aggressive]
 backend = systemd
 journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
 EOF
+}
+
+write_crowdsec_profiles() {
+  backup_file_if_exists /etc/crowdsec/profiles.yaml
+  write_root_file /etc/crowdsec/profiles.yaml <<'EOF'
+name: default_ip_remediation
+#debug: true
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Ip"
+decisions:
+ - type: ban
+   duration: 7d
+# notifications:
+#   - slack_default  # Set the webhook in /etc/crowdsec/notifications/slack.yaml before enabling this.
+#   - splunk_default # Set the splunk url and token in /etc/crowdsec/notifications/splunk.yaml before enabling this.
+#   - http_default   # Set the required http parameters in /etc/crowdsec/notifications/http.yaml before enabling this.
+#   - email_default  # Set the required email parameters in /etc/crowdsec/notifications/email.yaml before enabling this.
+on_success: break
+---
+name: default_range_remediation
+#debug: true
+filters:
+ - Alert.Remediation == true && Alert.GetScope() == "Range"
+decisions:
+ - type: ban
+   duration: 7d
+# notifications:
+#   - slack_default  # Set the webhook in /etc/crowdsec/notifications/slack.yaml before enabling this.
+#   - splunk_default # Set the splunk url and token in /etc/crowdsec/notifications/splunk.yaml before enabling this.
+#   - http_default   # Set the required http parameters in /etc/crowdsec/notifications/http.yaml before enabling this.
+#   - email_default  # Set the required email parameters in /etc/crowdsec/notifications/email.yaml before enabling this.
+on_success: break
+EOF
+}
+
+write_crowdsec_ssh_time_based_scenario() {
+  backup_file_if_exists /etc/crowdsec/scenarios/ssh-time-based-bf.yaml
+  write_root_file /etc/crowdsec/scenarios/ssh-time-based-bf.yaml <<'EOF'
+# ssh time-based bruteforce with false positive reduction
+type: conditional
+name: crowdsecurity/ssh-time-based-bf
+description: "Detect time-based ssh bruteforce attempts that evade rate limiting (with false positive reduction)"
+filter: "evt.Meta.service == 'ssh' && evt.Meta.log_type in ['ssh_failed-auth', 'auth_success']"
+groupby: evt.Meta.source_ip
+capacity: -1
+cancel_on: "evt.Meta.log_type == 'auth_success'"
+condition: |
+    let failedAuths = filter(queue.Queue, {#.Meta.log_type == 'ssh_failed-auth'});
+    len(failedAuths) >= 4 &&
+    MedianInterval(map(failedAuths[-4:], {#.Time})) > duration("10m")
+leakspeed: 2h
+blackhole: 5m
+reprocess: true
+labels:
+  service: ssh
+  behavior: "ssh:bruteforce"
+  spoofable: 0
+  confidence: 3
+  classification:
+    - attack.T1110
+  label: "SSH Time-Based Bruteforce"
+  remediation: true
+---
+# ssh user-enum time-based with false positive reduction
+type: conditional
+name: crowdsecurity/ssh-time-based-bf_user-enum
+description: "Detect time-based ssh user enum bruteforce attempts (with false positive reduction)"
+filter: "evt.Meta.service == 'ssh' && evt.Meta.log_type in ['ssh_failed-auth', 'auth_success']"
+groupby: evt.Meta.source_ip
+distinct: evt.Meta.target_user
+capacity: -1
+cancel_on: "evt.Meta.log_type == 'auth_success'"
+condition: |
+    let failedAuths = filter(queue.Queue, {#.Meta.log_type == 'ssh_failed-auth'});
+    len(failedAuths) >= 4 &&
+    MedianInterval(map(failedAuths[-4:], {#.Time})) > duration("10m")
+leakspeed: 2h
+blackhole: 5m
+reprocess: true
+labels:
+  service: ssh
+  behavior: "ssh:bruteforce"
+  spoofable: 0
+  confidence: 3
+  classification:
+    - attack.T1589
+    - attack.T1110
+  label: "SSH Time-Based User Enumeration"
+  remediation: true
+EOF
+}
+
+configure_crowdsec_inotify_limits() {
+  write_root_file /etc/sysctl.d/99-crowdsec-inotify.conf <<'EOF'
+# Managed by scripts/configure-node-security.sh
+# Allow CrowdSec and container-heavy workloads to create enough filesystem watches.
+fs.inotify.max_user_instances = 1024
+fs.inotify.max_user_watches = 1048576
+EOF
+
+  sudo sysctl -w fs.inotify.max_user_instances=1024 >/dev/null
+  sudo sysctl -w fs.inotify.max_user_watches=1048576 >/dev/null
 }
 
 write_crowdsec_acquisitions() {
@@ -262,6 +367,7 @@ configure_ufw() {
 configure_fail2ban() {
   ensure_packages fail2ban
   write_fail2ban_config
+  sudo fail2ban-client -t >/dev/null
   ensure_service fail2ban
 }
 
@@ -269,10 +375,14 @@ configure_crowdsec() {
   ensure_crowdsec_repo
   ensure_packages crowdsec crowdsec-firewall-bouncer-nftables
 
+  configure_crowdsec_inotify_limits
   write_crowdsec_acquisitions
+  write_crowdsec_profiles
   sudo cscli hub update >/dev/null
   ensure_crowdsec_collection crowdsecurity/linux
   ensure_crowdsec_collection crowdsecurity/sshd
+  write_crowdsec_ssh_time_based_scenario
+  sudo crowdsec -t -c /etc/crowdsec/config.yaml >/dev/null
   ensure_service crowdsec
   write_crowdsec_bouncer_config "$(get_crowdsec_bouncer_api_key)"
   ensure_service crowdsec-firewall-bouncer

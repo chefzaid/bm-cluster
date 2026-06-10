@@ -27,6 +27,12 @@
         - server_exposure_mode == 'internet'
         - apply_host_security_suite | bool
 
+    - name: Publish host security policy record to Kubernetes
+      command: kubectl apply -f {{ k8s_dir }}/host-security-config.yaml
+      when: server_exposure_mode == 'internet'
+      register: host_security_config
+      changed_when: "'created' in host_security_config.stdout or 'configured' in host_security_config.stdout"
+
     - name: Skip internet-facing host security tooling for local-only servers
       debug:
         msg: "server_exposure=local, skipping UFW, Fail2ban, CrowdSec, and Lynis automation."

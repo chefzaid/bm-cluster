@@ -314,6 +314,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     step "Creating infra namespace..."
     kubectl create namespace infra 2>/dev/null || true
 
+    if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
+        step "Publishing host security policy record..."
+        kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
+    fi
+
     if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Ensuring HTTPS TLS secret..."
         ensure_tls_secret infra swirlit-dev-tls \
