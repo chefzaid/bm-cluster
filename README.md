@@ -1,4 +1,4 @@
-# bm-cluster
+# Bare-Metal Cluster
 
 Setup for a bare-Metal (BM) cluster providing main DevOps and infrastructure tools necessary for web apps development, deployment, observability, and basic security.
 
