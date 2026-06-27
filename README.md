@@ -1,6 +1,6 @@
-# ds-cluster
+# bm-cluster
 
-Infrastructure repository Dedicated Server (DS) cluster. It owns cluster prerequisites, infrastructure manifests, ingress/platform services, GitOps wiring, and infrastructure automation.
+Setup for a bare-Metal (BM) cluster providing main DevOps and infrastructure tools necessary for web apps development, deployment, observability, and basic security.
 
 ## 🛠 Technologies Used
 
