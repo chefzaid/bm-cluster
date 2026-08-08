@@ -158,6 +158,7 @@ check_dns_records() {
         "longhorn.swirlit.dev"
         "vault.swirlit.dev"
         "dbgate.swirlit.dev"
+        "odoo.swirlit.dev"
     )
 
     for host in "${hosts[@]}"; do
@@ -208,11 +209,17 @@ ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGR
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
 ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, DBGate, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Deploy/upgrade Odoo (ERP/CRM)?" "Y" && DEPLOY_ODOO=true || DEPLOY_ODOO=false
 ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
 
 if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
     warn "Platform services depend on data stores; enabling data store deployment."
+    DEPLOY_DATA_STORES=true
+fi
+
+if [[ "$DEPLOY_ODOO" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
+    warn "Odoo depends on PostgreSQL; enabling data store deployment."
     DEPLOY_DATA_STORES=true
 fi
 
@@ -222,7 +229,7 @@ if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; th
 fi
 
 RUN_K8S_FEATURES=false
-if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
     RUN_K8S_FEATURES=true
 fi
 
@@ -319,7 +326,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
     fi
 
-    if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+    if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ]]; then
         step "Ensuring HTTPS TLS secret..."
         ensure_tls_secret infra swirlit-dev-tls \
             keycloak.swirlit.dev \
@@ -332,7 +339,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             gitlab.swirlit.dev \
             longhorn.swirlit.dev \
             vault.swirlit.dev \
-            dbgate.swirlit.dev
+            dbgate.swirlit.dev \
+            odoo.swirlit.dev
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
@@ -406,7 +414,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
 
-        for es in postgres-secret mongodb-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
+        for es in postgres-secret mongodb-secret odoo-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
             kubectl wait --for=condition=Ready externalsecret/"$es" -n infra --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
         done
     fi
@@ -438,6 +446,13 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=ready pod -l app=logstash       -n infra --timeout=180s 2>/dev/null || warn "Logstash still starting..."
         kubectl wait --for=condition=ready pod -l app=gitlab         -n infra --timeout=900s 2>/dev/null || warn "GitLab still starting..."
         kubectl wait --for=condition=ready pod -l app=dbgate         -n infra --timeout=180s 2>/dev/null || warn "DBGate still starting..."
+    fi
+
+    if [[ "$DEPLOY_ODOO" == "true" ]]; then
+        step "Deploying Odoo..."
+        kubectl apply -f "$DEPLOY_DIR/odoo.yaml"
+        kubectl apply -f "$DEPLOY_DIR/ingress.yaml"
+        kubectl wait --for=condition=ready pod -l app=odoo -n infra --timeout=900s 2>/dev/null || warn "Odoo is still starting..."
     fi
 
     if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
@@ -498,6 +513,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  Longhorn   https://longhorn.swirlit.dev"
     echo "  Vault      https://vault.swirlit.dev"
     echo "  DBGate     https://dbgate.swirlit.dev"
+    [[ "$DEPLOY_ODOO" == "true" ]] && echo "  Odoo       https://odoo.swirlit.dev"
     echo ""
     echo "Expected DNS target IP: $SERVER_IP"
     check_dns_records
@@ -511,6 +527,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  MongoDB:  kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
     echo "  Vault:    kubectl get secret -n infra vault-init -o jsonpath='{.data.root_token}' | base64 -d"
     echo "  DBGate:   kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf \"%s\" (index .data \"LOGIN\" | base64decode)}}:{{printf \"%s\" (index .data \"PASSWORD\" | base64decode)}}'"
+    if [[ "$DEPLOY_ODOO" == "true" ]]; then
+        echo "  Odoo:     username admin; password: kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
+    fi
     echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
     echo ""
 

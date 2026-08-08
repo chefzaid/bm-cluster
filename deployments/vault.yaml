@@ -56,6 +56,8 @@ spec:
           serviceAccountRef:
             name: external-secrets
             namespace: infra
+            audiences:
+              - vault
 
 ---
 apiVersion: external-secrets.io/v1
@@ -104,6 +106,38 @@ spec:
       remoteRef:
         key: infra/mongodb
         property: root_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: odoo-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: odoo-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: ODOO_DB_USER
+      remoteRef:
+        key: infra/odoo
+        property: database_username
+    - secretKey: ODOO_DB_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: database_password
+    - secretKey: ODOO_ADMIN_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: admin_password
+    - secretKey: ODOO_DATABASE_MASTER_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: database_master_password
 
 ---
 apiVersion: external-secrets.io/v1

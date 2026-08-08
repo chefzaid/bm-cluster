@@ -1,0 +1,275 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: odoo-data-pvc
+  namespace: infra
+  labels:
+    app: odoo
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odoo
+  namespace: infra
+  labels:
+    app: odoo
+spec:
+  type: ClusterIP
+  selector:
+    app: odoo
+  ports:
+    - name: http
+      port: 8069
+      targetPort: http
+    - name: websocket
+      port: 8072
+      targetPort: websocket
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odoo
+  namespace: infra
+  labels:
+    app: odoo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: odoo
+  template:
+    metadata:
+      labels:
+        app: odoo
+    spec:
+      securityContext:
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: render-config
+          image: odoo:19.0
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              umask 077
+              {
+                printf '[options]\n'
+                printf 'admin_passwd = %s\n' "$ODOO_DATABASE_MASTER_PASSWORD"
+                printf 'data_dir = /var/lib/odoo\n'
+                printf 'db_host = postgres.infra.svc.cluster.local\n'
+                printf 'db_port = 5432\n'
+                printf 'db_user = %s\n' "$ODOO_DB_USER"
+                printf 'db_password = %s\n' "$ODOO_DB_PASSWORD"
+                printf 'db_name = odoo\n'
+                printf 'dbfilter = ^odoo$\n'
+                printf 'list_db = False\n'
+                printf 'proxy_mode = True\n'
+                printf 'without_demo = True\n'
+                printf 'http_interface = 0.0.0.0\n'
+                printf 'workers = 2\n'
+                printf 'max_cron_threads = 1\n'
+                printf 'limit_memory_soft = 536870912\n'
+                printf 'limit_memory_hard = 671088640\n'
+                printf 'limit_time_cpu = 120\n'
+                printf 'limit_time_real = 240\n'
+              } > /etc/odoo-generated/odoo.conf
+          env:
+            - name: ODOO_DATABASE_MASTER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_DATABASE_MASTER_PASSWORD
+            - name: ODOO_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_DB_USER
+            - name: ODOO_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_DB_PASSWORD
+          volumeMounts:
+            - name: odoo-config
+              mountPath: /etc/odoo-generated
+        - name: bootstrap-database
+          image: odoo:19.0
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
+                --host="$ODOO_DB_HOST" \
+                --port="$ODOO_DB_PORT" \
+                --username="$POSTGRES_ADMIN_USER" \
+                --dbname=postgres \
+                --no-password \
+                --tuples-only \
+                --command='SELECT 1' >/dev/null 2>&1; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+
+              PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
+                --host="$ODOO_DB_HOST" \
+                --port="$ODOO_DB_PORT" \
+                --username="$POSTGRES_ADMIN_USER" \
+                --dbname=postgres \
+                --no-password \
+                --set=db_user="$ODOO_DB_USER" \
+                --set=db_password="$ODOO_DB_PASSWORD" <<'SQL'
+              SELECT format(
+                'CREATE ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',
+                :'db_user', :'db_password'
+              )
+              WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'db_user')
+              \gexec
+              SELECT format(
+                'ALTER ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',
+                :'db_user', :'db_password'
+              )
+              \gexec
+              SELECT format('CREATE DATABASE %I OWNER %I', 'odoo', :'db_user')
+              WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'odoo')
+              \gexec
+              SELECT format('ALTER DATABASE %I OWNER TO %I', 'odoo', :'db_user')
+              \gexec
+              SQL
+
+              schema_ready="$(PGPASSWORD="$ODOO_DB_PASSWORD" psql \
+                --host="$ODOO_DB_HOST" \
+                --port="$ODOO_DB_PORT" \
+                --username="$ODOO_DB_USER" \
+                --dbname=odoo \
+                --no-password \
+                --tuples-only \
+                --no-align \
+                --command="SELECT to_regclass('public.ir_config_parameter') IS NOT NULL")"
+
+              if [[ "$schema_ready" != "t" ]]; then
+                echo "Initializing the Odoo database without demo data..."
+                odoo \
+                  --config=/etc/odoo-generated/odoo.conf \
+                  --database=odoo \
+                  --init=base \
+                  --without-demo \
+                  --stop-after-init
+              fi
+
+              bootstrap_complete="$(PGPASSWORD="$ODOO_DB_PASSWORD" psql \
+                --host="$ODOO_DB_HOST" \
+                --port="$ODOO_DB_PORT" \
+                --username="$ODOO_DB_USER" \
+                --dbname=odoo \
+                --no-password \
+                --tuples-only \
+                --no-align \
+                --command="SELECT value FROM ir_config_parameter WHERE key = 'bm_cluster.bootstrap_complete'")"
+
+              if [[ "$bootstrap_complete" != "true" ]]; then
+                echo "Applying the initial Odoo administrator and base URL configuration..."
+                cat <<'PY' | odoo shell --config=/etc/odoo-generated/odoo.conf --database=odoo
+              import os
+
+              admin = env.ref('base.user_admin')
+              admin.write({
+                  'login': 'admin',
+                  'password': os.environ['ODOO_ADMIN_PASSWORD'],
+              })
+              params = env['ir.config_parameter'].sudo()
+              params.set_param('web.base.url', 'https://odoo.swirlit.dev')
+              params.set_param('web.base.url.freeze', 'True')
+              params.set_param('bm_cluster.bootstrap_complete', 'true')
+              env.cr.commit()
+              PY
+              fi
+          env:
+            - name: ODOO_DB_HOST
+              value: postgres.infra.svc.cluster.local
+            - name: ODOO_DB_PORT
+              value: "5432"
+            - name: POSTGRES_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: ODOO_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_DB_USER
+            - name: ODOO_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_DB_PASSWORD
+            - name: ODOO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: ODOO_ADMIN_PASSWORD
+          volumeMounts:
+            - name: odoo-config
+              mountPath: /etc/odoo-generated
+            - name: odoo-data
+              mountPath: /var/lib/odoo
+      containers:
+        - name: odoo
+          image: odoo:19.0
+          ports:
+            - name: http
+              containerPort: 8069
+            - name: websocket
+              containerPort: 8072
+          startupProbe:
+            httpGet:
+              path: /web/login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /web/login
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /web/login
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 3Gi
+          volumeMounts:
+            - name: odoo-config
+              mountPath: /etc/odoo
+            - name: odoo-data
+              mountPath: /var/lib/odoo
+      terminationGracePeriodSeconds: 60
+      volumes:
+        - name: odoo-config
+          emptyDir: {}
+        - name: odoo-data
+          persistentVolumeClaim:
+            claimName: odoo-data-pvc

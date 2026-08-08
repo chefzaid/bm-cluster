@@ -18,6 +18,7 @@ Setup for a bare-Metal (BM) cluster providing main DevOps and infrastructure too
 *   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
 *   **Cluster Maintenance**: Kubernetes Descheduler (manual trigger mode)
 *   **DB Management UI**: DBGate (PostgreSQL/Redis/MongoDB)
+*   **ERP/CRM**: Odoo Community
 *   **NoSQL Database**: MongoDB
 *   **Secrets Management**: HashiCorp Vault + External Secrets Operator
 *   **Automation**: Ansible
@@ -36,7 +37,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 ### Traffic Flow (Platform View)
 1.  **Client/Browser** connects to **Nginx Ingress Controller** over HTTPS.
-2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault, DBGate).
+2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault, DBGate, Odoo).
 3.  App traffic routing and app workload manifests are owned by the application repository.
 
 ### Secrets Flow (Vault)
@@ -74,7 +75,8 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 | **Longhorn UI** | `https://longhorn.swirlit.dev` | Public | Persistent volume management |
 | **Vault** | `https://vault.swirlit.dev` | Public | Secrets manager (source of truth for infrastructure credentials) |
 | **DBGate** | `https://dbgate.swirlit.dev` | Public | Web DB admin for PostgreSQL, Redis, and MongoDB |
-| **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB, also used for Keycloak |
+| **Odoo** | `https://odoo.swirlit.dev` | Public | Odoo Community ERP/CRM (`admin` + generated password from Vault) |
+| **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB, also used for Keycloak and Odoo |
 | **MongoDB** | `mongodb.infra.svc.cluster.local:27017` | Internal | Document database for infrastructure/application workloads |
 | **Redis** | `10.43.206.215:6379` | Internal | Cache backend for application services |
 | **Kafka** | `kafka.infra.svc.cluster.local:9092` | Internal | Event bus |
@@ -88,7 +90,7 @@ The cluster uses Nginx ingress for HTTPS traffic management and namespace isolat
 
 | Namespace | Contents |
 |-----------|----------|
-| `infra` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), DBGate, Descheduler addon |
+| `infra` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), DBGate, Odoo, Descheduler addon |
 | `application` | Application services (owned/deployed from the application repo) |
 | `longhorn-system` | Longhorn storage manager |
 
@@ -108,7 +110,7 @@ chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
 ./install-infrastructure.sh
 ```
 
-The installer now asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec with the nftables firewall bouncer, Lynis); local-only servers skip it. The remaining installer prompts still run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Descheduler addon, ArgoCD).
+The installer asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec with the nftables firewall bouncer, Lynis); local-only servers skip it. The remaining installer prompts run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Odoo, Descheduler addon, ArgoCD). Odoo has its own install prompt; selecting it automatically enables PostgreSQL and Vault when needed.
 
 ### Manual Installation
 
@@ -181,7 +183,7 @@ helm upgrade --install external-secrets external-secrets/external-secrets -n inf
 chmod +x scripts/configure-vault.sh
 ./scripts/configure-vault.sh infra
 
-for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab dbgate ingress; do
+for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab dbgate odoo ingress; do
     kubectl apply -f deployments/${f}.yaml
 done
 
@@ -216,12 +218,13 @@ Create these DNS records in your Cloudflare zone, all pointing to `51.68.232.240
 | A | `longhorn` | `51.68.232.240` | Proxied |
 | A | `vault` | `51.68.232.240` | Proxied |
 | A | `dbgate` | `51.68.232.240` | Proxied |
+| A | `odoo` | `51.68.232.240` | Proxied |
 
 ### 2. Replace Temporary Self-Signed Cert with Cloudflare Origin Certificate
 The scripts create `swirlit-dev-tls` automatically with a self-signed cert. Replace it with Cloudflare Origin cert:
 
 1. Cloudflare Dashboard → **SSL/TLS** → **Origin Server** → **Create Certificate**
-2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `dbgate.swirlit.dev`, `*.swirlit.dev`
+2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `dbgate.swirlit.dev`, `odoo.swirlit.dev`, `*.swirlit.dev`
 3. Save certificate and private key as local files (`tls.crt`, `tls.key`)
 4. Apply them:
 
@@ -271,6 +274,27 @@ kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath="{.data.pass
 # ArgoCD auto-syncs on git push (self-heal enabled)
 ```
 
+### 5.1 Odoo Setup
+
+Odoo is ready after its pod becomes healthy. The first bootstrap creates the `odoo` database without demo data, uses a dedicated non-superuser PostgreSQL role, disables the public database-management pages, and persists its filestore on Longhorn.
+
+Before opening Odoo, add its public DNS record in the **Cloudflare Dashboard**:
+
+1. Open **Cloudflare Dashboard → select `swirlit.dev` → DNS → Records → Add record**.
+2. Select type **A**, set **Name** to `odoo`, set **IPv4 address** to `51.68.232.240`, and enable **Proxy status: Proxied**.
+3. Ensure the Cloudflare Origin Certificate installed in the `swirlit-dev-tls` Kubernetes secret covers `odoo.swirlit.dev` (or `*.swirlit.dev`).
+4. Use the Odoo service at **`https://odoo.swirlit.dev`**.
+
+```bash
+# Wait for initial database bootstrap (the first start can take several minutes)
+kubectl wait --for=condition=ready pod -n infra -l app=odoo --timeout=900s
+
+# Login at https://odoo.swirlit.dev with username: admin
+kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d && echo
+```
+
+Change the application admin password from Odoo after first login. The Vault value is used only during initial database creation, so later pod restarts do not reset a password changed in the UI.
+
 ### 6. Rotate Infrastructure Secrets in Vault (Security)
 ```bash
 # Read Vault root token (created by scripts/configure-vault.sh)
@@ -283,6 +307,7 @@ vault kv patch secret/infra/postgres username='<NEW_USERNAME>' password='<NEW_PA
 vault kv patch secret/infra/mongodb root_password='<NEW_PASSWORD>'
 vault kv patch secret/infra/grafana admin_password='<NEW_PASSWORD>'
 vault kv patch secret/infra/keycloak admin_password='<NEW_PASSWORD>'
+vault kv patch secret/infra/odoo database_password='<NEW_DB_PASSWORD>' database_master_password='<NEW_MASTER_PASSWORD>'
 ```
 
 ### 7. Initial Credential Retrieval (Per Service)
@@ -300,6 +325,7 @@ Use this table for first-time setup credentials for every service that requires 
 | Nexus | `admin` | `kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password` | Password file exists until changed. |
 | GitLab | `root` | `kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` | Initial file can expire/rotate; set a permanent password. |
 | DBGate | `base64 --decode <<< "$(kubectl get secret -n infra dbgate-auth-secret -o jsonpath='{.data.LOGIN}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infra dbgate-auth-secret -o jsonpath='{.data.PASSWORD}')" && echo` | DBGate is preconfigured with PostgreSQL, Redis, and MongoDB connections. |
+| Odoo | `admin` | `base64 --decode <<< "$(kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}')" && echo` | Generated for the first login; change it in Odoo after onboarding. |
 | ArgoCD | `admin` | `base64 --decode <<< "$(kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}')" && echo` | Delete/rotate initial secret after onboarding. |
 | SonarQube | `admin` | `admin` | Default bootstrap credentials are static; change immediately after first login. |
 
@@ -365,6 +391,9 @@ ansible-playbook ansible/deploy.yml
 
 # Local-only host (skips UFW, Fail2ban, CrowdSec, Lynis automation)
 ansible-playbook ansible/deploy.yml -e server_exposure=local
+
+# Skip the optional Odoo deployment
+ansible-playbook ansible/deploy.yml -e install_odoo=false
 ```
 
 Ansible excels when managing multiple servers (inventory-based), enforcing idempotent state, and integrating with existing automation.

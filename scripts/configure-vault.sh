@@ -100,6 +100,7 @@ EOF
 vault_cmd_auth "$root_token" write auth/kubernetes/role/external-secrets-role \
   bound_service_account_names=external-secrets \
   bound_service_account_namespaces="$NAMESPACE" \
+  audience=vault \
   policies=external-secrets-policy \
   ttl=24h >/dev/null
 
@@ -129,6 +130,15 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/mongodb >/dev
   vault_cmd_auth "$root_token" kv put secret/infra/mongodb \
     root_username="admin" \
     root_password="$(generate_secret)" >/dev/null
+fi
+
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/odoo >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/odoo"
+  vault_cmd_auth "$root_token" kv put secret/infra/odoo \
+    database_username="odoo" \
+    database_password="$(generate_secret)" \
+    admin_password="$(generate_secret)" \
+    database_master_password="$(generate_secret)" >/dev/null
 fi
 
 if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/sonarqube >/dev/null 2>&1; then

@@ -8,6 +8,7 @@
     k8s_dir: "{{ playbook_dir }}/../deployments"
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
     apply_host_security_suite: "{{ harden_firewall | default(server_exposure_mode == 'internet') }}"
+    deploy_odoo: "{{ install_odoo | default(true) }}"
 
   tasks:
     - name: Validate server exposure mode
@@ -84,6 +85,7 @@
       loop:
         - postgres-secret
         - mongodb-secret
+        - odoo-secret
         - sonarqube-db-credentials
         - grafana-admin-secret
         - keycloak-admin-secret
@@ -128,9 +130,23 @@
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
 
+    - name: Deploy Odoo
+      command: kubectl apply -f {{ k8s_dir }}/{{ item }}
+      loop:
+        - odoo.yaml
+        - ingress.yaml
+      when: deploy_odoo | bool
+      register: odoo_result
+      changed_when: "'created' in odoo_result.stdout or 'configured' in odoo_result.stdout"
+
     - name: Wait for platform services
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=300s
       loop: [keycloak, jenkins, elasticsearch, kibana, gitlab, dbgate]
+      ignore_errors: yes
+
+    - name: Wait for Odoo
+      command: kubectl wait --for=condition=ready pod -l app=odoo -n {{ infra_namespace }} --timeout=900s
+      when: deploy_odoo | bool
       ignore_errors: yes
 
     - name: Display status
