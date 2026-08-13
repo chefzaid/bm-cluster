@@ -8,7 +8,11 @@
     k8s_dir: "{{ playbook_dir }}/../deployments"
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
     apply_host_security_suite: "{{ harden_firewall | default(server_exposure_mode == 'internet') }}"
+    trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     deploy_odoo: "{{ install_odoo | default(true) }}"
+    ingress_nginx_chart_version: "4.15.1"
+    argocd_chart_version: "9.5.11"
+    argocd_image_tag: "v3.3.10"
 
   tasks:
     - name: Validate server exposure mode
@@ -22,8 +26,21 @@
       loop:
         - "{{ infra_namespace }}"
 
+    - name: Apply Kubernetes admission and namespace security baseline
+      command: kubectl apply -f {{ k8s_dir }}/security-baseline.yaml
+      register: security_baseline
+      changed_when: "'created' in security_baseline.stdout or 'configured' in security_baseline.stdout"
+
+    - name: Configure the enforced K3s AppArmor runtime profile
+      command: "{{ playbook_dir }}/../scripts/configure-k3s-apparmor.sh"
+
+    - name: Configure daily consistent K3s recovery archives
+      command: "{{ playbook_dir }}/../scripts/configure-k3s-backups.sh"
+
     - name: Apply internet-facing host security tooling
       command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply --server-exposure {{ server_exposure_mode }}"
+      environment:
+        K3S_NODE_NETWORK_CIDR: "{{ trusted_node_cidr }}"
       when:
         - server_exposure_mode == 'internet'
         - apply_host_security_suite | bool
@@ -47,6 +64,26 @@
         helm repo update >/dev/null 2>&1
       changed_when: false
 
+    - name: Install or upgrade NGINX Ingress
+      command: >
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
+        --namespace {{ infra_namespace }}
+        --version {{ ingress_nginx_chart_version }}
+        --set controller.service.type=LoadBalancer
+        --set controller.service.enableHttp=true
+        --wait --timeout 300s
+
+    - name: Install or upgrade Argo CD on the security-patched release
+      command: >
+        helm upgrade --install argocd argo/argo-cd
+        --namespace {{ infra_namespace }}
+        --version {{ argocd_chart_version }}
+        --set-string global.image.tag={{ argocd_image_tag }}
+        --set server.service.type=ClusterIP
+        --set configs.params.server\.insecure=true
+        --set redis.enabled=true
+        --wait --timeout 600s
+
     - name: Install or upgrade Vault
       command: >
         helm upgrade --install vault hashicorp/vault
@@ -64,7 +101,7 @@
         --set installCRDs=true
         --wait --timeout 300s
 
-    - name: Apply unified Vault manifests (ingress, RBAC, secret sync, auto-unseal)
+    - name: Apply unified Vault manifests (ingress, RBAC, and secret sync)
       command: kubectl apply -f {{ k8s_dir }}/vault.yaml
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
@@ -93,6 +130,8 @@
         - jenkins-maven-settings
         - jenkins-npm-config
         - dbgate-auth-secret
+        - kafka-ui-auth-secret
+        - portainer-auth-secret
       ignore_errors: yes
 
     - name: Deploy data stores
@@ -116,14 +155,24 @@
         - keycloak.yaml
         - monitoring.yaml
         - elk.yaml
+        - logging-agent.yaml
         - jenkins.yaml
         - sonarqube.yaml
         - nexus.yaml
         - gitlab.yaml
         - dbgate.yaml
+        - kafka-ui.yaml
+        - portainer.yaml
+        - homepage.yaml
         - ingress.yaml
       register: result
       changed_when: "'created' in result.stdout or 'configured' in result.stdout"
+
+    - name: Wait for Nexus before configuring the private registry
+      command: kubectl rollout status deployment/nexus -n {{ infra_namespace }} --timeout=600s
+
+    - name: Configure the private Nexus registry and least-privilege service accounts
+      command: "{{ playbook_dir }}/../scripts/configure-nexus-registry.sh"
 
     - name: Install descheduler addon resources (manual run mode)
       command: kubectl apply -f {{ k8s_dir }}/descheduler.yaml
@@ -141,7 +190,12 @@
 
     - name: Wait for platform services
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=300s
-      loop: [keycloak, jenkins, elasticsearch, kibana, gitlab, dbgate]
+      loop: [keycloak, jenkins, elasticsearch, kibana, gitlab, dbgate, kafka-ui, portainer, homepage]
+      ignore_errors: yes
+
+    - name: Wait for cluster observability DaemonSets
+      command: kubectl rollout status daemonset/{{ item }} -n {{ infra_namespace }} --timeout=180s
+      loop: [node-exporter, fluent-bit]
       ignore_errors: yes
 
     - name: Wait for Odoo

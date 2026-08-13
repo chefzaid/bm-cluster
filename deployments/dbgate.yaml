@@ -43,9 +43,17 @@ spec:
       labels:
         app: dbgate
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: dbgate
-          image: dbgate/dbgate:latest
+          image: dbgate/dbgate@sha256:38f4af9ab85d4aa112acc2e24d3e12c07c38e1e9727022e4387567cd3ec718a1
           ports:
             - containerPort: 3000
           env:
@@ -60,15 +68,13 @@ spec:
                   name: dbgate-auth-secret
                   key: PASSWORD
             - name: CONNECTIONS
-              value: "postgres,redis,mongo"
+              value: "postgres,mongodb,redis"
             - name: LABEL_postgres
-              value: "PostgreSQL"
+              value: "PostgreSQL cluster"
             - name: SERVER_postgres
               value: "postgres.infra.svc.cluster.local"
             - name: PORT_postgres
               value: "5432"
-            - name: DATABASE_postgres
-              value: "appdb"
             - name: ENGINE_postgres
               value: "postgres@dbgate-plugin-postgres"
             - name: USER_postgres
@@ -81,6 +87,24 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_PASSWORD
+            - name: LABEL_mongodb
+              value: "MongoDB"
+            - name: SERVER_mongodb
+              value: "mongodb.infra.svc.cluster.local"
+            - name: PORT_mongodb
+              value: "27017"
+            - name: ENGINE_mongodb
+              value: "mongo@dbgate-plugin-mongo"
+            - name: USER_mongodb
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_USERNAME
+            - name: PASSWORD_mongodb
+              valueFrom:
+                secretKeyRef:
+                  name: mongodb-secret
+                  key: MONGO_INITDB_ROOT_PASSWORD
             - name: LABEL_redis
               value: "Redis"
             - name: SERVER_redis
@@ -89,25 +113,13 @@ spec:
               value: "6379"
             - name: ENGINE_redis
               value: "redis@dbgate-plugin-redis"
-            - name: LABEL_mongo
-              value: "MongoDB"
-            - name: ENGINE_mongo
-              value: "mongo@dbgate-plugin-mongo"
-            - name: MONGO_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: mongodb-secret
-                  key: MONGO_INITDB_ROOT_USERNAME
-            - name: MONGO_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: mongodb-secret
-                  key: MONGO_INITDB_ROOT_PASSWORD
-            - name: URL_mongo
-              value: "mongodb://$(MONGO_USERNAME):$(MONGO_PASSWORD)@mongodb.infra.svc.cluster.local:27017/admin"
           volumeMounts:
             - name: dbgate-data
-              mountPath: /root/.dbgate
+              mountPath: /home/node/.dbgate
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           readinessProbe:
             httpGet:
               path: /

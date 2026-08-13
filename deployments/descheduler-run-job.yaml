@@ -15,10 +15,21 @@ spec:
     spec:
       serviceAccountName: descheduler
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: descheduler
-          image: registry.k8s.io/descheduler/descheduler:v0.31.0
+          image: registry.k8s.io/descheduler/descheduler@sha256:4001c25d6c967c7c69c76ea1b4619ddcd5568f42df6360e1ba320834cbcd0d5f
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           command:
             - /bin/descheduler
           args:

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check and unseal Vault every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=bm-vault-unseal.service
+
+[Install]
+WantedBy=timers.target

@@ -1,23 +1,151 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-controller
+  namespace: infra
+automountServiceAccountToken: true
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: jenkins-agent
-  namespace: infra
+  namespace: jenkins-builds
+automountServiceAccountToken: true
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: jenkins-registry-auth
+  namespace: jenkins-builds
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: jenkins-registry-auth
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {"auths":{"nexus-registry.infra.svc.cluster.local:5000":{"username":"{{ .username }}","password":"{{ .password }}","auth":"{{ printf "%s:%s" .username .password | b64enc }}"}}}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: infra/registry
+        property: push_username
+    - secretKey: password
+      remoteRef:
+        key: infra/registry
+        property: push_password
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: jenkins-maven-settings
+  namespace: jenkins-builds
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: jenkins-maven-settings
+    creationPolicy: Owner
+  data:
+    - secretKey: settings.xml
+      remoteRef:
+        key: infra/jenkins
+        property: settings_xml
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: jenkins-npm-config
+  namespace: jenkins-builds
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: jenkins-npm-config
+    creationPolicy: Owner
+  data:
+    - secretKey: .npmrc
+      remoteRef:
+        key: infra/jenkins
+        property: npmrc
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: jenkins-builds
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: Role
 metadata:
-  name: jenkins-agent
+  name: jenkins-controller
+  namespace: jenkins-builds
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-controller
+  namespace: jenkins-builds
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
+  kind: Role
+  name: jenkins-controller
 subjects:
-- kind: ServiceAccount
-  name: jenkins-agent
-  namespace: infra
+  - kind: ServiceAccount
+    name: jenkins-controller
+    namespace: infra
 
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-devapp-argocd
+  namespace: infra
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    resourceNames: ["devapp"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-devapp-argocd
+  namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-devapp-argocd
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-agent
+    namespace: jenkins-builds
+
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -46,13 +174,24 @@ spec:
       labels:
         app: jenkins
     spec:
-      serviceAccountName: jenkins-agent
+      serviceAccountName: jenkins-controller
+      automountServiceAccountToken: true
       securityContext:
         fsGroup: 1000
         runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: jenkins
-        image: jenkins/jenkins:lts
+        image: jenkins/jenkins:2.568.2-lts-jdk21
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 8080
           name: http

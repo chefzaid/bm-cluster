@@ -18,6 +18,8 @@ metadata:
   namespace: infra
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: nexus
@@ -29,9 +31,13 @@ spec:
       securityContext:
         fsGroup: 200
         runAsUser: 200
+        runAsGroup: 200
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: nexus
-        image: sonatype/nexus3:latest
+        image: sonatype/nexus3@sha256:c47083c9e77d87cd7f7c1111a68b53e758644deb54aba2235c8de1b40eebb09a
         ports:
         - containerPort: 8081
           name: http
@@ -43,10 +49,14 @@ spec:
         resources:
           requests:
             memory: "2Gi"
-            cpu: "1"
+            cpu: "250m"
           limits:
             memory: "4Gi"
             cpu: "2"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
       volumes:
       - name: nexus-data
         persistentVolumeClaim:
@@ -66,5 +76,22 @@ spec:
     - port: 5000
       targetPort: 5000
       name: docker
+  selector:
+    app: nexus
+---
+# Stable internal registry address used by K3s containerd mirrors and CI.
+# The registry remains ClusterIP-only and is never published through ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus-registry
+  namespace: infra
+spec:
+  type: ClusterIP
+  clusterIP: 10.43.255.250
+  ports:
+    - name: docker
+      port: 5000
+      targetPort: 5000
   selector:
     app: nexus

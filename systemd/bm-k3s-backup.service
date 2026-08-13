@@ -1,0 +1,24 @@
+[Unit]
+Description=Create a consistent K3s and Vault recovery archive
+After=k3s.service
+Requires=k3s.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=HOME=/run/bm-k3s-backup
+RuntimeDirectory=bm-k3s-backup
+ExecStart=/usr/local/sbin/bm-k3s-backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/rancher/k3s /var/lib/rancher/k3s /var/lib/bm-cluster
+ReadWritePaths=/var/backups/bm-cluster/k3s /run/lock
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

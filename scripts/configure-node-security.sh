@@ -3,6 +3,9 @@ set -euo pipefail
 
 APPLY=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
+K3S_NODE_NETWORK_CIDR="${K3S_NODE_NETWORK_CIDR:-}"
+CLOUDFLARE_PROXY_ONLY="${CLOUDFLARE_PROXY_ONLY:-}"
+SSH_ALLOWED_USERS="${SSH_ALLOWED_USERS:-${SUDO_USER:-$USER}}"
 APT_UPDATED=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,10 +61,12 @@ ensure_packages() {
 
 backup_file_if_exists() {
   local path="$1"
-  local backup_path="${path}.bak-ds-cluster"
+  local backup_path="/var/backups/bm-cluster/config${path}.bak"
 
   if sudo test -f "$path" && ! sudo test -f "$backup_path"; then
+    sudo install -d -o root -g root -m 0700 "$(dirname "$backup_path")"
     sudo cp "$path" "$backup_path"
+    sudo chmod 0600 "$backup_path"
   fi
 }
 
@@ -337,7 +342,34 @@ EOF
 }
 
 configure_ufw() {
+  local cloudflare_response=""
+  local cloudflare_cidrs=()
+  local cidr
+
   ensure_packages ufw
+
+  if [[ -n "$K3S_NODE_NETWORK_CIDR" && ! "$K3S_NODE_NETWORK_CIDR" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]; then
+    err "Invalid K3S_NODE_NETWORK_CIDR: $K3S_NODE_NETWORK_CIDR"
+  fi
+
+  if [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
+    if sudo test -f /etc/bm-cluster/cloudflare-proxy-only; then
+      CLOUDFLARE_PROXY_ONLY=true
+    else
+      CLOUDFLARE_PROXY_ONLY=false
+    fi
+  fi
+  [[ "$CLOUDFLARE_PROXY_ONLY" =~ ^(true|false)$ ]] || err "CLOUDFLARE_PROXY_ONLY must be true or false"
+
+  # Fetch and validate the allowlist before resetting UFW so a network/API
+  # failure can never leave the host firewall disabled.
+  if [[ "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
+    ensure_packages ca-certificates curl jq
+    cloudflare_response="$(curl -fsS https://api.cloudflare.com/client/v4/ips)" || err "Unable to download Cloudflare proxy networks"
+    jq -e '.success == true and ((.result.ipv4_cidrs | length) + (.result.ipv6_cidrs | length) > 0)' \
+      <<< "$cloudflare_response" >/dev/null || err "Cloudflare returned an invalid proxy network list"
+    mapfile -t cloudflare_cidrs < <(jq -r '.result.ipv4_cidrs[], .result.ipv6_cidrs[]' <<< "$cloudflare_response")
+  fi
 
   info "Configuring UFW baseline..."
   sudo sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
@@ -348,11 +380,32 @@ configure_ufw() {
 
   info "Allowing required inbound ports..."
   sudo ufw allow OpenSSH >/dev/null
-  sudo ufw allow 80/tcp >/dev/null
-  sudo ufw allow 443/tcp >/dev/null
-  sudo ufw allow 6443/tcp >/dev/null
-  sudo ufw allow 8472/udp >/dev/null
-  sudo ufw allow 10250/tcp >/dev/null
+  if [[ "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
+    info "Restricting ports 80/443 to Cloudflare proxy networks..."
+    for cidr in "${cloudflare_cidrs[@]}"; do
+      sudo ufw allow from "$cidr" to any port 80 proto tcp comment 'Cloudflare proxy' >/dev/null
+      sudo ufw allow from "$cidr" to any port 443 proto tcp comment 'Cloudflare proxy' >/dev/null
+    done
+  else
+    sudo ufw allow 80/tcp >/dev/null
+    sudo ufw allow 443/tcp >/dev/null
+  fi
+  if [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
+    info "Restricting K3s API, Flannel, and kubelet traffic to $K3S_NODE_NETWORK_CIDR..."
+    sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+    sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
+    sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
+    sudo ufw allow from 10.42.0.0/16 to any >/dev/null
+    sudo ufw allow from 10.43.0.0/16 to any >/dev/null
+  else
+    # A single-node cluster does not need a public Kubernetes API. Keep it
+    # reachable over Tailscale when available; worker enrollment adds an
+    # explicit private node-network rule through add-k3s-workers.sh.
+    if ip link show tailscale0 >/dev/null 2>&1; then
+      sudo ufw allow in on tailscale0 to any port 6443 proto tcp comment 'K3s API via Tailscale' >/dev/null
+    fi
+    warn "K3S_NODE_NETWORK_CIDR is unset; the K3s API and peer ports are not exposed publicly."
+  fi
 
   if ip link show cni0 >/dev/null 2>&1; then
     sudo ufw allow in on cni0 >/dev/null
@@ -362,6 +415,132 @@ configure_ufw() {
   fi
 
   sudo ufw --force enable >/dev/null
+}
+
+configure_sshd() {
+  local config_path="/etc/ssh/sshd_config.d/40-bm-cluster-hardening.conf"
+  local backup_path="/var/backups/bm-cluster/config${config_path}.bak"
+
+  [[ "$SSH_ALLOWED_USERS" =~ ^[a-zA-Z0-9_.@-]+([[:space:]]+[a-zA-Z0-9_.@-]+)*$ ]] || \
+    err "SSH_ALLOWED_USERS must be a space-separated list of local usernames"
+
+  backup_file_if_exists "$config_path"
+  write_root_file "$config_path" 0600 <<EOF
+# Managed by scripts/configure-node-security.sh
+# Password login is intentionally retained by operator request.
+PasswordAuthentication yes
+PermitRootLogin no
+MaxAuthTries 3
+LoginGraceTime 30
+AllowUsers $SSH_ALLOWED_USERS
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+DisableForwarding yes
+PermitUserRC no
+MaxStartups 10:30:30
+PerSourceMaxStartups 3
+EOF
+
+  if ! sudo sshd -t; then
+    if sudo test -f "$backup_path"; then
+      sudo cp "$backup_path" "$config_path"
+    else
+      sudo rm -f "$config_path"
+    fi
+    err "Refusing to reload SSH because the hardened configuration failed validation"
+  fi
+  sudo systemctl reload ssh
+}
+
+disable_unused_rpcbind() {
+  # NFSv4 clients do not require rpcbind. Keep it only when this node is
+  # actively using an older NFS mount; otherwise close the unused listener.
+  if findmnt -rn -t nfs,nfs4 >/dev/null 2>&1; then
+    warn "An NFS mount is active; leaving rpcbind unchanged."
+    return 0
+  fi
+
+  if systemctl list-unit-files rpcbind.service rpcbind.socket --no-legend 2>/dev/null | grep -q rpcbind; then
+    sudo systemctl disable --now rpcbind.socket rpcbind.service >/dev/null 2>&1 || true
+  fi
+}
+
+configure_log_retention() {
+  local cloud_init_config="/etc/logrotate.d/cloud-init"
+  local duplicate_config="/etc/logrotate.d/cloud-init-base"
+  local legacy_backup
+
+  write_root_file /etc/systemd/journald.conf.d/99-bm-cluster-retention.conf <<'EOF'
+# Managed by scripts/configure-node-security.sh
+Storage=persistent
+SystemMaxUse=4G
+MaxRetentionSec=3month
+Compress=yes
+Seal=yes
+EOF
+
+  backup_file_if_exists /etc/logrotate.d/rsyslog
+  write_root_file /etc/logrotate.d/rsyslog <<'EOF'
+# Managed by scripts/configure-node-security.sh
+# Keep authentication evidence for approximately three months while retaining
+# the higher-volume general system logs for four weeks.
+/var/log/auth.log
+{
+    rotate 13
+    weekly
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}
+
+/var/log/syslog
+/var/log/mail.log
+/var/log/kern.log
+/var/log/user.log
+/var/log/cron.log
+{
+    rotate 4
+    weekly
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}
+EOF
+
+  # Ubuntu releases that temporarily ship both packages can define the same
+  # cloud-init log twice, causing every logrotate run to fail. Preserve the
+  # duplicate outside logrotate's accepted filename pattern.
+  if sudo test -f "$cloud_init_config" && sudo test -f "$duplicate_config" && \
+     sudo cmp -s "$cloud_init_config" "$duplicate_config"; then
+    sudo install -d -o root -g root -m 0700 /var/backups/bm-cluster/config/etc/logrotate.d
+    sudo mv "$duplicate_config" /var/backups/bm-cluster/config/etc/logrotate.d/cloud-init-base.disabled-bm-cluster
+  fi
+
+  # Older revisions left backup files inside logrotate.d, where logrotate
+  # interpreted them as active policies. Move those backups out of the include
+  # directory before validating the complete configuration.
+  while IFS= read -r legacy_backup; do
+    sudo install -d -o root -g root -m 0700 /var/backups/bm-cluster/config/etc/logrotate.d
+    sudo mv "$legacy_backup" "/var/backups/bm-cluster/config/etc/logrotate.d/$(basename "$legacy_backup")"
+  done < <(sudo find /etc/logrotate.d -maxdepth 1 -type f -name '*.bak-*' -print)
+
+  if sudo logrotate --debug /etc/logrotate.conf 2>&1 | grep -q '^error:'; then
+    err "The generated logrotate configuration failed validation"
+  fi
+  sudo systemctl restart systemd-journald
+  sudo systemctl reset-failed logrotate.service
+  sudo systemctl start logrotate.service
 }
 
 configure_fail2ban() {
@@ -424,9 +603,12 @@ if [[ "$SERVER_EXPOSURE" == "local" ]]; then
   exit 0
 fi
 
+configure_sshd
+disable_unused_rpcbind
 configure_ufw
 configure_fail2ban
 configure_crowdsec
+configure_log_retention
 run_lynis_audit
 
 info "Host security tooling applied for internet-exposed server."

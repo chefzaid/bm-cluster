@@ -1,0 +1,25 @@
+[Unit]
+Description=Unseal the in-cluster Vault from root-only host material
+After=k3s.service
+Requires=k3s.service
+ConditionPathExists=/var/lib/bm-cluster/vault-unseal-key
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+RuntimeDirectory=bm-vault-unseal
+Environment=HOME=/run/bm-vault-unseal
+ExecStart=/usr/local/sbin/bm-vault-unseal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/etc/rancher/k3s /var/lib/bm-cluster
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

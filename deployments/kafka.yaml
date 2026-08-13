@@ -31,11 +31,21 @@ spec:
       labels:
         app: zookeeper
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: zookeeper
-        image: confluentinc/cp-zookeeper:7.4.0
+        image: docker.io/confluentinc/cp-zookeeper@sha256:90631f224b4397ecfb4e824e43d93e0e42656841c6d55ef635c49df3975260ae
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 2181
         env:
@@ -60,6 +70,13 @@ spec:
             port: 2181
           initialDelaySeconds: 10
           periodSeconds: 5
+        resources:
+          requests:
+            cpu: 50m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
   volumeClaimTemplates:
   - metadata:
       name: zookeeper-data
@@ -111,11 +128,21 @@ spec:
       labels:
         app: kafka
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: kafka
-        image: confluentinc/cp-kafka:7.4.0
+        image: docker.io/confluentinc/cp-kafka@sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 9092
         env:
@@ -148,6 +175,13 @@ spec:
             port: 9092
           initialDelaySeconds: 10
           periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: "1"
+            memory: 2Gi
   volumeClaimTemplates:
   - metadata:
       name: kafka-data

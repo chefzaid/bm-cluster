@@ -1,0 +1,300 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: portainer
+  namespace: infra
+  labels:
+    app: portainer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: portainer-read-only
+  labels:
+    app: portainer
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - limitranges
+      - namespaces
+      - nodes
+      - persistentvolumeclaims
+      - persistentvolumes
+      - pods
+      - pods/log
+      - replicationcontrollers
+      - resourcequotas
+      - services
+      - serviceaccounts
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingressclasses", "ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csidrivers", "csinodes", "storageclasses", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: portainer-read-only
+  labels:
+    app: portainer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: portainer-read-only
+subjects:
+  - kind: ServiceAccount
+    name: portainer
+    namespace: infra
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: portainer-data
+  namespace: infra
+  labels:
+    app: portainer
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: portainer
+  namespace: infra
+  labels:
+    app: portainer
+spec:
+  type: ClusterIP
+  selector:
+    app: portainer
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+    - name: https
+      port: 9443
+      targetPort: https
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: portainer
+  namespace: infra
+  labels:
+    app: portainer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: portainer
+  template:
+    metadata:
+      labels:
+        app: portainer
+    spec:
+      serviceAccountName: portainer
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: portainer
+          image: portainer/portainer-ce:2.39.6
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --admin-password-file=/run/portainer-secret/password
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+            - name: https
+              containerPort: 9443
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: admin-password
+              mountPath: /run/portainer-secret
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: portainer-data
+        - name: admin-password
+          secret:
+            secretName: portainer-auth-secret
+            defaultMode: 0440
+            items:
+              - key: ADMIN_PASSWORD
+                path: password
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: portainer-bootstrap
+  namespace: infra
+  labels:
+    app: portainer-bootstrap
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: portainer-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: python:3.13-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PORTAINER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: portainer-auth-secret
+                  key: ADMIN_USERNAME
+            - name: PORTAINER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: portainer-auth-secret
+                  key: ADMIN_PASSWORD
+          command:
+            - python3
+            - -c
+            - |
+              import json
+              import os
+              import time
+              import urllib.error
+              import urllib.request
+              import uuid
+
+              base_url = "http://portainer.infra.svc.cluster.local:9000/api"
+              username = os.environ["PORTAINER_USERNAME"]
+              password = os.environ["PORTAINER_PASSWORD"]
+
+              for attempt in range(60):
+                  try:
+                      body = json.dumps({"Username": username, "Password": password}).encode()
+                      request = urllib.request.Request(
+                          base_url + "/auth",
+                          data=body,
+                          headers={"Content-Type": "application/json"},
+                      )
+                      token = json.load(urllib.request.urlopen(request, timeout=5))["jwt"]
+                      break
+                  except (OSError, KeyError, urllib.error.HTTPError):
+                      if attempt == 59:
+                          raise
+                      time.sleep(5)
+
+              headers = {"Authorization": "Bearer " + token}
+              request = urllib.request.Request(base_url + "/endpoints", headers=headers)
+              environments = json.load(urllib.request.urlopen(request, timeout=10))
+              local = next((item for item in environments if item["Type"] == 5), None)
+
+              if local is None:
+                  boundary = "----portainer-" + uuid.uuid4().hex
+                  fields = {"Name": "local", "EndpointCreationType": "5"}
+                  parts = []
+                  for name, value in fields.items():
+                      parts.extend([
+                          "--" + boundary,
+                          'Content-Disposition: form-data; name="' + name + '"',
+                          "",
+                          value,
+                      ])
+                  parts.extend(["--" + boundary + "--", ""])
+                  body = "\r\n".join(parts).encode()
+                  request = urllib.request.Request(
+                      base_url + "/endpoints",
+                      data=body,
+                      headers={
+                          **headers,
+                          "Content-Type": "multipart/form-data; boundary=" + boundary,
+                      },
+                  )
+                  local = json.load(urllib.request.urlopen(request, timeout=30))
+                  print("Registered the local Kubernetes environment.")
+              else:
+                  print("The local Kubernetes environment is already registered.")
+
+              environment_id = local["Id"]
+              request = urllib.request.Request(
+                  base_url + f"/kubernetes/{environment_id}/namespaces",
+                  headers=headers,
+              )
+              namespaces = json.load(urllib.request.urlopen(request, timeout=30))
+              print(f"Portainer can access {len(namespaces)} Kubernetes namespaces.")

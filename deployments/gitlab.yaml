@@ -50,6 +50,8 @@ metadata:
     app: gitlab
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: gitlab
@@ -58,9 +60,12 @@ spec:
       labels:
         app: gitlab
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: gitlab
-        image: gitlab/gitlab-ce:17.8.1-ce.0
+        image: gitlab/gitlab-ce@sha256:23e1afcbb1b0a16bbbd646c412d23dd41f3301da7ae87ea44ecff10cd8c980e8
         env:
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
@@ -77,7 +82,7 @@ spec:
         resources:
           requests:
             memory: "2Gi"
-            cpu: "1"
+            cpu: "500m"
           limits:
             memory: "8Gi"
             cpu: "2"

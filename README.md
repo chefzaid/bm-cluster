@@ -1,402 +1,233 @@
 # Bare-Metal Cluster
 
-Setup for a bare-Metal (BM) cluster providing main DevOps and infrastructure tools necessary for web apps development, deployment, observability, and basic security.
+Single- or multi-node K3s infrastructure for development and self-hosted platform
+services. The repository installs the control plane and workers, storage, ingress,
+security tools, secrets management, data stores, observability, CI/CD tools, and
+Odoo.
 
-## 🛠 Technologies Used
+## Components
 
-### Infrastructure & DevOps
-*   **Orchestration**: Kubernetes (K3s - Lightweight Kubernetes)
-*   **Storage**: Longhorn (distributed block storage)
-*   **Ingress**: Nginx Ingress Controller
-*   **Containerization**: Docker
-*   **CI/CD**: Jenkins (K8s-native build agents)
-*   **GitOps**: ArgoCD
-*   **Code Quality**: SonarQube
-*   **Artifacts**: Nexus Repository Manager OSS
-*   **Source Control**: GitLab
-*   **Monitoring**: Prometheus, Grafana
-*   **Logging**: ELK Stack (Elasticsearch, Logstash, Kibana)
-*   **Cluster Maintenance**: Kubernetes Descheduler (manual trigger mode)
-*   **DB Management UI**: DBGate (PostgreSQL/Redis/MongoDB)
-*   **ERP/CRM**: Odoo Community
-*   **NoSQL Database**: MongoDB
-*   **Secrets Management**: HashiCorp Vault + External Secrets Operator
-*   **Automation**: Ansible
+- K3s, NGINX Ingress, Longhorn, and the Descheduler addon
+- Vault and External Secrets Operator
+- PostgreSQL, MongoDB, Redis, Kafka, and Zookeeper
+- Keycloak, GitLab, Jenkins, ArgoCD, Nexus, and SonarQube
+- Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
+- DBGate, Kafbat UI, Portainer CE, and Odoo Community
+- Homepage service catalog and Kubernetes status dashboard
+- UFW, Fail2ban, CrowdSec, and Lynis on internet-exposed hosts
 
-> **Note on Nexus**:
->
-> *   Jenkins Maven/NPM credentials are now sourced from Vault (`secret/infra/jenkins`) and synced through External Secrets.
-> *   **Setup Required**:
->     1.  Login to Nexus (`https://nexus.swirlit.dev`), retrieve admin password: `kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password`
->     2.  Create repositories: Maven `maven-public` (Group proxying Central), NPM `npm-group`, Docker hosted on port 5000.
->     3.  Update Vault secret `secret/infra/jenkins` with correct Nexus credentials and allow External Secrets to refresh.
+## Architecture
 
-## 🏗 Infrastructure Architecture
+Public HTTPS traffic enters through the NGINX LoadBalancer and is routed by
+hostname to ClusterIP services. Cloudflare provides public DNS and edge TLS;
+NGINX uses a wildcard Cloudflare Origin CA certificate for strict end-to-end
+TLS.
 
-The cluster uses Nginx ingress for HTTPS traffic management and namespace isolation (`infra` + `application`).
+Vault is the source of infrastructure credentials. External Secrets syncs those
+values into namespace-scoped Kubernetes Secrets. Longhorn provides persistent
+storage. Prometheus collects node, Kubernetes object, pod, container, and
+annotation-enabled application metrics; Grafana includes a provisioned cluster
+dashboard and loads application-owned dashboards from labeled ConfigMaps.
+Fluent Bit ships Kubernetes container logs with namespace, pod, container, and
+label metadata to Elasticsearch for Kibana discovery.
 
-### Traffic Flow (Platform View)
-1.  **Client/Browser** connects to **Nginx Ingress Controller** over HTTPS.
-2.  Ingress routes infrastructure hosts (Keycloak, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Grafana, Kibana, Longhorn, Vault, DBGate, Odoo).
-3.  App traffic routing and app workload manifests are owned by the application repository.
+Databases, caches, queues, and search backends remain internal Kubernetes
+services and are not published through DNS.
 
-### Secrets Flow (Vault)
-1. Vault stores infrastructure secrets under `secret/infra/*`.
-2. External Secrets Operator authenticates to Vault using Kubernetes auth.
-3. `ExternalSecret` resources sync Vault values into namespace-scoped Kubernetes Secrets consumed by workloads.
-4. No credential values are stored in repository YAML.
+DBGate is preconfigured from Kubernetes Secrets with access to every logical
+database in the PostgreSQL cluster, plus MongoDB and Redis. Kafka administration
+is available through Kafbat UI, while Elasticsearch administration remains in
+Kibana. Portainer manages the local Kubernetes environment and automatically
+discovers workloads, services, pods, storage, and namespaces across the cluster.
 
-### Centralized Logging (ELK Stack)
-*   **Logstash** collects logs from:
-    *   **TCP input** (port 5000): application logs (JSON).
-    *   **Kafka input**: order events from `order_topic` and `order_result_topic`.
-*   **Elasticsearch** stores logs in `app-logs-*` indices.
-*   **Kibana** provides search/visualization (`https://kibana.swirlit.dev`).
+Homepage is the single entry point for every installed application, platform
+tool, internal data service, observability component, security tool, and
+Kubernetes system service. Public entries are clickable; internal-only entries
+show their purpose and live Kubernetes status without exposing them publicly.
 
-## 📦 Current Deployment
+## Service dashboard
 
-### Service Access
+Open `https://dashboard.swirlit.dev` for the complete categorized service
+catalog. Cloudflare Access protects the dashboard, DBGate, Grafana, Kafka UI,
+Kibana, Longhorn, Portainer, and Vault with an email one-time PIN and a 24-hour
+session. Machine- and application-facing hostnames retain their native
+authentication so CLIs, webhooks, CI agents, scanners, and application users
+continue to work.
 
-> Ingress public IP: **`51.68.232.240`**  
-> Internal ClusterIP values below reflect the current cluster state and may change if services are recreated.
+The catalog, icons, Kubernetes read-only status integration, Deployment,
+Service, and Ingress are defined together in `deployments/homepage.yaml`. Both
+the interactive installer and `ansible/deploy.yml` apply it automatically.
 
-#### Infrastructure Services
+## Quick start
 
-| Service | Endpoint | Access | Use |
-|---------|----------|--------|-----|
-| **GitLab** | `https://gitlab.swirlit.dev` | Public | Source code hosting and Git remote (`root` + initial password from pod) |
-| **Jenkins** | `https://jenkins.swirlit.dev` | Public | CI/CD pipelines |
-| **ArgoCD** | `https://argocd.swirlit.dev` | Public | GitOps sync and app delivery |
-| **Nexus** | `https://nexus.swirlit.dev` | Public | Artifact repository |
-| **SonarQube** | `https://sonarqube.swirlit.dev` | Public | Code quality and static analysis |
-| **Keycloak** | `https://keycloak.swirlit.dev` | Public | OIDC provider (admin credential from Vault) |
-| **Grafana** | `https://grafana.swirlit.dev` | Public | Dashboards and monitoring UI |
-| **Kibana** | `https://kibana.swirlit.dev` | Public | Log search and visualization |
-| **Longhorn UI** | `https://longhorn.swirlit.dev` | Public | Persistent volume management |
-| **Vault** | `https://vault.swirlit.dev` | Public | Secrets manager (source of truth for infrastructure credentials) |
-| **DBGate** | `https://dbgate.swirlit.dev` | Public | Web DB admin for PostgreSQL, Redis, and MongoDB |
-| **Odoo** | `https://odoo.swirlit.dev` | Public | Odoo Community ERP/CRM (`admin` + generated password from Vault) |
-| **PostgreSQL** | `10.43.129.209:5432` | Internal | Primary DB, also used for Keycloak and Odoo |
-| **MongoDB** | `mongodb.infra.svc.cluster.local:27017` | Internal | Document database for infrastructure/application workloads |
-| **Redis** | `10.43.206.215:6379` | Internal | Cache backend for application services |
-| **Kafka** | `kafka.infra.svc.cluster.local:9092` | Internal | Event bus |
-| **Zookeeper** | `zookeeper.infra.svc.cluster.local:2181` | Internal | Coordination service for Kafka |
-| **Elasticsearch** | `10.43.167.56:9200` | Internal | Log storage/indexing backend |
-| **Logstash** | `10.43.57.31:5000` | Internal | Log/event ingestion pipeline |
-| **Prometheus** | `10.43.43.138:9090` | Internal | Metrics scraping and storage |
-| **Ingress (NGINX)** | `51.68.232.240:443` | Public | HTTPS entrypoint and host/path routing |
+Requirements:
 
-### K8s Namespaces
+- Ubuntu 22.04 or newer
+- 8 or more CPUs, 16 GB or more RAM, and 100 GB or more disk
+- A sudo-capable non-root user
+- A domain registered for public deployments
 
-| Namespace | Contents |
-|-----------|----------|
-| `infra` | PostgreSQL, MongoDB, Kafka, Zookeeper, Redis, Keycloak, Prometheus, Grafana, Jenkins, SonarQube, Nexus, GitLab, ArgoCD, Vault, External Secrets Operator, Nginx Ingress, ELK (Elasticsearch, Logstash, Kibana), DBGate, Odoo, Descheduler addon |
-| `application` | Application services (owned/deployed from the application repo) |
-| `longhorn-system` | Longhorn storage manager |
-
-## 🚀 Quick Start (Fresh Server)
-
-### Prerequisites
-- Ubuntu 22.04+ server with 8+ CPUs, 16+ GB RAM, 100+ GB disk
-- Sudo access
-
-### Automated Installation (Recommended)
-
-Use the combined one-click script:
+Run the interactive installer:
 
 ```bash
-chmod +x install-infrastructure.sh
-chmod +x scripts/configure-vault.sh scripts/configure-node-security.sh
+chmod +x install-infrastructure.sh scripts/*.sh
 ./install-infrastructure.sh
 ```
 
-The installer asks whether the host is internet-exposed or local-only. Internet-exposed servers automatically get the host security suite (UFW, Fail2ban, CrowdSec with the nftables firewall bouncer, Lynis); local-only servers skip it. The remaining installer prompts run feature-by-feature (prereqs, K3s, Longhorn, ingress, Vault/ESO, data stores, platform services including DBGate, Odoo, Descheduler addon, ArgoCD). Odoo has its own install prompt; selecting it automatically enables PostgreSQL and Vault when needed.
+The installer asks which feature groups to deploy. For an internet-exposed
+installation, its optional Cloudflare step prompts for a **Cloudflare User API
+Token** and does not persist it. The script is the source of truth for all edge
+configuration; no manual Cloudflare procedure is required.
 
-### Manual Installation
+Use `./install-infrastructure.sh --yes` for default feature choices. Secret
+prompts still require input unless their documented environment variable is
+provided.
 
-#### 1. Install System Dependencies
+## Adding worker nodes
+
+The main installer can add any number of workers. Answer **yes** to “Add or
+reconcile K3s worker nodes over SSH”; it asks for the SSH settings and each
+worker's address, unique node name, optional private IP, labels, and taints. The
+control plane remains the only server, so adding workers increases workload
+capacity but does not make the Kubernetes control plane highly available.
+
+Worker requirements:
+
+- Debian or Ubuntu, a unique hostname, and network access to the control plane
+- SSH key authentication as root or a user with passwordless `sudo`
+- TCP 6443 from workers to the server, UDP 8472 between nodes, and TCP 10250
+  from the server to workers, restricted to the private node network
+- Enough CPU, memory, and disk for the workloads assigned to the node
+
+Run the dedicated enrollment assistant on the control-plane node at any time:
+
 ```bash
-sudo apt install -y openjdk-21-jdk maven docker.io ansible open-iscsi nfs-common curl jq openssl
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-sudo apt install -y nodejs
-sudo usermod -aG docker $USER
-sudo systemctl enable --now iscsid
+./scripts/add-k3s-workers.sh
 ```
 
-#### 1.1 Apply Host Security Tooling (Recommended for Internet-Exposed Servers)
+It reads the local token without printing it, copies the worker installer over
+SSH, installs the K3s agent and Longhorn prerequisites, and waits for the node to
+become Ready. These are the commands it displays if a token must be obtained
+manually; the second creates an optional short-lived token:
+
 ```bash
-chmod +x scripts/configure-node-security.sh
-./scripts/configure-node-security.sh --apply --server-exposure internet
+sudo cat /var/lib/rancher/k3s/server/node-token
+sudo k3s token create --ttl 1h --description worker-join
 ```
 
-This config is written directly by the script: Fail2ban uses the `systemd` backend with UFW actions for `sshd`, and CrowdSec uses the nftables firewall bouncer with local API credentials generated or preserved on the host.
+To join from the worker itself instead, copy or clone this repository there and
+run the interactive worker installer. The token prompt is hidden:
 
-#### 2. Install Kubernetes
 ```bash
-curl -sfL https://get.k3s.io | sh -s - --disable traefik --write-kubeconfig-mode 644
-mkdir -p ~/.kube
-sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-sudo chown $USER:$USER ~/.kube/config
+./scripts/install-k3s-worker.sh
 ```
 
-#### 3. Install Helm & Longhorn
+For repeatable enrollment through the main installer:
+
 ```bash
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-helm repo add longhorn https://charts.longhorn.io && helm repo update
-helm install longhorn longhorn/longhorn --namespace longhorn-system --create-namespace \
-    --set defaultSettings.defaultReplicaCount=1
-kubectl patch storageclass longhorn -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+K3S_WORKER_HOSTS=ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
+K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
+K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
+./install-infrastructure.sh --yes
 ```
 
-#### 4. Install Nginx Ingress (Helm)
+Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
+`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`. New
+DaemonSet workloads, including node metrics and log collection, automatically
+run on eligible workers. The installer sets Longhorn's default replica count for
+new volumes to the number of Ready nodes, capped at three; it does not relocate
+or change existing volumes.
+
+## Initial credentials
+
+Retrieve bootstrap credentials from the cluster rather than storing them in the
+repository:
+
+| Service | Username | Password or token command |
+|---|---|---|
+| ArgoCD | `admin` | `kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
+| DBGate | Secret value | `kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf "%s:%s" (index .data "LOGIN" \| base64decode) (index .data "PASSWORD" \| base64decode)}}'` |
+| GitLab | `root` | `kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` |
+| Grafana | `admin` | `kubectl get secret -n infra grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' \| base64 -d` |
+| Jenkins | `admin` | `kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword` |
+| Kafka UI | Secret value | `kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf "%s:%s" (index .data "SPRING_SECURITY_USER_NAME" \| base64decode) (index .data "SPRING_SECURITY_USER_PASSWORD" \| base64decode)}}'` |
+| Keycloak | Secret value | `kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' \| base64 -d` |
+| Nexus | `admin` | `kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password` |
+| Odoo | `admin` | `kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
+| Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
+| SonarQube | `admin` | Initial password: `admin` |
+| Vault | Token login | `sudo cat /var/lib/bm-cluster/vault-bootstrap-token` |
+
+Change bootstrap credentials immediately after onboarding.
+
+## Operations
+
+Inspect the platform:
+
 ```bash
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm install ingress-nginx ingress-nginx/ingress-nginx --namespace infra --create-namespace \
-    --set controller.service.type=LoadBalancer \
-    --set controller.service.enableHttp=true
+kubectl get pods -A
+kubectl get ingress -A
+kubectl get pvc -A
 ```
 
-#### 5. Deploy Infrastructure
-```bash
-kubectl create namespace infra
+Applications opt into metrics from their own repository by adding
+`prometheus.io/scrape`, `prometheus.io/path`, and `prometheus.io/port` pod
+annotations. Application Grafana dashboards remain application-owned: publish a
+ConfigMap labeled `grafana_dashboard: "1"` containing dashboard JSON. Kubernetes
+logs are collected automatically into `kubernetes-logs-*` and can be filtered in
+Kibana by `kubernetes.namespace_name` and `kubernetes.labels.app`. The logging
+bootstrap applies a seven-day Elasticsearch lifecycle policy to bound disk use.
 
-# Create TLS secret for infrastructure ingress
-kubectl create secret tls swirlit-dev-tls --cert=tls.crt --key=tls.key -n infra --dry-run=client -o yaml | kubectl apply -f -
-
-# Install Vault
-helm repo add hashicorp https://helm.releases.hashicorp.com
-helm upgrade --install vault hashicorp/vault -n infra \
-    --set injector.enabled=false \
-    --set server.ha.enabled=true \
-    --set server.ha.raft.enabled=true \
-    --set server.ha.replicas=1 \
-    --set server.dataStorage.storageClass=longhorn
-# Includes Vault ingress/RBAC + ExternalSecrets + auto-unseal CronJob resources
-kubectl apply -f deployments/vault.yaml
-
-# Install External Secrets Operator
-helm repo add external-secrets https://charts.external-secrets.io
-helm upgrade --install external-secrets external-secrets/external-secrets -n infra --set installCRDs=true
-
-# Configure Vault and seed secret values
-chmod +x scripts/configure-vault.sh
-./scripts/configure-vault.sh infra
-
-for f in postgres kafka redis mongodb keycloak monitoring elk jenkins sonarqube nexus gitlab dbgate odoo ingress; do
-    kubectl apply -f deployments/${f}.yaml
-done
-
-# Install descheduler addon resources (policy + RBAC only, no automatic run)
-kubectl apply -f deployments/descheduler.yaml
-```
-
-#### 6. Install ArgoCD (Helm)
-```bash
-helm repo add argo https://argoproj.github.io/argo-helm
-helm install argocd argo/argo-cd -n infra \
-    --set server.service.type=ClusterIP \
-    --set configs.params."server\.insecure"=true \
-    --set redis.enabled=true
-```
-
-## 🔧 Post-Install Checklist (Infrastructure)
-
-### 1. DNS Records in Cloudflare (Required)
-Create these DNS records in your Cloudflare zone, all pointing to `51.68.232.240`:
-
-| Type | Name | Value | Proxy |
-|------|------|-------|-------|
-| A | `keycloak` | `51.68.232.240` | Proxied |
-| A | `jenkins` | `51.68.232.240` | Proxied |
-| A | `sonarqube` | `51.68.232.240` | Proxied |
-| A | `nexus` | `51.68.232.240` | Proxied |
-| A | `gitlab` | `51.68.232.240` | Proxied |
-| A | `argocd` | `51.68.232.240` | Proxied |
-| A | `grafana` | `51.68.232.240` | Proxied |
-| A | `kibana` | `51.68.232.240` | Proxied |
-| A | `longhorn` | `51.68.232.240` | Proxied |
-| A | `vault` | `51.68.232.240` | Proxied |
-| A | `dbgate` | `51.68.232.240` | Proxied |
-| A | `odoo` | `51.68.232.240` | Proxied |
-
-### 2. Replace Temporary Self-Signed Cert with Cloudflare Origin Certificate
-The scripts create `swirlit-dev-tls` automatically with a self-signed cert. Replace it with Cloudflare Origin cert:
-
-1. Cloudflare Dashboard → **SSL/TLS** → **Origin Server** → **Create Certificate**
-2. Hostnames: `keycloak.swirlit.dev`, `jenkins.swirlit.dev`, `sonarqube.swirlit.dev`, `nexus.swirlit.dev`, `gitlab.swirlit.dev`, `argocd.swirlit.dev`, `grafana.swirlit.dev`, `kibana.swirlit.dev`, `longhorn.swirlit.dev`, `vault.swirlit.dev`, `dbgate.swirlit.dev`, `odoo.swirlit.dev`, `*.swirlit.dev`
-3. Save certificate and private key as local files (`tls.crt`, `tls.key`)
-4. Apply them:
+Trigger the Descheduler manually:
 
 ```bash
-kubectl create secret tls swirlit-dev-tls --cert=tls.crt --key=tls.key -n infra --dry-run=client -o yaml | kubectl apply -f -
-```
-
-5. In Cloudflare SSL/TLS mode, select **Full (strict)**
-
-### 3. Jenkins Setup (Required for CI/CD)
-```bash
-# Get initial admin password
-kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword
-
-# Access Jenkins at https://jenkins.swirlit.dev
-# 1. Install suggested plugins + "Kubernetes" plugin
-# 2. Configure Kubernetes cloud:
-#    - Manage Jenkins → Clouds → New Cloud → Kubernetes
-#    - Kubernetes URL: https://kubernetes.default.svc
-#    - Jenkins URL: http://jenkins.infra.svc.cluster.local:8080
-#    - Jenkins tunnel: jenkins.infra.svc.cluster.local:50000
-#    - Namespace: infra
-# 3. Create a Pipeline job pointing to app repo
-#    - SCM: Git → <application-repository-url>
-#    - Script Path: Jenkinsfile
-```
-
-### 4. GitLab Setup (SCM)
-```bash
-# Access GitLab at https://gitlab.swirlit.dev
-# First startup can take several minutes
-kubectl wait --for=condition=ready pod -n infra -l app=gitlab --timeout=1200s
-
-# Get initial root password (username is: root)
-kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password
-```
-
-### 5. ArgoCD Setup (GitOps)
-```bash
-# Get initial admin password
-kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
-
-# Access ArgoCD at https://argocd.swirlit.dev
-# Login with admin / <password from above>
-# Two applications are pre-configured:
-#   - Infrastructure application definitions are managed from the application repository
-# ArgoCD auto-syncs on git push (self-heal enabled)
-```
-
-### 5.1 Odoo Setup
-
-Odoo is ready after its pod becomes healthy. The first bootstrap creates the `odoo` database without demo data, uses a dedicated non-superuser PostgreSQL role, disables the public database-management pages, and persists its filestore on Longhorn.
-
-Before opening Odoo, add its public DNS record in the **Cloudflare Dashboard**:
-
-1. Open **Cloudflare Dashboard → select `swirlit.dev` → DNS → Records → Add record**.
-2. Select type **A**, set **Name** to `odoo`, set **IPv4 address** to `51.68.232.240`, and enable **Proxy status: Proxied**.
-3. Ensure the Cloudflare Origin Certificate installed in the `swirlit-dev-tls` Kubernetes secret covers `odoo.swirlit.dev` (or `*.swirlit.dev`).
-4. Use the Odoo service at **`https://odoo.swirlit.dev`**.
-
-```bash
-# Wait for initial database bootstrap (the first start can take several minutes)
-kubectl wait --for=condition=ready pod -n infra -l app=odoo --timeout=900s
-
-# Login at https://odoo.swirlit.dev with username: admin
-kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d && echo
-```
-
-Change the application admin password from Odoo after first login. The Vault value is used only during initial database creation, so later pod restarts do not reset a password changed in the UI.
-
-### 6. Rotate Infrastructure Secrets in Vault (Security)
-```bash
-# Read Vault root token (created by scripts/configure-vault.sh)
-export VAULT_TOKEN="$(kubectl get secret -n infra vault-init -o jsonpath='{.data.root_token}' | base64 -d)"
-export VAULT_ADDR="http://127.0.0.1:8200"
-kubectl port-forward -n infra svc/vault-ui 8200:8200
-
-# Rotate examples (run in another terminal with VAULT_ADDR/VAULT_TOKEN set)
-vault kv patch secret/infra/postgres username='<NEW_USERNAME>' password='<NEW_PASSWORD>'
-vault kv patch secret/infra/mongodb root_password='<NEW_PASSWORD>'
-vault kv patch secret/infra/grafana admin_password='<NEW_PASSWORD>'
-vault kv patch secret/infra/keycloak admin_password='<NEW_PASSWORD>'
-vault kv patch secret/infra/odoo database_password='<NEW_DB_PASSWORD>' database_master_password='<NEW_MASTER_PASSWORD>'
-```
-
-### 7. Initial Credential Retrieval (Per Service)
-
-Use this table for first-time setup credentials for every service that requires authentication:
-
-| Service | Username (first login) | Password / Token retrieval | Notes |
-|---|---|---|---|
-| Vault | `root` token only | `base64 --decode <<< "$(kubectl get secret -n infra vault-init -o jsonpath='{.data.root_token}')" && echo` | Use token to login, create scoped tokens, then stop using root token. |
-| PostgreSQL | `base64 --decode <<< "$(kubectl get secret -n infra postgres-secret -o jsonpath='{.data.POSTGRES_USER}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infra postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
-| MongoDB | `base64 --decode <<< "$(kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_USERNAME}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
-| Keycloak | `base64 --decode <<< "$(kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_USERNAME}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}')" && echo` | Rotate after first login. |
-| Grafana | `admin` | `base64 --decode <<< "$(kubectl get secret -n infra grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}')" && echo` | Vault-backed via External Secrets. |
-| Jenkins | `admin` | `kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword` | Password is generated by Jenkins on first startup. |
-| Nexus | `admin` | `kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password` | Password file exists until changed. |
-| GitLab | `root` | `kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` | Initial file can expire/rotate; set a permanent password. |
-| DBGate | `base64 --decode <<< "$(kubectl get secret -n infra dbgate-auth-secret -o jsonpath='{.data.LOGIN}')" && echo` | `base64 --decode <<< "$(kubectl get secret -n infra dbgate-auth-secret -o jsonpath='{.data.PASSWORD}')" && echo` | DBGate is preconfigured with PostgreSQL, Redis, and MongoDB connections. |
-| Odoo | `admin` | `base64 --decode <<< "$(kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}')" && echo` | Generated for the first login; change it in Odoo after onboarding. |
-| ArgoCD | `admin` | `base64 --decode <<< "$(kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}')" && echo` | Delete/rotate initial secret after onboarding. |
-| SonarQube | `admin` | `admin` | Default bootstrap credentials are static; change immediately after first login. |
-
-### 8. Trigger Descheduler Manually
-
-Descheduler is installed in **manual trigger mode only** (no CronJob and no always-running Deployment).  
-Configured strategies: `LowNodeUtilization` and `RemoveDuplicates`.
-
-```bash
-# Launch a one-off descheduler run
 kubectl create -f deployments/descheduler-run-job.yaml
-
-# Watch completion
 kubectl get jobs -n infra -l app=descheduler -w
 ```
 
-## 🔀 Adding More Nodes
+K3s creates a consistent root-only recovery archive every day and retains the
+latest seven under `/var/backups/bm-cluster/k3s`. Run one immediately with
+`sudo systemctl start bm-k3s-backup.service`, then copy the resulting archive to
+encrypted off-node storage; a backup that remains on this server does not cover
+disk or host loss.
 
-K8s makes it easy to scale horizontally:
-
-```bash
-# On the master node, get control-plane IP:
-hostname -I | awk '{print $1}'
-
-# On the master node, get the join token:
-sudo cat /var/lib/rancher/k3s/server/node-token
-
-# On the new worker node:
-curl -sfL https://get.k3s.io | K3S_URL=https://<MASTER_NODE_IP>:6443 K3S_TOKEN=<TOKEN_FROM_MASTER> sh -
-
-# Longhorn will automatically replicate data to new nodes.
-# Increase replica count:
-kubectl edit settings -n longhorn-system default-replica-count
-# Change from 1 to 2 (or 3 for 3+ nodes)
-```
-
-## 🔒 Host Security Baseline
-
-- Internet-exposed servers automatically install and configure UFW, Fail2ban, CrowdSec with the nftables bouncer, and Lynis via `scripts/configure-node-security.sh`.
-- Local-only servers skip that internet-facing host security suite.
-- Keep only required public ports open (`22`, `80`, `443`, `6443`, plus node-internal overlay ports).
-- Rotate Vault-stored secrets regularly and restart workloads that consume rotated credentials.
-- Keep Kubernetes/Helm chart versions updated and avoid running long-lived default credentials.
-
-## 📊 Monitoring & Logging
-
-- **Prometheus** scrapes metrics from application services.
-- **Grafana** connects to Prometheus and Elasticsearch datasources (auto-provisioned). Import Spring Boot dashboard ID `12900` for JVM metrics.
-- **ELK Stack**: Application logs are shipped to Logstash, stored in Elasticsearch, and searchable via Kibana.
-- **Kibana**: Access at `https://kibana.swirlit.dev`. Create index pattern `app-logs-*` to browse logs.
-
-## 🔄 Deployment Methods: Script vs Ansible
-
-### Combined Script (`install-infrastructure.sh`)
-**Best for**: Fresh bare-metal installs, single-server setups, quick bootstrapping.  
-This single script performs both prerequisite installation and infrastructure deployment.
-
-### Ansible (`ansible/deploy.yml`)
-**Best for**: Multi-node deployments, repeatable provisioning, team environments.
+Ansible remains available for repeatable local deployments:
 
 ```bash
 ansible-playbook ansible/deploy.yml
-
-# Local-only host (skips UFW, Fail2ban, CrowdSec, Lynis automation)
 ansible-playbook ansible/deploy.yml -e server_exposure=local
-
-# Skip the optional Odoo deployment
 ansible-playbook ansible/deploy.yml -e install_odoo=false
+ansible-playbook ansible/deploy.yml -e k3s_node_network_cidr=10.0.0.0/24
 ```
 
-Ansible excels when managing multiple servers (inventory-based), enforcing idempotent state, and integrating with existing automation.
+The Ansible playbook deploys platform resources to the cluster in the active
+kubeconfig; worker operating-system provisioning is handled by the scripts
+above, not by the Ansible inventory.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `install-infrastructure.sh` | Interactive bare-metal installer |
+| `scripts/add-k3s-workers.sh` | Multi-worker enrollment over SSH from the control plane |
+| `scripts/install-k3s-worker.sh` | Interactive or automated installer run on a worker |
+| `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
+| `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
+| `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
+| `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
+| `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
+| `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
+| `deployments/` | Kubernetes resources |
+| `ansible/` | Ansible deployment entry point |
+
+## Security notes
+
+- Keep PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and Prometheus internal.
+- Keep administrative UI hostnames behind Cloudflare Access.
+- Revoke short-lived setup tokens after use and rotate bootstrap credentials.
+- Keep only required public ports open and update Kubernetes workloads regularly.
+- Local-only installs skip the internet-facing host security suite and Cloudflare.
 
 ## License
+
 GPL 3.0

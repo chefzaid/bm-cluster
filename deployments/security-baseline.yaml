@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra
+  labels:
+    # Existing infrastructure includes storage and logging agents that need
+    # elevated host access. Audit and warn first; enforce after each workload
+    # has been migrated without risking an outage.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.34
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.34
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins-builds
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: v1.34
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.34
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.34
+    security.swirlit.dev/deny-hostpath: "true"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deny-hostpath-on-isolated-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(volume, !has(volume.hostPath))"
+      message: "hostPath volumes are forbidden in isolated application and CI namespaces"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-hostpath-on-isolated-namespaces
+spec:
+  policyName: deny-hostpath-on-isolated-namespaces
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        security.swirlit.dev/deny-hostpath: "true"

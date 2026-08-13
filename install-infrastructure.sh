@@ -9,9 +9,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$SCRIPT_DIR/deployments"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
+CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
+WORKER_MANAGER_SCRIPT="$SCRIPT_DIR/scripts/add-k3s-workers.sh"
+K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
+NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
+K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 AUTO_APPROVE=false
-SERVER_IP="${SERVER_IP:-51.68.232.240}"
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
+K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
+K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
+K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
+INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-4.15.1}"
+ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-9.5.11}"
+ARGOCD_IMAGE_TAG="${ARGOCD_IMAGE_TAG:-v3.3.10}"
 
 for arg in "$@"; do
     case "$arg" in
@@ -145,31 +155,6 @@ ensure_tls_secret() {
     info "Created TLS secret '$secret_name' in namespace '$namespace'."
 }
 
-check_dns_records() {
-    local hosts=(
-        "keycloak.swirlit.dev"
-        "jenkins.swirlit.dev"
-        "sonarqube.swirlit.dev"
-        "nexus.swirlit.dev"
-        "argocd.swirlit.dev"
-        "grafana.swirlit.dev"
-        "kibana.swirlit.dev"
-        "gitlab.swirlit.dev"
-        "longhorn.swirlit.dev"
-        "vault.swirlit.dev"
-        "dbgate.swirlit.dev"
-        "odoo.swirlit.dev"
-    )
-
-    for host in "${hosts[@]}"; do
-        local resolved
-        resolved="$(getent hosts "$host" 2>/dev/null | awk '{print $1}' | head -1 || true)"
-        if [[ "$resolved" != "$SERVER_IP" ]]; then
-            warn "DNS check: $host -> ${resolved:-<missing>} (expected $SERVER_IP)"
-        fi
-    done
-}
-
 # ---------- Combined pre-flight checks -----------------------------------------
 [[ $EUID -eq 0 ]] && error "Do not run as root. The script uses sudo when needed."
 
@@ -204,11 +189,29 @@ fi
 
 ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
 ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
+if [[ "$AUTO_APPROVE" == "true" ]]; then
+    [[ -n "${K3S_WORKER_HOSTS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+else
+    ask_with_default "Add or reconcile K3s worker nodes over SSH?" "N" && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+fi
+if [[ "$ADD_K3S_WORKERS" == "true" && "$SERVER_EXPOSURE" == "internet" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_HOSTS on an internet-exposed server."
+    fi
+    read -rp "$(echo -e "${YELLOW}Trusted private node CIDR (for example 10.0.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
+    [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted node CIDR is required when adding workers to an internet-exposed server."
+    export K3S_NODE_NETWORK_CIDR
+fi
 ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
 ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
+if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
+    ask_with_default "Configure Cloudflare public DNS and Origin TLS?" "Y" && CONFIGURE_CLOUDFLARE=true || CONFIGURE_CLOUDFLARE=false
+else
+    CONFIGURE_CLOUDFLARE=false
+fi
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
-ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, DBGate, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, DBGate, Kafka UI, Portainer, Homepage, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
 ask_with_default "Deploy/upgrade Odoo (ERP/CRM)?" "Y" && DEPLOY_ODOO=true || DEPLOY_ODOO=false
 ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
@@ -228,8 +231,13 @@ if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; th
     INSTALL_VAULT_STACK=true
 fi
 
+if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$INSTALL_INGRESS" != "true" ]]; then
+    warn "Cloudflare publishing requires NGINX ingress; enabling ingress installation."
+    INSTALL_INGRESS=true
+fi
+
 RUN_K8S_FEATURES=false
-if [[ "$INSTALL_K3S" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
+if [[ "$INSTALL_K3S" == "true" || "$ADD_K3S_WORKERS" == "true" || "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$CONFIGURE_CLOUDFLARE" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_DATA_STORES" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" || "$INSTALL_DESCHEDULER" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
     RUN_K8S_FEATURES=true
 fi
 
@@ -278,19 +286,41 @@ fi
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$INSTALL_K3S" == "true" ]]; then
         info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
-        curl -sfL https://get.k3s.io | sh -s - \
+        curl -sfL https://get.k3s.io | sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh -s - \
             --disable traefik \
-            --write-kubeconfig-mode 644
+            --secrets-encryption \
+            --write-kubeconfig-mode 600
     fi
 
     if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
-        mkdir -p ~/.kube
+        umask 077
+        mkdir -p -m 700 ~/.kube
         sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
         sudo chown "$USER":"$USER" ~/.kube/config
+        chmod 600 ~/.kube/config
+
+        if [[ ! -f /etc/rancher/k3s/registries.yaml ]]; then
+            printf 'mirrors:\n  "%s":\n    endpoint:\n      - "%s"\n' \
+                "$K3S_REGISTRY_HOST" "$K3S_REGISTRY_ENDPOINT" | \
+                sudo install -o root -g root -m 0600 /dev/stdin /etc/rancher/k3s/registries.yaml
+            sudo systemctl restart k3s
+        elif ! sudo grep -Fq "$K3S_REGISTRY_HOST" /etc/rancher/k3s/registries.yaml; then
+            error "/etc/rancher/k3s/registries.yaml exists without the internal Nexus mirror; merge $K3S_REGISTRY_HOST manually."
+        fi
     fi
     export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
     grep -q "KUBECONFIG" ~/.bashrc 2>/dev/null || \
         echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
+fi
+
+if command -v k3s >/dev/null 2>&1; then
+    [[ -x "$K3S_APPARMOR_SCRIPT" ]] || chmod +x "$K3S_APPARMOR_SCRIPT"
+    step "Configuring the enforced K3s AppArmor runtime profile..."
+    "$K3S_APPARMOR_SCRIPT"
+
+    [[ -x "$K3S_BACKUP_SCRIPT" ]] || chmod +x "$K3S_BACKUP_SCRIPT"
+    step "Configuring daily consistent K3s recovery archives..."
+    "$K3S_BACKUP_SCRIPT"
 fi
 
 if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
@@ -318,15 +348,31 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=Ready node --all --timeout=120s
     fi
 
+    if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
+        [[ -f "$WORKER_MANAGER_SCRIPT" ]] || error "Worker manager not found at $WORKER_MANAGER_SCRIPT"
+        worker_manager_args=()
+        [[ -z "${K3S_WORKER_HOSTS:-}" ]] || worker_manager_args+=(--hosts "$K3S_WORKER_HOSTS")
+        [[ -z "${K3S_SERVER_URL:-}" ]] || worker_manager_args+=(--server-url "$K3S_SERVER_URL")
+        [[ -z "${K3S_WORKER_SSH_USER:-}" ]] || worker_manager_args+=(--ssh-user "$K3S_WORKER_SSH_USER")
+        [[ -z "${K3S_WORKER_SSH_PORT:-}" ]] || worker_manager_args+=(--ssh-port "$K3S_WORKER_SSH_PORT")
+        [[ -z "${K3S_WORKER_IDENTITY_FILE:-}" ]] || worker_manager_args+=(--identity-file "$K3S_WORKER_IDENTITY_FILE")
+        [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || worker_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
+        [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
+        [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
+        step "Adding K3s worker nodes..."
+        bash "$WORKER_MANAGER_SCRIPT" "${worker_manager_args[@]}"
+    fi
+
     step "Creating infra namespace..."
     kubectl create namespace infra 2>/dev/null || true
+    kubectl apply -f "$DEPLOY_DIR/security-baseline.yaml"
 
     if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
         step "Publishing host security policy record..."
         kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
     fi
 
-    if [[ "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ]]; then
+    if [[ "$CONFIGURE_CLOUDFLARE" != "true" && ( "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ) ]]; then
         step "Ensuring HTTPS TLS secret..."
         ensure_tls_secret infra swirlit-dev-tls \
             keycloak.swirlit.dev \
@@ -340,22 +386,25 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             longhorn.swirlit.dev \
             vault.swirlit.dev \
             dbgate.swirlit.dev \
-            odoo.swirlit.dev
+            kafka.swirlit.dev \
+            odoo.swirlit.dev \
+            portainer.swirlit.dev \
+            devapp.swirlit.dev
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
-        if helm list -n longhorn-system 2>/dev/null | grep -q longhorn; then
-            warn "Longhorn already installed, keeping existing release."
-        else
-            step "Installing Longhorn..."
-            helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
-            helm repo update > /dev/null 2>&1
-            helm install longhorn longhorn/longhorn \
-                --namespace longhorn-system \
-                --create-namespace \
-                --set defaultSettings.defaultReplicaCount=1 \
-                --wait --timeout 300s
-        fi
+        node_count="$(kubectl get nodes --no-headers | awk '$2 ~ /^Ready/ {count++} END {print count+0}')"
+        longhorn_replicas="$node_count"
+        (( longhorn_replicas > 3 )) && longhorn_replicas=3
+        (( longhorn_replicas < 1 )) && longhorn_replicas=1
+        step "Installing/upgrading Longhorn with $longhorn_replicas default replica(s) for new volumes..."
+        helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
+        helm repo update > /dev/null 2>&1
+        helm upgrade --install longhorn longhorn/longhorn \
+            --namespace longhorn-system \
+            --create-namespace \
+            --set "defaultSettings.defaultReplicaCount=$longhorn_replicas" \
+            --wait --timeout 300s
 
         kubectl patch storageclass longhorn -p \
             '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
@@ -363,25 +412,26 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
         kubectl wait --for=condition=ready pod -l app=longhorn-manager \
             -n longhorn-system --timeout=180s
+        kubectl -n longhorn-system patch settings.longhorn.io default-replica-count \
+            --type=merge -p "{\"value\":\"$longhorn_replicas\"}" >/dev/null
     fi
 
     if [[ "$INSTALL_INGRESS" == "true" ]]; then
         step "Installing Nginx Ingress Controller..."
         helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
         helm repo update > /dev/null 2>&1
-        if helm list -n infra 2>/dev/null | grep -q ingress-nginx; then
-            helm upgrade ingress-nginx ingress-nginx/ingress-nginx \
-                --namespace infra \
-                --set controller.service.type=LoadBalancer \
-                --set controller.service.enableHttp=true \
-                --wait --timeout 120s
-        else
-            helm install ingress-nginx ingress-nginx/ingress-nginx \
-                --namespace infra \
-                --set controller.service.type=LoadBalancer \
-                --set controller.service.enableHttp=true \
-                --wait --timeout 120s
-        fi
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+            --namespace infra \
+            --version "$INGRESS_NGINX_CHART_VERSION" \
+            --set controller.service.type=LoadBalancer \
+            --set controller.service.enableHttp=true \
+            --wait --timeout 300s
+    fi
+
+    if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
+        [[ -x "$CLOUDFLARE_SCRIPT" ]] || chmod +x "$CLOUDFLARE_SCRIPT"
+        step "Configuring Cloudflare DNS and Origin TLS..."
+        "$CLOUDFLARE_SCRIPT"
     fi
 
     if [[ "$INSTALL_VAULT_STACK" == "true" ]]; then
@@ -404,7 +454,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set installCRDs=true \
             --wait --timeout 300s
 
-        step "Applying unified Vault manifests (ingress, RBAC, secret sync, auto-unseal)..."
+        step "Applying unified Vault manifests (ingress, RBAC, and secret sync)..."
         kubectl apply -f "$DEPLOY_DIR/vault.yaml"
 
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout=300s
@@ -414,7 +464,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
 
-        for es in postgres-secret mongodb-secret odoo-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret; do
+        for es in postgres-secret mongodb-secret odoo-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret kafka-ui-auth-secret portainer-auth-secret; do
             kubectl wait --for=condition=Ready externalsecret/"$es" -n infra --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
         done
     fi
@@ -435,8 +485,19 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Deploying platform services..."
-        for f in keycloak.yaml monitoring.yaml elk.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml dbgate.yaml ingress.yaml; do
+        for f in keycloak.yaml monitoring.yaml elk.yaml logging-agent.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml dbgate.yaml kafka-ui.yaml portainer.yaml homepage.yaml ingress.yaml; do
             kubectl apply -f "$DEPLOY_DIR/$f"
+        done
+
+        kubectl rollout status deployment/nexus -n infra --timeout=600s
+        [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || chmod +x "$NEXUS_REGISTRY_SCRIPT"
+        step "Configuring the private Nexus image registry and service accounts..."
+        "$NEXUS_REGISTRY_SCRIPT"
+        for registry_secret in jenkins-builds/jenkins-registry-auth devapp/devapp-registry-auth; do
+            registry_namespace="${registry_secret%%/*}"
+            registry_name="${registry_secret##*/}"
+            kubectl wait --for=condition=Ready externalsecret/"$registry_name" \
+                -n "$registry_namespace" --timeout=180s 2>/dev/null || warn "ExternalSecret '$registry_secret' is still reconciling."
         done
 
         kubectl wait --for=condition=ready pod -l app=keycloak      -n infra --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
@@ -444,8 +505,14 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infra --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
         kubectl wait --for=condition=ready pod -l app=kibana         -n infra --timeout=180s 2>/dev/null || warn "Kibana still starting..."
         kubectl wait --for=condition=ready pod -l app=logstash       -n infra --timeout=180s 2>/dev/null || warn "Logstash still starting..."
+        kubectl rollout status daemonset/node-exporter -n infra --timeout=180s 2>/dev/null || warn "Node Exporter still starting..."
+        kubectl rollout status daemonset/fluent-bit   -n infra --timeout=180s 2>/dev/null || warn "Fluent Bit still starting..."
+        kubectl wait --for=condition=ready pod -l app=kube-state-metrics -n infra --timeout=180s 2>/dev/null || warn "kube-state-metrics still starting..."
         kubectl wait --for=condition=ready pod -l app=gitlab         -n infra --timeout=900s 2>/dev/null || warn "GitLab still starting..."
         kubectl wait --for=condition=ready pod -l app=dbgate         -n infra --timeout=180s 2>/dev/null || warn "DBGate still starting..."
+        kubectl wait --for=condition=ready pod -l app=kafka-ui       -n infra --timeout=300s 2>/dev/null || warn "Kafka UI still starting..."
+        kubectl wait --for=condition=ready pod -l app=portainer      -n infra --timeout=300s 2>/dev/null || warn "Portainer still starting..."
+        kubectl wait --for=condition=ready pod -l app=homepage       -n infra --timeout=300s 2>/dev/null || warn "Homepage still starting..."
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
@@ -462,23 +529,16 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$INSTALL_ARGOCD" == "true" ]]; then
         step "Installing ArgoCD..."
-        if helm list -n infra 2>/dev/null | grep -q argocd; then
-            helm upgrade argocd argo/argo-cd \
-                --namespace infra \
-                --set server.service.type=ClusterIP \
-                --set configs.params."server\\.insecure"=true \
-                --set redis.enabled=true \
-                --wait --timeout 300s
-        else
-            helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-            helm repo update > /dev/null 2>&1
-            helm install argocd argo/argo-cd \
-                --namespace infra \
-                --set server.service.type=ClusterIP \
-                --set configs.params."server\\.insecure"=true \
-                --set redis.enabled=true \
-                --wait --timeout 300s
-        fi
+        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+        helm repo update > /dev/null 2>&1
+        helm upgrade --install argocd argo/argo-cd \
+            --namespace infra \
+            --version "$ARGOCD_CHART_VERSION" \
+            --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
+            --set server.service.type=ClusterIP \
+            --set configs.params."server\\.insecure"=true \
+            --set redis.enabled=true \
+            --wait --timeout 600s
     fi
 else
     warn "All Kubernetes feature groups were skipped."
@@ -501,22 +561,9 @@ if command -v helm >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
 fi
 echo ""
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
-    echo "Service access (HTTPS via domain):"
-    echo "  Keycloak   https://keycloak.swirlit.dev"
-    echo "  Jenkins    https://jenkins.swirlit.dev"
-    echo "  SonarQube  https://sonarqube.swirlit.dev"
-    echo "  Grafana    https://grafana.swirlit.dev"
-    echo "  Nexus      https://nexus.swirlit.dev"
-    echo "  ArgoCD     https://argocd.swirlit.dev"
-    echo "  Kibana     https://kibana.swirlit.dev"
-    echo "  GitLab     https://gitlab.swirlit.dev"
-    echo "  Longhorn   https://longhorn.swirlit.dev"
-    echo "  Vault      https://vault.swirlit.dev"
-    echo "  DBGate     https://dbgate.swirlit.dev"
-    [[ "$DEPLOY_ODOO" == "true" ]] && echo "  Odoo       https://odoo.swirlit.dev"
-    echo ""
-    echo "Expected DNS target IP: $SERVER_IP"
-    check_dns_records
+    if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]] || kubectl get deployment homepage -n infra >/dev/null 2>&1; then
+        echo "Service dashboard: https://dashboard.swirlit.dev"
+    fi
 
     echo ""
     echo "Retrieve credentials:"
@@ -525,14 +572,21 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  Nexus:    kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password"
     echo "  GitLab:   kubectl exec -n infra deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
     echo "  MongoDB:  kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
-    echo "  Vault:    kubectl get secret -n infra vault-init -o jsonpath='{.data.root_token}' | base64 -d"
+    echo "  Vault:    sudo cat /var/lib/bm-cluster/vault-bootstrap-token"
     echo "  DBGate:   kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf \"%s\" (index .data \"LOGIN\" | base64decode)}}:{{printf \"%s\" (index .data \"PASSWORD\" | base64decode)}}'"
+    echo "  Kafka UI: kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_NAME\" | base64decode)}}:{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_PASSWORD\" | base64decode)}}'"
+    echo "  Portainer: username admin; password: kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d"
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
         echo "  Odoo:     username admin; password: kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
     fi
     echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
+    echo "  Add workers:          ./scripts/add-k3s-workers.sh"
+    echo "  Worker join token:    sudo cat /var/lib/rancher/k3s/server/node-token"
     echo ""
 
+    echo "Cluster nodes:"
+    kubectl get nodes -o wide
+    echo ""
     echo "Pod status:"
     kubectl get pods -n infra --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
 fi

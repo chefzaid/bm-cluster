@@ -54,12 +54,21 @@ spec:
         app: odoo
     spec:
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
         fsGroup: 101
         fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: render-config
-          image: odoo:19.0
+          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
           command: ["/bin/bash", "-ec"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             - |
               umask 077
@@ -104,8 +113,12 @@ spec:
             - name: odoo-config
               mountPath: /etc/odoo-generated
         - name: bootstrap-database
-          image: odoo:19.0
+          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
           command: ["/bin/bash", "-ec"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             - |
               until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
@@ -166,19 +179,10 @@ spec:
                   --stop-after-init
               fi
 
-              bootstrap_complete="$(PGPASSWORD="$ODOO_DB_PASSWORD" psql \
-                --host="$ODOO_DB_HOST" \
-                --port="$ODOO_DB_PORT" \
-                --username="$ODOO_DB_USER" \
-                --dbname=odoo \
-                --no-password \
-                --tuples-only \
-                --no-align \
-                --command="SELECT value FROM ir_config_parameter WHERE key = 'bm_cluster.bootstrap_complete'")"
-
-              if [[ "$bootstrap_complete" != "true" ]]; then
-                echo "Applying the initial Odoo administrator and base URL configuration..."
-                cat <<'PY' | odoo shell --config=/etc/odoo-generated/odoo.conf --database=odoo
+              # The managed Secret is authoritative. Reconcile this on every pod
+              # start so a Secret rotation cannot leave Odoo with stale credentials.
+              echo "Reconciling the Odoo administrator and base URL configuration..."
+              cat <<'PY' | odoo shell --config=/etc/odoo-generated/odoo.conf --database=odoo
               import os
 
               admin = env.ref('base.user_admin')
@@ -192,7 +196,6 @@ spec:
               params.set_param('bm_cluster.bootstrap_complete', 'true')
               env.cr.commit()
               PY
-              fi
           env:
             - name: ODOO_DB_HOST
               value: postgres.infra.svc.cluster.local
@@ -230,12 +233,16 @@ spec:
               mountPath: /var/lib/odoo
       containers:
         - name: odoo
-          image: odoo:19.0
+          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
           ports:
             - name: http
               containerPort: 8069
             - name: websocket
               containerPort: 8072
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           startupProbe:
             httpGet:
               path: /web/login
@@ -256,7 +263,7 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              cpu: 500m
+              cpu: 100m
               memory: 1Gi
             limits:
               cpu: "2"

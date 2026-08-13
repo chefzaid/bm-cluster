@@ -35,7 +35,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: vault-ui
+                name: vault
                 port:
                   number: 8200
 ---
@@ -271,6 +271,30 @@ spec:
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
+  name: kafka-ui-auth-secret
+  namespace: infra
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: kafka-ui-auth-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: SPRING_SECURITY_USER_NAME
+      remoteRef:
+        key: infra/kafka-ui
+        property: username
+    - secretKey: SPRING_SECURITY_USER_PASSWORD
+      remoteRef:
+        key: infra/kafka-ui
+        property: password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
   name: dbgate-auth-secret
   namespace: infra
 spec:
@@ -290,107 +314,27 @@ spec:
       remoteRef:
         key: infra/dbgate
         property: password
----
-# Vault auto-unseal: runs every minute, checks if vault-0 is sealed,
-# and unseals it using the key stored in the vault-init K8s secret.
-# This eliminates the need for manual intervention after node reboots.
-
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: vault-unseal
-  namespace: infra
 
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
 metadata:
-  name: vault-unseal
-  namespace: infra
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["vault-init"]
-    verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    verbs: ["create"]
-
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: vault-unseal
-  namespace: infra
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: vault-unseal
-subjects:
-  - kind: ServiceAccount
-    name: vault-unseal
-    namespace: infra
-
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: vault-unseal
+  name: portainer-auth-secret
   namespace: infra
 spec:
-  schedule: "* * * * *"
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      backoffLimit: 1
-      activeDeadlineSeconds: 55
-      template:
-        metadata:
-          labels:
-            app: vault-unseal
-        spec:
-          serviceAccountName: vault-unseal
-          restartPolicy: Never
-          containers:
-            - name: unseal
-              image: bitnami/kubectl:latest
-              command: ["/bin/sh", "-c"]
-              args:
-                - |
-                  set -e
-
-                  # Wait for vault-0 pod to exist and be running
-                  PHASE=$(kubectl get pod vault-0 -n infra -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-                  if [ "$PHASE" != "Running" ]; then
-                    echo "vault-0 is not running (phase=$PHASE), skipping."
-                    exit 0
-                  fi
-
-                  # Check seal status
-                  SEALED=$(kubectl exec vault-0 -n infra -- vault status -format=json 2>/dev/null | grep '"sealed"' | head -1 | grep -o 'true\|false' || echo "unknown")
-
-                  if [ "$SEALED" = "false" ]; then
-                    echo "Vault is already unsealed, nothing to do."
-                    exit 0
-                  fi
-
-                  if [ "$SEALED" != "true" ]; then
-                    echo "Could not determine seal status (sealed=$SEALED), skipping."
-                    exit 0
-                  fi
-
-                  echo "Vault is sealed — unsealing..."
-                  UNSEAL_KEY=$(kubectl get secret vault-init -n infra -o jsonpath='{.data.unseal_key}' | base64 -d)
-
-                  if [ -z "$UNSEAL_KEY" ]; then
-                    echo "ERROR: unseal key is empty"
-                    exit 1
-                  fi
-
-                  kubectl exec vault-0 -n infra -- vault operator unseal "$UNSEAL_KEY"
-                  echo "Vault unsealed successfully."
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: portainer-auth-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: ADMIN_USERNAME
+      remoteRef:
+        key: infra/portainer
+        property: username
+    - secretKey: ADMIN_PASSWORD
+      remoteRef:
+        key: infra/portainer
+        property: password

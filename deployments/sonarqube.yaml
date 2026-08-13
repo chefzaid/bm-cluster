@@ -47,6 +47,8 @@ spec:
     requests:
       storage: 10Gi
 
+---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,6 +56,8 @@ metadata:
   namespace: infra
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: sonarqube
@@ -64,17 +68,23 @@ spec:
     spec:
       securityContext:
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
       - name: init-sysctl
-        image: busybox
+        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
         command: ["sysctl", "-w", "vm.max_map_count=262144"]
         securityContext:
           privileged: true
       - name: init-chown
-        image: busybox
+        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
         command: ["sh", "-c", "chown -R 1000:1000 /opt/sonarqube/data /opt/sonarqube/extensions /opt/sonarqube/logs"]
         securityContext:
           runAsUser: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+            add: ["CHOWN"]
         volumeMounts:
         - name: sonarqube-data
           mountPath: /opt/sonarqube/data
@@ -84,7 +94,7 @@ spec:
           mountPath: /opt/sonarqube/logs
       containers:
       - name: sonarqube
-        image: sonarqube:lts-community
+        image: sonarqube@sha256:f709975ab31d2d08f5a3ae2dc73a31ee011afc8cf28845082c17c55d45df9df5
         ports:
         - containerPort: 9000
         env:
@@ -107,12 +117,43 @@ spec:
         resources:
           requests:
             memory: "2Gi"
-            cpu: "1"
+            cpu: "250m"
           limits:
             memory: "4Gi"
             cpu: "2"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        startupProbe:
+          exec:
+            command:
+              - sh
+              - -c
+              - wget -qO- http://127.0.0.1:9000/api/system/status >/dev/null
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          exec:
+            command:
+              - sh
+              - -c
+              - wget -qO- http://127.0.0.1:9000/api/system/status | grep -q '"status":"UP"'
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          tcpSocket:
+            port: 9000
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
       - name: db
-        image: postgres:15
+        image: postgres@sha256:dafc4d8e8369da730a5ee9a320a0f0b3c6aa516f41244689c4493a27dc84472d
         env:
         - name: POSTGRES_USER
           value: "sonar"
@@ -131,10 +172,35 @@ spec:
         resources:
           requests:
             memory: "512Mi"
-            cpu: "500m"
+            cpu: "100m"
           limits:
             memory: "1Gi"
             cpu: "1"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          runAsGroup: 999
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        startupProbe:
+          exec:
+            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 60
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
+          periodSeconds: 30
+          timeoutSeconds: 3
+          failureThreshold: 6
       volumes:
       - name: sonarqube-data
         persistentVolumeClaim:

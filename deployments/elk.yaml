@@ -39,6 +39,18 @@ data:
       elasticsearch {
         hosts => ["http://elasticsearch.infra.svc.cluster.local:9200"]
         index => "app-logs-%{+YYYY.MM.dd}"
+        template => "/usr/share/logstash/config/app-logs-template.json"
+        template_name => "app-logs-single-node"
+        template_overwrite => true
+      }
+    }
+  app-logs-template.json: |
+    {
+      "index_patterns": ["app-logs-*"],
+      "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "index.lifecycle.name": "bm-cluster-logs-7d"
       }
     }
 
@@ -81,6 +93,10 @@ metadata:
   namespace: infra
 spec:
   replicas: 1
+  # The single-node process holds an exclusive lock on its RWO data path.
+  # Never overlap old and new Elasticsearch pods during an update.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: elasticsearch
@@ -89,16 +105,26 @@ spec:
       labels:
         app: elasticsearch
     spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
       - name: fix-permissions
-        image: busybox
+        image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
         command: ["sh", "-c", "mkdir -p /data/esdata && chown -R 1000:1000 /data"]
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+            add: ["CHOWN"]
         volumeMounts:
         - name: es-data
           mountPath: /data
       containers:
       - name: elasticsearch
-        image: docker.elastic.co/elasticsearch/elasticsearch:7.17.25
+        image: docker.elastic.co/elasticsearch/elasticsearch@sha256:aaf1c65bc2d0d400d59ec70f0a137a5b4f3fb9c764319120ea3ca5a1e1e7869a
         ports:
         - containerPort: 9200
         - containerPort: 9300
@@ -106,16 +132,23 @@ spec:
         - name: discovery.type
           value: single-node
         - name: ES_JAVA_OPTS
-          value: "-Xms512m -Xmx512m"
+          value: "-Xms1g -Xmx1g"
         - name: xpack.security.enabled
           value: "false"
         resources:
           limits:
-            memory: "1Gi"
+            memory: "2Gi"
             cpu: "1"
           requests:
-            memory: "512Mi"
+            memory: "1Gi"
             cpu: "250m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         volumeMounts:
         - name: es-data
           mountPath: /usr/share/elasticsearch/data
@@ -126,12 +159,15 @@ spec:
             port: 9200
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
         livenessProbe:
           httpGet:
             path: /_cluster/health
             port: 9200
           initialDelaySeconds: 60
           periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
       volumes:
       - name: es-data
         persistentVolumeClaim:
@@ -167,25 +203,39 @@ spec:
       labels:
         app: logstash
     spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: logstash
-        image: docker.elastic.co/logstash/logstash:7.17.25
+        image: docker.elastic.co/logstash/logstash@sha256:4925b305fe4cd92116277fb697242fcf70b867dd433f7c28084d4c8ae3c2e156
         ports:
         - containerPort: 5000
         env:
         - name: LS_JAVA_OPTS
-          value: "-Xms384m -Xmx384m"
+          value: "-Xms512m -Xmx512m -XX:+ExitOnOutOfMemoryError"
         resources:
           limits:
-            memory: "768Mi"
+            memory: "1536Mi"
             cpu: "500m"
           requests:
-            memory: "384Mi"
+            memory: "768Mi"
             cpu: "100m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         volumeMounts:
         - name: config-volume
           mountPath: /usr/share/logstash/pipeline/logstash.conf
           subPath: logstash.conf
+        - name: config-volume
+          mountPath: /usr/share/logstash/config/app-logs-template.json
+          subPath: app-logs-template.json
         readinessProbe:
           httpGet:
             path: /
@@ -227,9 +277,13 @@ spec:
       labels:
         app: kibana
     spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: kibana
-        image: docker.elastic.co/kibana/kibana:7.17.25
+        image: docker.elastic.co/kibana/kibana@sha256:f526876eb801eda6b6a31bf7997f76e43206fa4b08c4153f5d491fcb1dd81455
         ports:
         - containerPort: 5601
         env:
@@ -244,6 +298,13 @@ spec:
           requests:
             memory: "256Mi"
             cpu: "100m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         readinessProbe:
           httpGet:
             path: /api/status

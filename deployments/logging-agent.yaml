@@ -1,0 +1,265 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: infra
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluent-bit
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluent-bit
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluent-bit
+subjects:
+  - kind: ServiceAccount
+    name: fluent-bit
+    namespace: infra
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: infra
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush                     1
+        Daemon                    Off
+        Log_Level                 info
+        Parsers_File              /fluent-bit/etc/parsers.conf
+        HTTP_Server               On
+        HTTP_Listen               0.0.0.0
+        HTTP_Port                 2020
+        Health_Check              On
+        storage.path              /var/lib/fluent-bit/storage
+        storage.sync              normal
+        storage.checksum          off
+        storage.max_chunks_up     128
+
+    [INPUT]
+        Name                      tail
+        Alias                     kubernetes_containers
+        Path                      /var/log/containers/*.log
+        multiline.parser          cri, docker
+        Tag                       kube.*
+        DB                        /var/lib/fluent-bit/tail-containers.db
+        DB.Sync                   Normal
+        Mem_Buf_Limit             20MB
+        Skip_Long_Lines           On
+        Refresh_Interval          10
+        Rotate_Wait               30
+        storage.type              filesystem
+
+    [FILTER]
+        Name                      kubernetes
+        Match                     kube.*
+        Kube_URL                  https://kubernetes.default.svc:443
+        Kube_CA_File              /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        Kube_Token_File           /var/run/secrets/kubernetes.io/serviceaccount/token
+        Kube_Tag_Prefix           kube.var.log.containers.
+        Merge_Log                 On
+        Keep_Log                  On
+        K8S-Logging.Parser        On
+        K8S-Logging.Exclude       On
+        Labels                    On
+        Annotations               Off
+
+    [OUTPUT]
+        Name                      es
+        Match                     kube.*
+        Host                      elasticsearch.infra.svc.cluster.local
+        Port                      9200
+        Logstash_Format           On
+        Logstash_Prefix           kubernetes-logs
+        Logstash_DateFormat       %Y.%m.%d
+        Suppress_Type_Name        On
+        Generate_ID               On
+        Write_Operation           index
+        Replace_Dots              On
+        Retry_Limit               False
+        Trace_Error               On
+
+  index-template.json: |
+    {
+      "index_patterns": ["kubernetes-logs-*"],
+      "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "index.refresh_interval": "5s",
+        "index.lifecycle.name": "bm-cluster-logs-7d"
+      },
+      "mappings": {
+        "dynamic": true,
+        "properties": {
+          "@timestamp": {"type": "date"},
+          "app": {"type": "keyword"},
+          "level": {"type": "keyword"},
+          "logger_name": {"type": "keyword"},
+          "thread_name": {"type": "keyword"},
+          "stream": {"type": "keyword"},
+          "message": {"type": "text"},
+          "log": {"type": "text"},
+          "kubernetes": {
+            "properties": {
+              "namespace_name": {"type": "keyword"},
+              "pod_name": {"type": "keyword"},
+              "container_name": {"type": "keyword"},
+              "docker_id": {"type": "keyword"},
+              "container_hash": {"type": "keyword"},
+              "container_image": {"type": "keyword"},
+              "host": {"type": "keyword"}
+            }
+          }
+        }
+      }
+    }
+  ilm-policy.json: |
+    {
+      "policy": {
+        "phases": {
+          "hot": {
+            "min_age": "0ms",
+            "actions": {
+              "set_priority": {"priority": 100}
+            }
+          },
+          "delete": {
+            "min_age": "7d",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: infra
+  labels:
+    app: fluent-bit
+spec:
+  selector:
+    matchLabels:
+      app: fluent-bit
+  template:
+    metadata:
+      labels:
+        app: fluent-bit
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /api/v2/metrics/prometheus
+        prometheus.io/port: "2020"
+    spec:
+      serviceAccountName: fluent-bit
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: configure-index-template
+          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fsS http://elasticsearch.infra.svc.cluster.local:9200 >/dev/null; do sleep 5; done
+              curl -fsS -X PUT \
+                -H 'Content-Type: application/json' \
+                --data-binary @/config/ilm-policy.json \
+                http://elasticsearch.infra.svc.cluster.local:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
+              curl -fsS -X PUT \
+                -H 'Content-Type: application/json' \
+                --data-binary @/config/index-template.json \
+                http://elasticsearch.infra.svc.cluster.local:9200/_template/kubernetes-logs >/dev/null
+              curl -fsS -X PUT \
+                -H 'Content-Type: application/json' \
+                --data-binary '{"index.lifecycle.name":"bm-cluster-logs-7d"}' \
+                'http://elasticsearch.infra.svc.cluster.local:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      containers:
+        - name: fluent-bit
+          image: cr.fluentbit.io/fluent/fluent-bit@sha256:1abcf78fe8c9dee0c57fc2199693370a5a1f84e0af4716beddcd153b40cbbbb1
+          ports:
+            - name: metrics
+              containerPort: 2020
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+              readOnly: true
+            - name: varlogcontainers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/fluent-bit
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: fluent-bit-config
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: state
+          hostPath:
+            path: /var/lib/fluent-bit
+            type: DirectoryOrCreate

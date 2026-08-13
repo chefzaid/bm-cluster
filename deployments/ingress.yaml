@@ -20,7 +20,9 @@ spec:
     - gitlab.swirlit.dev
     - longhorn.swirlit.dev
     - dbgate.swirlit.dev
+    - kafka.swirlit.dev
     - odoo.swirlit.dev
+    - portainer.swirlit.dev
     secretName: swirlit-dev-tls
   rules:
   - host: keycloak.swirlit.dev
@@ -123,6 +125,16 @@ spec:
             name: dbgate
             port:
               number: 3000
+  - host: kafka.swirlit.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: kafka-ui
+            port:
+              number: 8080
   - host: odoo.swirlit.dev
     http:
       paths:
@@ -140,6 +152,16 @@ spec:
             name: odoo
             port:
               number: 8069
+  - host: portainer.swirlit.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: portainer
+            port:
+              number: 9000
 
 ---
 apiVersion: v1

@@ -1,0 +1,607 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homepage
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+automountServiceAccountToken: true
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: homepage
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+rules:
+- apiGroups: [""]
+  resources: ["namespaces", "nodes", "pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homepage
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: homepage
+subjects:
+- kind: ServiceAccount
+  name: homepage
+  namespace: infra
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage-config
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+data:
+  kubernetes.yaml: |
+    mode: cluster
+    ingress: false
+
+  settings.yaml: |
+    title: Swirlit BM Cluster
+    description: Applications, infrastructure, data, delivery, and observability
+    startUrl: https://dashboard.swirlit.dev
+    theme: dark
+    color: slate
+    language: en
+    target: _blank
+    headerStyle: clean
+    iconStyle: theme
+    fullWidth: true
+    useEqualHeights: true
+    statusStyle: dot
+    disableIndexing: true
+    disableUpdateCheck: true
+    hideVersion: true
+    hideErrors: false
+    quicklaunch:
+      searchDescriptions: true
+      hideInternetSearch: true
+      showSearchSuggestions: true
+      hideVisitURL: true
+    layout:
+      Applications & Identity:
+        icon: mdi-apps
+        style: row
+        columns: 5
+      DevOps & Delivery:
+        icon: mdi-source-branch
+        style: row
+        columns: 5
+      Cluster Management:
+        icon: kubernetes.png
+        style: row
+        columns: 4
+      Data & Messaging:
+        icon: mdi-database
+        style: row
+        columns: 4
+      Observability & Logging:
+        icon: grafana.png
+        style: row
+        columns: 4
+      Security & Edge:
+        icon: mdi-shield-lock-outline
+        style: row
+        columns: 4
+      Kubernetes System:
+        icon: k3s.png
+        style: row
+        columns: 4
+
+  services.yaml: |
+    - Applications & Identity:
+        - DevApp:
+            icon: mdi-application-braces-outline
+            href: https://devapp.swirlit.dev
+            description: Public development application
+            namespace: devapp
+            podSelector: app=devapp-web
+        - DevApp User API:
+            icon: mdi-account-cog-outline
+            description: Internal user microservice
+            namespace: devapp
+            podSelector: app=user-app
+        - DevApp Order API:
+            icon: mdi-cart-outline
+            description: Internal order microservice
+            namespace: devapp
+            podSelector: app=order-app
+        - Odoo:
+            icon: odoo.png
+            href: https://odoo.swirlit.dev
+            description: ERP and CRM application
+            namespace: infra
+            podSelector: app=odoo
+        - Keycloak:
+            icon: keycloak.png
+            href: https://keycloak.swirlit.dev
+            description: Identity and access management
+            namespace: infra
+            podSelector: app=keycloak
+
+    - DevOps & Delivery:
+        - Argo CD:
+            icon: argo-cd.png
+            href: https://argocd.swirlit.dev
+            description: GitOps continuous delivery
+            namespace: infra
+            podSelector: app.kubernetes.io/part-of=argocd
+        - GitLab:
+            icon: gitlab.png
+            href: https://gitlab.swirlit.dev
+            description: Git repositories and collaboration
+            namespace: infra
+            podSelector: app=gitlab
+        - Jenkins:
+            icon: jenkins.png
+            href: https://jenkins.swirlit.dev
+            description: CI pipelines and build agents
+            namespace: infra
+            podSelector: app=jenkins
+        - Nexus Repository:
+            icon: nexus.png
+            href: https://nexus.swirlit.dev
+            description: Package and container artifacts
+            namespace: infra
+            podSelector: app=nexus
+        - SonarQube:
+            icon: sonarqube.png
+            href: https://sonarqube.swirlit.dev
+            description: Code quality and security analysis
+            namespace: infra
+            podSelector: app=sonarqube
+
+    - Cluster Management:
+        - Cluster Dashboard:
+            icon: homepage.png
+            href: https://dashboard.swirlit.dev
+            description: This Homepage service catalog
+            namespace: infra
+            podSelector: app=homepage
+        - Portainer:
+            icon: portainer.png
+            href: https://portainer.swirlit.dev
+            description: Kubernetes workload management
+            namespace: infra
+            podSelector: app=portainer
+        - Longhorn:
+            icon: longhorn.png
+            href: https://longhorn.swirlit.dev
+            description: Distributed persistent storage
+            namespace: longhorn-system
+            podSelector: app.kubernetes.io/instance=longhorn
+        - NGINX Ingress:
+            icon: nginx.png
+            description: Internal HTTP ingress controller
+            namespace: infra
+            podSelector: app.kubernetes.io/instance=ingress-nginx
+        - K3s:
+            icon: k3s.png
+            description: Lightweight Kubernetes control plane and workers
+        - Descheduler:
+            icon: mdi-timer-cog-outline
+            description: Manual workload rebalancing addon
+        - K3s ServiceLB:
+            icon: mdi-swap-horizontal-bold
+            description: LoadBalancer implementation for NGINX
+            namespace: kube-system
+            podSelector: svccontroller.k3s.cattle.io/svcname=ingress-nginx-controller
+
+    - Data & Messaging:
+        - DBGate:
+            icon: mdi-database-cog-outline
+            href: https://dbgate.swirlit.dev
+            description: PostgreSQL, MongoDB, and Redis administration
+            namespace: infra
+            podSelector: app=dbgate
+        - Kafka UI:
+            icon: kafka.png
+            href: https://kafka.swirlit.dev
+            description: Kafbat Kafka administration
+            namespace: infra
+            podSelector: app=kafka-ui
+        - PostgreSQL:
+            icon: postgresql.png
+            description: Internal relational database cluster
+            namespace: infra
+            podSelector: app=postgres
+        - MongoDB:
+            icon: mongodb.png
+            description: Internal document database
+            namespace: infra
+            podSelector: app=mongodb
+        - Redis:
+            icon: redis.png
+            description: Internal cache and key-value store
+            namespace: infra
+            podSelector: app=redis
+        - Kafka:
+            icon: kafka.png
+            description: Internal event streaming platform
+            namespace: infra
+            podSelector: app=kafka
+        - ZooKeeper:
+            icon: mdi-graph-outline
+            description: Internal Kafka coordination service
+            namespace: infra
+            podSelector: app=zookeeper
+
+    - Observability & Logging:
+        - Grafana:
+            icon: grafana.png
+            href: https://grafana.swirlit.dev
+            description: Metrics dashboards and usage overview
+            namespace: infra
+            podSelector: app=grafana
+        - Kibana:
+            icon: kibana.png
+            href: https://kibana.swirlit.dev
+            description: Kubernetes and application log discovery
+            namespace: infra
+            podSelector: app=kibana
+        - Prometheus:
+            icon: prometheus.png
+            description: Internal metrics collection and storage
+            namespace: infra
+            podSelector: app=prometheus
+        - Elasticsearch:
+            icon: elasticsearch.png
+            description: Internal indexed log storage
+            namespace: infra
+            podSelector: app=elasticsearch
+        - Logstash:
+            icon: logstash.png
+            description: Internal log processing pipeline
+            namespace: infra
+            podSelector: app=logstash
+        - Fluent Bit:
+            icon: mdi-fire
+            description: Per-node Kubernetes log collector
+            namespace: infra
+            podSelector: app=fluent-bit
+        - Node Exporter:
+            icon: prometheus-node-exporter.png
+            description: Per-node operating-system metrics
+            namespace: infra
+            podSelector: app=node-exporter
+        - Kube State Metrics:
+            icon: kubernetes.png
+            description: Kubernetes object-state metrics
+            namespace: infra
+            podSelector: app=kube-state-metrics
+
+    - Security & Edge:
+        - Vault:
+            icon: vault.png
+            href: https://vault.swirlit.dev
+            description: Secrets, policies, and Kubernetes authentication
+            namespace: infra
+            podSelector: app.kubernetes.io/name=vault
+        - External Secrets:
+            icon: mdi-key-chain-variant
+            description: Vault-to-Kubernetes secret synchronization
+            namespace: infra
+            podSelector: app.kubernetes.io/instance=external-secrets
+        - Cloudflare Edge:
+            icon: cloudflare.png
+            href: https://dash.cloudflare.com/74ac0bc32cf6aa849e6842c18efc6643/swirlit.dev
+            description: DNS, TLS, CDN, WAF, rate limiting, and Access
+        - CrowdSec:
+            icon: crowdsec.png
+            description: Host intrusion detection and collaborative blocking
+        - Fail2ban:
+            icon: fail2ban.png
+            description: Host log-based abuse banning
+        - UFW:
+            icon: mdi-wall-fire
+            description: Host firewall and Cloudflare origin restriction
+        - Lynis:
+            icon: ubuntu-linux.png
+            description: Host security auditing
+
+    - Kubernetes System:
+        - CoreDNS:
+            icon: coredns.png
+            description: Cluster service discovery and DNS
+            namespace: kube-system
+            podSelector: k8s-app=kube-dns
+        - Metrics Server:
+            icon: mdi-chart-box-outline
+            description: Kubernetes resource metrics API
+            namespace: kube-system
+            podSelector: k8s-app=metrics-server
+        - Local Path Provisioner:
+            icon: mdi-folder-cog-outline
+            description: K3s fallback local storage provisioner
+            namespace: kube-system
+            podSelector: app=local-path-provisioner
+        - Kubernetes API:
+            icon: kubernetes.png
+            description: Cluster control and API service
+
+  widgets.yaml: |
+    - kubernetes:
+        cluster:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+          label: BM Cluster
+        nodes:
+          show: true
+          cpu: true
+          memory: true
+          showLabel: true
+    - search:
+        provider: duckduckgo
+        target: _blank
+    - datetime:
+        text_size: xl
+        format:
+          dateStyle: medium
+          timeStyle: short
+          hourCycle: h23
+
+  bookmarks.yaml: |
+    []
+
+  docker.yaml: |
+    {}
+
+  proxmox.yaml: |
+    {}
+
+  custom.css: |
+    .service-card {
+      transition: transform 120ms ease, border-color 120ms ease;
+    }
+    .service-card:hover {
+      transform: translateY(-2px);
+    }
+
+  custom.js: |
+    // Managed by bm-cluster. Intentionally empty.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+spec:
+  type: ClusterIP
+  selector:
+    app: homepage
+  ports:
+  - name: http
+    port: 3000
+    targetPort: http
+    protocol: TCP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: homepage
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: homepage
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  minReadySeconds: 10
+  progressDeadlineSeconds: 300
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: homepage
+  template:
+    metadata:
+      labels:
+        app: homepage
+        app.kubernetes.io/name: homepage
+        app.kubernetes.io/part-of: bm-cluster
+      annotations:
+        bm-cluster/config-revision: "4"
+    spec:
+      serviceAccountName: homepage
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: homepage
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: homepage
+        image: ghcr.io/gethomepage/homepage:v1.13.2
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: MY_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: HOMEPAGE_ALLOWED_HOSTS
+          value: "$(MY_POD_IP):3000,homepage.infra.svc.cluster.local:3000,dashboard.swirlit.dev"
+        - name: LOG_TARGETS
+          value: stdout
+        ports:
+        - name: http
+          containerPort: 3000
+          protocol: TCP
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 10"]
+        startupProbe:
+          httpGet:
+            path: /api/healthcheck
+            port: http
+          failureThreshold: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /api/healthcheck
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 3
+        livenessProbe:
+          httpGet:
+            path: /api/healthcheck
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 3
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: homepage-config
+          mountPath: /app/config/kubernetes.yaml
+          subPath: kubernetes.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/settings.yaml
+          subPath: settings.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/services.yaml
+          subPath: services.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/widgets.yaml
+          subPath: widgets.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/bookmarks.yaml
+          subPath: bookmarks.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/docker.yaml
+          subPath: docker.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/proxmox.yaml
+          subPath: proxmox.yaml
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/custom.css
+          subPath: custom.css
+          readOnly: true
+        - name: homepage-config
+          mountPath: /app/config/custom.js
+          subPath: custom.js
+          readOnly: true
+        - name: homepage-logs
+          mountPath: /app/config/logs
+      volumes:
+      - name: homepage-config
+        configMap:
+          name: homepage-config
+      - name: homepage-logs
+        emptyDir: {}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homepage
+  namespace: infra
+  labels:
+    app: homepage
+    app.kubernetes.io/name: homepage
+    app.kubernetes.io/part-of: bm-cluster
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/affinity-mode: balanced
+    nginx.ingress.kubernetes.io/session-cookie-name: homepage_route
+    nginx.ingress.kubernetes.io/session-cookie-samesite: Lax
+    nginx.ingress.kubernetes.io/session-cookie-secure: "true"
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - dashboard.swirlit.dev
+    secretName: swirlit-dev-tls
+  rules:
+  - host: dashboard.swirlit.dev
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: homepage
+            port:
+              number: 3000
