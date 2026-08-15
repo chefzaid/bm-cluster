@@ -207,7 +207,7 @@ spec:
               readOnly: true
       containers:
         - name: fluent-bit
-          image: cr.fluentbit.io/fluent/fluent-bit@sha256:1abcf78fe8c9dee0c57fc2199693370a5a1f84e0af4716beddcd153b40cbbbb1
+          image: cr.fluentbit.io/fluent/fluent-bit@sha256:903bb44d81cd5a4772d46482fb22a1fdea0fc9a57e915fe915cff5bc080e31b6
           ports:
             - name: metrics
               containerPort: 2020

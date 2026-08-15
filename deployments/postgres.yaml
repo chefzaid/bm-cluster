@@ -27,7 +27,7 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: postgres-pvc
+  name: postgres-v18-pvc
   namespace: infra
 spec:
   storageClassName: longhorn
@@ -63,6 +63,8 @@ metadata:
     app: postgres
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -73,7 +75,7 @@ spec:
     spec:
       containers:
       - name: postgres
-        image: postgres:16
+        image: postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871
         env:
         - name: POSTGRES_DB
           valueFrom:
@@ -91,11 +93,11 @@ spec:
               name: postgres-secret
               key: POSTGRES_PASSWORD
         - name: PGDATA
-          value: /var/lib/postgresql/data/pgdata
+          value: /var/lib/postgresql/18/docker
         ports:
         - containerPort: 5432
         volumeMounts:
-        - mountPath: /var/lib/postgresql/data
+        - mountPath: /var/lib/postgresql
           name: postgres-storage
         - mountPath: /docker-entrypoint-initdb.d/init.sql
           subPath: init.sql
@@ -123,7 +125,7 @@ spec:
       volumes:
       - name: postgres-storage
         persistentVolumeClaim:
-          claimName: postgres-pvc
+          claimName: postgres-v18-pvc
       - name: postgres-init
         configMap:
           name: postgres-init-script

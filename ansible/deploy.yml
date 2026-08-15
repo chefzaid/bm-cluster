@@ -11,8 +11,10 @@
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     deploy_odoo: "{{ install_odoo | default(true) }}"
     ingress_nginx_chart_version: "4.15.1"
-    argocd_chart_version: "9.5.11"
-    argocd_image_tag: "v3.3.10"
+    vault_chart_version: "0.34.1"
+    external_secrets_chart_version: "2.9.0"
+    argocd_chart_version: "10.3.3"
+    argocd_image_tag: "v3.5.1"
 
   tasks:
     - name: Validate server exposure mode
@@ -33,6 +35,9 @@
 
     - name: Configure the enforced K3s AppArmor runtime profile
       command: "{{ playbook_dir }}/../scripts/configure-k3s-apparmor.sh"
+
+    - name: Keep Device Mapper Multipath from claiming Longhorn volumes
+      command: "{{ playbook_dir }}/../scripts/configure-longhorn-host.sh"
 
     - name: Configure daily consistent K3s recovery archives
       command: "{{ playbook_dir }}/../scripts/configure-k3s-backups.sh"
@@ -88,6 +93,7 @@
       command: >
         helm upgrade --install vault hashicorp/vault
         --namespace {{ infra_namespace }}
+        --version {{ vault_chart_version }}
         --set injector.enabled=false
         --set server.ha.enabled=true
         --set server.ha.raft.enabled=true
@@ -98,6 +104,7 @@
       command: >
         helm upgrade --install external-secrets external-secrets/external-secrets
         --namespace {{ infra_namespace }}
+        --version {{ external_secrets_chart_version }}
         --set installCRDs=true
         --wait --timeout 300s
 

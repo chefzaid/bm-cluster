@@ -34,7 +34,7 @@ spec:
     spec:
       containers:
       - name: keycloak
-        image: quay.io/keycloak/keycloak:26.0
+        image: quay.io/keycloak/keycloak@sha256:7523ccfbd950f59783504cdf5a0138dae48746dfe36075bbfccdb5a9ee245ee2
         args: ["start-dev", "--import-realm"]
         env:
         - name: KC_BOOTSTRAP_ADMIN_USERNAME

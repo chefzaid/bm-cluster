@@ -14,14 +14,18 @@ WORKER_MANAGER_SCRIPT="$SCRIPT_DIR/scripts/add-k3s-workers.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
+LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-4.15.1}"
-ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-9.5.11}"
-ARGOCD_IMAGE_TAG="${ARGOCD_IMAGE_TAG:-v3.3.10}"
+LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-1.12.0}"
+VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-0.34.1}"
+EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-2.9.0}"
+ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-10.3.3}"
+ARGOCD_IMAGE_TAG="${ARGOCD_IMAGE_TAG:-v3.5.1}"
 
 for arg in "$@"; do
     case "$arg" in
@@ -323,6 +327,12 @@ if command -v k3s >/dev/null 2>&1; then
     "$K3S_BACKUP_SCRIPT"
 fi
 
+if [[ "$INSTALL_LONGHORN" == "true" ]]; then
+    [[ -x "$LONGHORN_HOST_SCRIPT" ]] || chmod +x "$LONGHORN_HOST_SCRIPT"
+    step "Configuring Longhorn host storage prerequisites..."
+    "$LONGHORN_HOST_SCRIPT"
+fi
+
 if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
     info "Installing Helm 3..."
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
@@ -403,7 +413,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install longhorn longhorn/longhorn \
             --namespace longhorn-system \
             --create-namespace \
+            --version "$LONGHORN_CHART_VERSION" \
             --set "defaultSettings.defaultReplicaCount=$longhorn_replicas" \
+            --set "defaultSettings.storageMinimalAvailablePercentage=20" \
+            --set "defaultSettings.storageOverProvisioningPercentage=110" \
             --wait --timeout 300s
 
         kubectl patch storageclass longhorn -p \
@@ -440,6 +453,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm repo update > /dev/null 2>&1
         helm upgrade --install vault hashicorp/vault \
             --namespace infra \
+            --version "$VAULT_CHART_VERSION" \
             --set injector.enabled=false \
             --set server.ha.enabled=true \
             --set server.ha.raft.enabled=true \
@@ -451,6 +465,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm repo update > /dev/null 2>&1
         helm upgrade --install external-secrets external-secrets/external-secrets \
             --namespace infra \
+            --version "$EXTERNAL_SECRETS_CHART_VERSION" \
             --set installCRDs=true \
             --wait --timeout 300s
 

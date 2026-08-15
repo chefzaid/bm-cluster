@@ -94,7 +94,7 @@ spec:
           mountPath: /opt/sonarqube/logs
       containers:
       - name: sonarqube
-        image: sonarqube@sha256:f709975ab31d2d08f5a3ae2dc73a31ee011afc8cf28845082c17c55d45df9df5
+        image: sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70
         ports:
         - containerPort: 9000
         env:
@@ -133,7 +133,7 @@ spec:
             command:
               - sh
               - -c
-              - wget -qO- http://127.0.0.1:9000/api/system/status >/dev/null
+              - curl -fsS http://127.0.0.1:9000/api/system/status >/dev/null
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 60
@@ -142,7 +142,7 @@ spec:
             command:
               - sh
               - -c
-              - wget -qO- http://127.0.0.1:9000/api/system/status | grep -q '"status":"UP"'
+              - curl -fsS http://127.0.0.1:9000/api/system/status | grep -q '"status":"UP"'
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 6

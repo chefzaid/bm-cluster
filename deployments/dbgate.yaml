@@ -53,7 +53,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: dbgate
-          image: dbgate/dbgate@sha256:38f4af9ab85d4aa112acc2e24d3e12c07c38e1e9727022e4387567cd3ec718a1
+          image: dbgate/dbgate@sha256:03956fb18367a2b1d736b4ebb702401c68ec5f7bde691f9ea2412c3df0c27e34
           ports:
             - containerPort: 3000
           env:
