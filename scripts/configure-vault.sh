@@ -324,7 +324,6 @@ EOF
   npmrc="$(cat <<EOF
 registry=http://nexus.infra.svc.cluster.local:8081/repository/npm-group/
 _auth=$nexus_auth
-always-auth=true
 EOF
 )"
   vault_cmd_auth "$root_token" kv put secret/infra/jenkins \
