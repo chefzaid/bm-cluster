@@ -137,7 +137,7 @@ data:
             podSelector: app=odoo
         - Keycloak:
             icon: keycloak.png
-            href: https://keycloak.swirlit.dev
+            href: https://keycloak.swirlit.dev/auth
             description: Identity and access management
             namespace: infra
             podSelector: app=keycloak

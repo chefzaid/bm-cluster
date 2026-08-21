@@ -122,11 +122,13 @@ if ! vault_cmd_auth "$root_token" auth list -format=json | jq -e '."kubernetes/"
 fi
 
 info "Configuring Kubernetes auth backend..."
-kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$root_token" sh -c \
-  'vault write auth/kubernetes/config \
-    kubernetes_host="https://kubernetes.default.svc:443" \
-    kubernetes_ca_cert=@/var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
-    token_reviewer_jwt="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" >/dev/null'
+# Vault runs in Kubernetes and its service account has system:auth-delegator.
+# Leaving the reviewer JWT and CA unset makes Vault re-read its projected token
+# and cluster CA as they rotate, instead of persisting credentials that expire.
+vault_cmd_auth "$root_token" write auth/kubernetes/config \
+  kubernetes_host="https://kubernetes.default.svc:443" \
+  token_reviewer_jwt="" \
+  kubernetes_ca_cert="" >/dev/null
 
 cat <<'EOF' | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$root_token" vault policy write external-secrets-policy - >/dev/null
 path "secret/data/infra/*" {
