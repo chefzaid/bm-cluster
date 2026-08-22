@@ -6,6 +6,13 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
+TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/lib/transport-guide.sh"
+if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
+    echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/transport-guide.sh
+source "$TRANSPORT_GUIDE_LIBRARY"
 PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
 if [[ -r "$PLATFORM_CONFIG" ]]; then
     # shellcheck source=../config/platform.env
@@ -140,21 +147,21 @@ printf '%s\n' \
     "Tailscale hybrid/non-OVHcloud server mesh" \
     "Each existing IP/DNS name below is used only to bootstrap over SSH." \
     "The servers communicate through their assigned Tailscale addresses afterward."
-prompt TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILNET"
-prompt MESH_NAME "Unique mesh/cluster name" "$MESH_NAME"
-[[ "$AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Auth-key expiry must be a number of seconds."
-expiry_minutes="$((AUTH_KEY_EXPIRY_SECONDS / 60))"
-prompt expiry_minutes "One-use node auth-key lifetime in minutes" "$expiry_minutes"
-[[ "$expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Auth-key lifetime must be a positive whole number of minutes."
-AUTH_KEY_EXPIRY_SECONDS="$((expiry_minutes * 60))"
+TAILSCALE_TAILNET="$TAILNET"
+TAILSCALE_MESH_NAME="$MESH_NAME"
+TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-fleet-bootstrap}"
+TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$AUTH_KEY_EXPIRY_SECONDS"
+TAILSCALE_API_TOKEN="$API_TOKEN"
+transport_guide_tailscale_account false "$NODE_CONFIGURATOR" false || \
+    error "Tailscale prerequisites are incomplete or account verification failed."
+TAILNET="$TAILSCALE_TAILNET"
+MESH_NAME="$TAILSCALE_MESH_NAME"
+AUTH_KEY_EXPIRY_SECONDS="$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS"
+API_TOKEN="$TAILSCALE_API_TOKEN"
 prompt DEFAULT_SSH_USER "Default SSH user" "$DEFAULT_SSH_USER"
 prompt DEFAULT_SSH_PORT "Default SSH port" "$DEFAULT_SSH_PORT"
 prompt DEFAULT_IDENTITY_FILE "Default SSH private key ('-' for agent/config)" "$DEFAULT_IDENTITY_FILE"
 [[ "$DEFAULT_IDENTITY_FILE" != "-" ]] || DEFAULT_IDENTITY_FILE=""
-if [[ -z "$API_TOKEN" ]]; then
-    read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " API_TOKEN
-    printf '\n'
-fi
 [[ "$API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || error "Expected a personal Tailscale API access token beginning with tskey-api-."
 
 server_count=""

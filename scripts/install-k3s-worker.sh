@@ -17,6 +17,7 @@ HARDENING_SSH_PORT=""
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_READY=false
 TAILSCALE_API_TOKEN_STDIN=false
+TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
@@ -37,6 +38,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
+TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/lib/transport-guide.sh"
+if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
+    echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/transport-guide.sh
+source "$TRANSPORT_GUIDE_LIBRARY"
 
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
@@ -45,10 +53,23 @@ OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
 VRACK_INTERFACE="${K3S_PRIVATE_INTERFACE:-}"
 VRACK_INTERFACE_MAC="${K3S_PRIVATE_INTERFACE_MAC:-}"
 VRACK_VLAN_ID="${K3S_VRACK_VLAN_ID:-}"
+OVH_VRACK_AUTOMATE_ACCOUNT=false
+OVH_API_ENDPOINT="${OVH_API_ENDPOINT:-ovh-eu}"
+OVH_APPLICATION_KEY="${OVH_APPLICATION_KEY:-}"
+OVH_APPLICATION_SECRET="${OVH_APPLICATION_SECRET:-}"
+OVH_CONSUMER_KEY="${OVH_CONSUMER_KEY:-}"
+OVH_VRACK_SERVICE_NAME="${OVH_VRACK_SERVICE_NAME:-}"
 
 info()  { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*" >&2; }
 error() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
+
+cleanup_private_credentials() {
+    JOIN_TOKEN=""
+    TAILSCALE_API_TOKEN=""
+    unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
+}
+trap cleanup_private_credentials EXIT HUP INT TERM
 
 usage() {
     cat <<'EOF'
@@ -221,6 +242,11 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
     if [[ "$TAILSCALE_READY" != "true" ]]; then
         [[ "$TOKEN_STDIN" != "true" || "$TAILSCALE_API_TOKEN_STDIN" != "true" ]] || \
             error "K3s and Tailscale tokens cannot both use stdin; provision Tailscale first or use TAILSCALE_API_TOKEN."
+        if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
+            IFS= read -r TAILSCALE_API_TOKEN || error "Could not read the Tailscale API access token from stdin."
+        fi
+        transport_guide_tailscale_account "$NON_INTERACTIVE" "$TAILSCALE_CONFIGURATOR" || \
+            error "Tailscale prerequisites are incomplete or account verification failed."
         tailscale_args=(
             --role worker
             --tailnet "$TAILSCALE_TAILNET"
@@ -228,16 +254,19 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
             --hostname "$TAILSCALE_NODE_HOSTNAME"
             --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS"
         )
-        if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
-            tailscale_args+=(--api-token-stdin)
-        fi
+        tailscale_args+=(--api-token-stdin --non-interactive)
         info "Automating the Tailscale account, role policy, and this worker node."
-        "$TAILSCALE_CONFIGURATOR" "${tailscale_args[@]}" >/dev/null
+        printf '%s\n' "$TAILSCALE_API_TOKEN" | "$TAILSCALE_CONFIGURATOR" "${tailscale_args[@]}" >/dev/null
     fi
     command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed."
     tailscale status >/dev/null 2>&1 || error "Tailscale is not connected."
     NODE_IP="${NODE_IP:-$(tailscale ip -4 | head -n 1)}"
     NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
+fi
+
+if [[ "$NODE_TRANSPORT" == "vrack" && "$NON_INTERACTIVE" != "true" ]]; then
+    transport_guide_vrack_account false "$OVH_VRACK_CONFIGURATOR" || \
+        error "OVHcloud vRack prerequisites are incomplete."
 fi
 
 info "K3s worker enrollment"

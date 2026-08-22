@@ -20,6 +20,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=scripts/lib/network.sh
 source "$NETWORK_LIBRARY"
+TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/scripts/lib/transport-guide.sh"
+if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
+    echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=scripts/lib/transport-guide.sh
+source "$TRANSPORT_GUIDE_LIBRARY"
 
 DEPLOY_DIR="$SCRIPT_DIR/deployments"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
@@ -288,26 +295,8 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
     export K3S_NODE_TRANSPORT
     if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
         [[ -x "$TAILSCALE_SCRIPT" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_SCRIPT"
-        if [[ "$AUTO_APPROVE" != "true" ]]; then
-            read -rp "$(echo -e "${YELLOW}Tailnet name/login domain ('-' uses the API token's tailnet) [$TAILSCALE_TAILNET]:${NC} ")" tailscale_answer
-            TAILSCALE_TAILNET="${tailscale_answer:-$TAILSCALE_TAILNET}"
-            read -rp "$(echo -e "${YELLOW}Unique Tailscale mesh name [$TAILSCALE_MESH_NAME]:${NC} ")" tailscale_answer
-            TAILSCALE_MESH_NAME="${tailscale_answer:-$TAILSCALE_MESH_NAME}"
-            read -rp "$(echo -e "${YELLOW}Tailscale hostname for this control plane [$TAILSCALE_NODE_HOSTNAME]:${NC} ")" tailscale_answer
-            TAILSCALE_NODE_HOSTNAME="${tailscale_answer:-$TAILSCALE_NODE_HOSTNAME}"
-            [[ "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Tailscale auth-key expiry must be a number of seconds."
-            tailscale_expiry_minutes="$((TAILSCALE_AUTH_KEY_EXPIRY_SECONDS / 60))"
-            read -rp "$(echo -e "${YELLOW}One-use node auth-key lifetime in minutes [$tailscale_expiry_minutes]:${NC} ")" tailscale_answer
-            tailscale_expiry_minutes="${tailscale_answer:-$tailscale_expiry_minutes}"
-            [[ "$tailscale_expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Tailscale auth-key lifetime must be a positive whole number of minutes."
-            TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$((tailscale_expiry_minutes * 60))"
-        fi
-        if [[ -z "$TAILSCALE_API_TOKEN" ]]; then
-            [[ "$AUTO_APPROVE" != "true" ]] || error "Set TAILSCALE_API_TOKEN to a personal tskey-api access token for non-interactive Tailscale setup."
-            read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " TAILSCALE_API_TOKEN
-            printf '\n'
-        fi
-        [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || error "Expected a Tailscale API access token beginning with tskey-api-."
+        transport_guide_tailscale_account "$AUTO_APPROVE" "$TAILSCALE_SCRIPT" || \
+            error "Tailscale prerequisites are incomplete or account verification failed."
         step "Reconciling the tailnet policy and control-plane role..."
         K3S_PRIVATE_ADDRESS="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
             "$TAILSCALE_SCRIPT" --role control-plane \
@@ -323,40 +312,12 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         export TAILSCALE_TAILNET TAILSCALE_MESH_NAME TAILSCALE_NODE_HOSTNAME TAILSCALE_AUTH_KEY_EXPIRY_SECONDS TAILSCALE_CONFIG_PREPARED
     else
         [[ -x "$OVH_VRACK_SCRIPT" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_SCRIPT"
-        if [[ -z "$OVH_VRACK_AUTOMATE_ACCOUNT" ]]; then
-            if [[ "$AUTO_APPROVE" == "true" ]]; then
-                if [[ -n "$OVH_APPLICATION_KEY$OVH_APPLICATION_SECRET$OVH_CONSUMER_KEY$OVH_VRACK_SERVICE_NAME$OVH_CONTROL_PLANE_SERVICE_NAME" ]]; then
-                    OVH_VRACK_AUTOMATE_ACCOUNT=true
-                else
-                    OVH_VRACK_AUTOMATE_ACCOUNT=false
-                fi
-            elif ask_with_default "Use the OVHcloud API to attach Dedicated Server interfaces to an existing vRack?" "Y"; then
-                OVH_VRACK_AUTOMATE_ACCOUNT=true
-            else
-                OVH_VRACK_AUTOMATE_ACCOUNT=false
-            fi
-        fi
-        [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" =~ ^(true|false)$ ]] || error "OVH_VRACK_AUTOMATE_ACCOUNT must be true or false."
+        transport_guide_vrack_account "$AUTO_APPROVE" "$OVH_VRACK_SCRIPT" || \
+            error "OVHcloud vRack prerequisites are incomplete or account verification failed."
         if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
             if [[ "$AUTO_APPROVE" != "true" ]]; then
-                info "Use OVHcloud API application credentials with vRack read/attach/task permissions; inputs are not persisted."
-                read -rp "$(echo -e "${YELLOW}OVHcloud API region endpoint [${OVH_API_ENDPOINT}]:${NC} ")" ovh_answer
-                OVH_API_ENDPOINT="${ovh_answer:-$OVH_API_ENDPOINT}"
-                read -rp "$(echo -e "${YELLOW}Existing vRack service name (pn-...) [${OVH_VRACK_SERVICE_NAME}]:${NC} ")" ovh_answer
-                OVH_VRACK_SERVICE_NAME="${ovh_answer:-$OVH_VRACK_SERVICE_NAME}"
                 read -rp "$(echo -e "${YELLOW}This control plane's OVHcloud Dedicated Server service name [${OVH_CONTROL_PLANE_SERVICE_NAME}]:${NC} ")" ovh_answer
                 OVH_CONTROL_PLANE_SERVICE_NAME="${ovh_answer:-$OVH_CONTROL_PLANE_SERVICE_NAME}"
-                if [[ -z "$OVH_APPLICATION_KEY" ]]; then
-                    read -rp "$(echo -e "${YELLOW}OVHcloud API application key:${NC} ")" OVH_APPLICATION_KEY
-                fi
-                if [[ -z "$OVH_APPLICATION_SECRET" ]]; then
-                    read -rsp "OVHcloud API application secret (input hidden): " OVH_APPLICATION_SECRET
-                    printf '\n'
-                fi
-                if [[ -z "$OVH_CONSUMER_KEY" ]]; then
-                    read -rsp "OVHcloud API consumer key (input hidden): " OVH_CONSUMER_KEY
-                    printf '\n'
-                fi
             fi
             [[ -n "$OVH_VRACK_SERVICE_NAME" && -n "$OVH_CONTROL_PLANE_SERVICE_NAME" ]] || \
                 error "OVH_VRACK_SERVICE_NAME and OVH_CONTROL_PLANE_SERVICE_NAME are required for API attachment."

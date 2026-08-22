@@ -62,9 +62,43 @@
       {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_APPS type=properties file=' ~ platform_config_file) | split(',') }}
     platform_wait_daemonsets: >-
       {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_DAEMONSETS type=properties file=' ~ platform_config_file) | split(',') }}
+    default_node_transport: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_K3S_NODE_TRANSPORT type=properties file=' ~ platform_config_file) }}
+    default_tailscale_tailnet: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_TAILNET type=properties file=' ~ platform_config_file) }}
+    default_tailscale_mesh: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_MESH_NAME type=properties file=' ~ platform_config_file) }}
+    default_tailscale_key_expiry: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS type=properties file=' ~ platform_config_file) }}
 
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('ansible.builtin.env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
+    private_transport_enabled: "{{ manage_private_transport | default(false) | bool }}"
+    private_transport_mode: >-
+      {{ k3s_node_transport | default(lookup('ansible.builtin.env', 'K3S_NODE_TRANSPORT'), true) | default(default_node_transport, true) | lower }}
+    control_plane_private_address: >-
+      {{ k3s_private_address | default(lookup('ansible.builtin.env', 'K3S_PRIVATE_ADDRESS'), true) }}
+    control_plane_private_interface: >-
+      {{ k3s_private_interface | default(lookup('ansible.builtin.env', 'K3S_PRIVATE_INTERFACE'), true) }}
+    control_plane_private_interface_mac: >-
+      {{ k3s_private_interface_mac | default(lookup('ansible.builtin.env', 'K3S_PRIVATE_INTERFACE_MAC'), true) }}
+    vrack_vlan_id: "{{ k3s_vrack_vlan_id | default(lookup('ansible.builtin.env', 'K3S_VRACK_VLAN_ID'), true) }}"
+    tailscale_api_token: "{{ lookup('ansible.builtin.env', 'TAILSCALE_API_TOKEN') }}"
+    tailscale_tailnet: >-
+      {{ lookup('ansible.builtin.env', 'TAILSCALE_TAILNET') | default(default_tailscale_tailnet, true) }}
+    tailscale_mesh_name: >-
+      {{ lookup('ansible.builtin.env', 'TAILSCALE_MESH_NAME') | default(default_tailscale_mesh, true) }}
+    tailscale_node_hostname: >-
+      {{ lookup('ansible.builtin.env', 'TAILSCALE_NODE_HOSTNAME') | default(inventory_hostname, true) }}
+    tailscale_key_expiry: >-
+      {{ lookup('ansible.builtin.env', 'TAILSCALE_AUTH_KEY_EXPIRY_SECONDS') | default(default_tailscale_key_expiry, true) }}
+    ovh_vrack_account_enabled: "{{ ovh_vrack_automate_account | default(false) | bool }}"
+    ovh_api_endpoint: "{{ lookup('ansible.builtin.env', 'OVH_API_ENDPOINT') | default('ovh-eu', true) }}"
+    ovh_application_key: "{{ lookup('ansible.builtin.env', 'OVH_APPLICATION_KEY') }}"
+    ovh_application_secret: "{{ lookup('ansible.builtin.env', 'OVH_APPLICATION_SECRET') }}"
+    ovh_consumer_key: "{{ lookup('ansible.builtin.env', 'OVH_CONSUMER_KEY') }}"
+    ovh_vrack_service_name: "{{ lookup('ansible.builtin.env', 'OVH_VRACK_SERVICE_NAME') }}"
+    ovh_control_plane_service_name: "{{ lookup('ansible.builtin.env', 'OVH_CONTROL_PLANE_SERVICE_NAME') }}"
     host_security_enabled: "{{ manage_host_security | default(harden_firewall | default(true)) | bool }}"
     longhorn_enabled: "{{ install_longhorn | default(true) | bool }}"
     ingress_enabled: "{{ install_ingress | default(true) | bool }}"
@@ -102,7 +136,112 @@
           and CLOUDFLARE_ACCESS_ALLOWED_EMAILS when Access is enabled.
       when: cloudflare_enabled
 
+    - name: Validate private transport inputs
+      ansible.builtin.assert:
+        that:
+          - private_transport_mode in ['vrack', 'tailscale']
+          - private_transport_mode != 'vrack' or trusted_node_cidr | length > 0
+          - private_transport_mode != 'vrack' or control_plane_private_address | length > 0
+          - private_transport_mode != 'tailscale' or tailscale_api_token is match('^tskey-api-[A-Za-z0-9_-]+$')
+          - not ovh_vrack_account_enabled or ovh_vrack_service_name | length > 0
+          - not ovh_vrack_account_enabled or ovh_control_plane_service_name | length > 0
+          - not ovh_vrack_account_enabled or ovh_application_key | length > 0
+          - not ovh_vrack_account_enabled or ovh_application_secret | length > 0
+          - not ovh_vrack_account_enabled or ovh_consumer_key | length > 0
+        fail_msg: >-
+          Private transport reconciliation requires the same vRack/Tailscale
+          inputs as the non-interactive scripts. See README.md for the exact
+          environment variables and account prerequisites.
+      no_log: true
+      when: private_transport_enabled
+
   tasks:
+    - name: Initialize private transport facts
+      ansible.builtin.set_fact:
+        reconciled_private_address: "{{ control_plane_private_address }}"
+        reconciled_private_interface: "{{ control_plane_private_interface }}"
+        reconciled_node_cidr: >-
+          {{ '100.64.0.0/10' if private_transport_mode == 'tailscale' else trusted_node_cidr }}
+      when: private_transport_enabled
+
+    - name: Reconcile Tailscale before host firewall changes
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/configure-tailscale.sh"
+          - --role
+          - control-plane
+          - --tailnet
+          - "{{ tailscale_tailnet }}"
+          - --mesh-name
+          - "{{ tailscale_mesh_name }}"
+          - --hostname
+          - "{{ tailscale_node_hostname }}"
+          - --auth-key-expiry
+          - "{{ tailscale_key_expiry }}"
+          - --api-token-stdin
+          - --non-interactive
+        stdin: "{{ tailscale_api_token }}"
+      register: tailscale_transport
+      no_log: true
+      when: private_transport_enabled and private_transport_mode == 'tailscale'
+
+    - name: Record the reconciled Tailscale address
+      ansible.builtin.set_fact:
+        reconciled_private_address: "{{ tailscale_transport.stdout_lines | last }}"
+        reconciled_private_interface: tailscale0
+      when: private_transport_enabled and private_transport_mode == 'tailscale'
+
+    - name: Attach the control plane to OVHcloud vRack
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/configure-ovh-vrack.sh"
+          - --attach-server
+          - "{{ ovh_control_plane_service_name }}"
+          - --vrack
+          - "{{ ovh_vrack_service_name }}"
+          - --ovh-endpoint
+          - "{{ ovh_api_endpoint }}"
+          - --non-interactive
+      environment:
+        OVH_APPLICATION_KEY: "{{ ovh_application_key }}"
+        OVH_APPLICATION_SECRET: "{{ ovh_application_secret }}"
+        OVH_CONSUMER_KEY: "{{ ovh_consumer_key }}"
+      register: ovh_vrack_attachment
+      no_log: true
+      when: private_transport_enabled and private_transport_mode == 'vrack' and ovh_vrack_account_enabled
+
+    - name: Reconcile the OVHcloud vRack host interface before firewall changes
+      ansible.builtin.command:
+        argv: >-
+          {{
+            [repository_root ~ '/scripts/configure-ovh-vrack.sh',
+             '--configure-node', '--private-ip', control_plane_private_address,
+             '--network-cidr', trusted_node_cidr, '--non-interactive']
+            + (['--interface', control_plane_private_interface] if control_plane_private_interface | length > 0 else [])
+            + (['--interface-mac', control_plane_private_interface_mac] if control_plane_private_interface_mac | length > 0 else
+               (['--interface-mac', (ovh_vrack_attachment.stdout | trim)]
+                if ovh_vrack_account_enabled and (ovh_vrack_attachment.stdout | trim) is match('^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$') else []))
+            + (['--vlan-id', vrack_vlan_id] if vrack_vlan_id | length > 0 else [])
+          }}
+      register: vrack_transport
+      when: private_transport_enabled and private_transport_mode == 'vrack'
+
+    - name: Record the reconciled vRack interface
+      ansible.builtin.set_fact:
+        reconciled_private_interface: "{{ vrack_transport.stdout_lines | last }}"
+      when: private_transport_enabled and private_transport_mode == 'vrack'
+
+    - name: Reconcile K3s private networking before host firewall changes
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/configure-k3s-control-plane-network.sh"
+          - --private-ip
+          - "{{ reconciled_private_address }}"
+          - --private-interface
+          - "{{ reconciled_private_interface }}"
+          - --restart
+      when: private_transport_enabled
+
     - name: Ensure the infrastructure namespace exists
       ansible.builtin.shell: >-
         kubectl create namespace {{ infra_namespace }} --dry-run=client -o yaml |
@@ -137,7 +276,9 @@
         {{ repository_root }}/scripts/configure-node-security.sh
         --apply --server-exposure {{ server_exposure_mode }} --node-role control-plane
       environment:
-        K3S_NODE_NETWORK_CIDR: "{{ trusted_node_cidr }}"
+        K3S_NODE_NETWORK_CIDR: "{{ reconciled_node_cidr | default(trusted_node_cidr) }}"
+        K3S_PRIVATE_ADDRESS: "{{ reconciled_private_address | default(control_plane_private_address) }}"
+        K3S_PRIVATE_INTERFACE: "{{ reconciled_private_interface | default(control_plane_private_interface) }}"
       when: host_security_enabled
 
     - name: Publish host security policy record to Kubernetes

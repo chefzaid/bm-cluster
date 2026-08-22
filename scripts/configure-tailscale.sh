@@ -74,6 +74,7 @@ Options:
   --auth-key-expiry SEC    One-use node-key validity (60 seconds to 90 days)
   --api-token-stdin        Read the Tailscale API access token from stdin
   --auth-key-stdin         Node-only setup using a one-use tskey-auth key on stdin
+  --verify-account         Read-only check of the API token and selected tailnet
   --create-auth-key        Reconcile policy and print one tagged auth key to stdout
   --tag-ip IP              Reconcile policy and apply the role tag to this device IP
   --non-interactive        Fail instead of prompting for a missing API token
@@ -131,6 +132,7 @@ while [[ $# -gt 0 ]]; do
         --auth-key-expiry=*) AUTH_KEY_EXPIRY_SECONDS="${1#*=}" ;;
         --api-token-stdin) API_TOKEN_STDIN=true ;;
         --auth-key-stdin) AUTH_KEY_STDIN=true ;;
+        --verify-account) MODE="verify-account" ;;
         --create-auth-key) MODE="create-auth-key" ;;
         --tag-ip) shift; [[ $# -gt 0 ]] || error "Missing value for --tag-ip"; TAG_IP="$1"; MODE="tag-ip" ;;
         --tag-ip=*) TAG_IP="${1#*=}"; MODE="tag-ip" ;;
@@ -399,7 +401,15 @@ ensure_local_node() {
 if [[ -n "$API_TOKEN" ]]; then
     prepare_api_client
     validate_api_token
-    reconcile_policy
+    if [[ "$MODE" == "verify-account" ]]; then
+        verification_body="$TEMP_DIR/verification-policy.json"
+        verification_headers="$TEMP_DIR/verification-policy.headers"
+        api_request GET "tailnet/$TAILNET/acl" "$verification_body" "$verification_headers"
+        jq -e 'type == "object"' "$verification_body" >/dev/null || error "Tailscale returned an invalid policy document."
+        info "Tailscale API token and tailnet access are valid."
+    else
+        reconcile_policy
+    fi
 fi
 
 case "$MODE" in
@@ -409,6 +419,9 @@ case "$MODE" in
     tag-ip)
         tailscale_ipv4 "$TAG_IP" || error "--tag-ip must be a Tailscale IPv4 address."
         tag_device_ip "$TAG_IP"
+        ;;
+    verify-account)
+        :
         ;;
     ensure-node)
         ensure_local_node

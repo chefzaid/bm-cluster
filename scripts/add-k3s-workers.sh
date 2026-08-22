@@ -11,6 +11,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
+TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/lib/transport-guide.sh"
+if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
+    echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/transport-guide.sh
+source "$TRANSPORT_GUIDE_LIBRARY"
 
 PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
 if [[ -r "$PLATFORM_CONFIG" ]]; then
@@ -216,22 +223,12 @@ detect_private_ip() {
 
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
-    if [[ "$NON_INTERACTIVE" != "true" && "$TAILSCALE_CONFIG_PREPARED" != "true" ]]; then
-        prompt TAILSCALE_TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILSCALE_TAILNET"
-        prompt TAILSCALE_MESH_NAME "Unique Tailscale mesh/cluster name" "$TAILSCALE_MESH_NAME"
-        prompt TAILSCALE_NODE_HOSTNAME "Tailscale hostname for this control plane" "$TAILSCALE_NODE_HOSTNAME"
-        [[ "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Auth-key expiry must be a number of seconds."
-        tailscale_expiry_minutes="$((TAILSCALE_AUTH_KEY_EXPIRY_SECONDS / 60))"
-        prompt tailscale_expiry_minutes "One-use node auth-key lifetime in minutes" "$tailscale_expiry_minutes"
-        [[ "$tailscale_expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Auth-key lifetime must be a positive whole number of minutes."
-        TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$((tailscale_expiry_minutes * 60))"
-    fi
     if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
         IFS= read -r TAILSCALE_API_TOKEN || error "Could not read the Tailscale API access token from stdin."
-    elif [[ -z "$TAILSCALE_API_TOKEN" ]]; then
-        [[ "$NON_INTERACTIVE" != "true" ]] || error "Set TAILSCALE_API_TOKEN or use --tailscale-api-token-stdin."
-        read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " TAILSCALE_API_TOKEN
-        printf '\n'
+    fi
+    if [[ "$TAILSCALE_CONFIG_PREPARED" != "true" ]]; then
+        transport_guide_tailscale_account "$NON_INTERACTIVE" "$TAILSCALE_CONFIGURATOR" || \
+            error "Tailscale prerequisites are incomplete or account verification failed."
     fi
     [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || \
         error "Expected a Tailscale API access token beginning with tskey-api-."
@@ -246,31 +243,8 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
     NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
 else
     if [[ "$OVH_VRACK_CONFIG_PREPARED" != "true" ]]; then
-        if [[ -z "$OVH_VRACK_AUTOMATE_ACCOUNT" ]]; then
-            if [[ "$NON_INTERACTIVE" == "true" ]]; then
-                if [[ -n "$OVH_APPLICATION_KEY$OVH_APPLICATION_SECRET$OVH_CONSUMER_KEY$OVH_VRACK_SERVICE_NAME" ]]; then
-                    OVH_VRACK_AUTOMATE_ACCOUNT=true
-                else
-                    OVH_VRACK_AUTOMATE_ACCOUNT=false
-                fi
-            else
-                read -rp "Use the OVHcloud API to attach worker interfaces to an existing vRack? [Y/n]: " ovh_answer
-                [[ "${ovh_answer:-Y}" =~ ^[Yy]$ ]] && OVH_VRACK_AUTOMATE_ACCOUNT=true || OVH_VRACK_AUTOMATE_ACCOUNT=false
-            fi
-        fi
-        if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" && "$NON_INTERACTIVE" != "true" ]]; then
-            prompt OVH_API_ENDPOINT "OVHcloud API region endpoint (ovh-eu, ovh-ca, or ovh-us)" "$OVH_API_ENDPOINT"
-            prompt OVH_VRACK_SERVICE_NAME "Existing OVHcloud vRack service name (pn-...)" "$OVH_VRACK_SERVICE_NAME"
-            [[ -n "$OVH_APPLICATION_KEY" ]] || prompt OVH_APPLICATION_KEY "OVHcloud API application key"
-            if [[ -z "$OVH_APPLICATION_SECRET" ]]; then
-                read -rsp "OVHcloud API application secret (input hidden): " OVH_APPLICATION_SECRET
-                printf '\n'
-            fi
-            if [[ -z "$OVH_CONSUMER_KEY" ]]; then
-                read -rsp "OVHcloud API consumer key (input hidden): " OVH_CONSUMER_KEY
-                printf '\n'
-            fi
-        fi
+        transport_guide_vrack_account "$NON_INTERACTIVE" "$OVH_VRACK_CONFIGURATOR" || \
+            error "OVHcloud vRack prerequisites are incomplete or account verification failed."
     fi
     OVH_VRACK_AUTOMATE_ACCOUNT="${OVH_VRACK_AUTOMATE_ACCOUNT:-false}"
     [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" =~ ^(true|false)$ ]] || error "OVH_VRACK_AUTOMATE_ACCOUNT must be true or false."
@@ -614,7 +588,7 @@ install_worker() {
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$OVH_VRACK_CONFIGURATOR" "$target:$remote_dir/scripts/"
-    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$target:$remote_dir/scripts/lib/"
+    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
     info "Copying the worker host-security policy to $target..."
     scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"

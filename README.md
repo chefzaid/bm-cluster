@@ -74,22 +74,22 @@ Requirements:
 - 8 or more CPUs, 16 GB or more RAM, and 100 GB or more disk
 - A sudo-capable non-root user
 - A domain registered for public deployments
+- SSH keys and passwordless `sudo` from the control plane to every worker
 
-Run the interactive control-plane installer:
+For a new cluster, run the guided installer on the future control-plane host:
 
 ```bash
 chmod +x install-control-plane.sh install-worker.sh scripts/*.sh
 ./install-control-plane.sh
 ```
 
-The installer asks which feature groups to deploy. For an internet-exposed
-installation, its optional Cloudflare step prompts for a **Cloudflare User API
-Token** and does not persist it. The script is the source of truth for all edge
-configuration; no manual Cloudflare procedure is required.
-
-Use `./install-control-plane.sh --yes` for default feature choices. Secret
-prompts still require input unless their documented environment variable is
-provided.
+It asks which features to install and, when workers are selected, starts the
+vRack or Tailscale prerequisite wizard before any UFW change. Each wizard shows
+the exact account page, pauses while you complete the manual account step,
+collects secrets with hidden input, checks the account read-only, and resumes.
+Nothing is persisted. `./install-control-plane.sh --yes` is the non-interactive
+path and therefore requires all selected transport secrets and settings as
+environment variables.
 
 ## Adding worker nodes
 
@@ -114,98 +114,36 @@ Worker requirements:
 
 #### OVHcloud vRack — OVHcloud-only
 
-Use vRack only when every participating server is an eligible OVHcloud service.
-It keeps K3s and Longhorn traffic on OVHcloud's private L2 network. Before the
-installer, complete the parts OVHcloud does not expose as safe unattended host
-automation:
+Choose this only when every node is an eligible OVHcloud Dedicated Server. The
+wizard guides the unavoidable manual steps—vRack ordering/contract acceptance
+and recovery-console verification—then offers either API-managed or manual
+server attachment. API mode asks for a temporary AK/AS/CK set and prints the
+exact least-privilege paths before validating it. Keep each service name, one
+unused RFC1918 subnet, a unique IP per host, and the private NIC name or MAC
+ready. The current [OVHcloud vRack host guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server)
+is linked by the wizard.
 
-1. Order and activate a vRack in `Network` → `vRack private network`, accept its
-   contract, and confirm every server is vRack-compatible. Record a working
-   [IPMI/KVM](https://help.ovhcloud.com/csm/en-dedicated-servers-ipmi?id=kb_article_view&sysparm_article=KB0043448)
-   or [rescue-mode](https://help.ovhcloud.com/csm/en-dedicated-servers-rescue-mode?id=kb_article_view&sysparm_article=KB0043430)
-   path. Commercial checkout/contract acceptance and recovery access remain
-   manual so automation cannot accept terms or remove the last recovery route.
-2. Choose one unused RFC1918 subnet. Record each server's OVHcloud Dedicated
-   Server service name and the private-interface MAC shown under `Network
-   interfaces`. Physical NIC identity must be confirmed manually when the API
-   does not return a MAC.
-3. For automated account attachment, create a dedicated least-privilege
-   AK/AS/CK credential set, using the shortest practical consumer-key validity,
-   with OVHcloud's [API credential guide](https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps).
-   Grant `GET /vrack`, `GET /vrack/*`, and
-   `POST /vrack/*/dedicatedServerInterface`. Optionally grant
-   `GET /dedicated/server/*/networking` so the installer can discover a single
-   private NIC MAC. Revoke the credentials afterward.
-
-The installer then signs OVHcloud API requests without persisting credentials,
-and enforces OVHcloud's documented order for every server:
-
-1. Attach the eligible Dedicated Server interface and wait for the OVHcloud
-   vRack task to reach `done`.
-2. Match the OVHcloud private MAC to the Linux NIC, assign that server's unique
-   private IP/prefix, write Netplan or Debian ifupdown configuration, and apply it.
-3. Verify the address is active without changing the public default route. For
-   workers, also prove a new SSH connection over that private address.
-4. Only after those checks may UFW and K3s use the private interface.
-
-Failure at any earlier step leaves UFW unchanged and reports the still-usable
-bootstrap endpoint. An account attachment is intentionally left in place if
-host configuration fails, so rerunning safely resumes Step 2 without detaching
-an existing vRack service. See OVHcloud's current
-[Dedicated Server vRack guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server).
-
-Use control-plane mode for new nodes: `./install-worker.sh --control-plane`.
-Direct `--worker` mode will configure the private transport, but deliberately
-refuses UFW unless its current SSH session already originates from the exact
-private control-plane IP and terminates on the worker's private address.
+Automation attaches the interface, waits for the account task, configures
+Netplan or ifupdown without replacing the public route, proves private SSH, and
+only then applies UFW. A failure leaves the bootstrap path and firewall intact,
+so rerunning resumes safely.
 
 #### Tailscale — hybrid cloud or non-OVHcloud providers
 
-Use Tailscale when nodes span providers, regions, or unrelated private
-networks. The only account preparation is:
+Choose this for mixed providers, regions, or unrelated LANs. The wizard opens
+the [Tailscale Keys page](https://login.tailscale.com/admin/settings/keys), waits
+while an Owner, Admin, IT admin, or Network admin creates a short-lived personal
+API access token (`tskey-api-`, not `tskey-auth-`), and verifies the token and
+tailnet before changing a host. It then installs Tailscale, ETag-merges only this
+cluster's tags and grants into the existing policy, creates one-use tagged node
+keys, and switches enrollment to `tailscale0` before UFW closes bootstrap SSH.
+No manual node, tag, policy, or address setup is needed.
 
-1. Create or sign in to a tailnet.
-2. Open [Tailscale Admin Console → Settings → Keys](https://login.tailscale.com/admin/settings/keys)
-   and choose **Generate access token**. This must be a personal API access token beginning with
-   `tskey-api-`, not a node auth key beginning with `tskey-auth-`. Use an
-   Owner/Admin/Network-admin account, choose a short expiry, and revoke
-   the access token after provisioning if it is no longer needed.
-3. Run `./install-control-plane.sh` or `./install-worker.sh`, select Tailscale,
-   and follow the inventory prompts.
-
-No manual Tailscale node, tag, policy, auth-key, address, or firewall setup is
-required. The automation installs Tailscale, validates and ETag-merges the
-current account policy, derives separate control-plane/worker tags from the
-chosen mesh name, creates least-privilege grants, replaces only an untouched
-default allow-all policy, and preserves unrelated existing policy. It creates a
-one-use, pre-approved,
-short-lived tagged key per node, disables node-key expiry for the resulting
-tagged servers, removes its temporary secret material, disables Tailscale SSH,
-selects `nodivert` so UFW remains authoritative, and configures
-`100.64.0.0/10` as the node network.
-
-The assistant asks for the tailnet, a unique mesh/cluster name, control-plane
-Tailscale hostname, one-use key lifetime, and API token. It then asks how many
-servers to enroll and collects each server's existing SSH IP/DNS name, SSH
-user, port, private key, desired Tailscale hostname, and Kubernetes settings
-independently. Providers do not need to match. The existing address is only a
-temporary bootstrap route; Tailscale assigns the persistent overlay IP used by
-K3s after enrollment. No list of public peer IPs is placed in tailnet policy.
-Tailscale installation, authentication, address assignment, and `tailscale0`
-routing are verified before worker UFW is changed. The firewall hardener refuses
-to close public ingress if that preflight is incomplete, preventing SSH lockout
-during cross-provider bootstrap.
-
-To provision only the provider-neutral Tailscale mesh (without installing K3s
-workers), run:
+To provision only a provider-neutral mesh, without K3s workers:
 
 ```bash
 ./scripts/configure-tailscale.sh --fleet
 ```
-
-This fleet assistant gathers the same per-server inventory, accepts
-control-plane or worker roles, configures every SSH-reachable Debian/Ubuntu
-server, and prints the resulting Tailscale IP map.
 
 To add workers later, run the unified worker assistant from either the control
 plane or the new worker:
@@ -214,10 +152,9 @@ plane or the new worker:
 ./install-worker.sh
 ```
 
-It asks where it is running and which transport to use. Control-plane mode can
-enroll any number of remote workers and waits for each to become Ready. Worker
-mode joins the current machine and shows the commands used to obtain its K3s
-join token:
+Control-plane mode enrolls any requested number of workers and waits for each
+to become Ready. Worker mode joins only the current host and shows the commands
+used to obtain its K3s join token:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
@@ -234,32 +171,6 @@ the worker's vRack/Tailscale address, preventing a public-bootstrap lockout.
 Both host input and forwarded Docker/Kubernetes traffic are denied on every
 non-cluster interface for IPv4 and IPv6; outbound updates and their stateful
 replies remain allowed.
-
-For non-interactive vRack enrollment:
-
-```bash
-K3S_NODE_TRANSPORT=vrack \
-K3S_WORKER_IPS=10.0.0.12,10.0.0.13 \
-K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
-K3S_PRIVATE_ADDRESS=10.0.0.10 \
-K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
-./install-control-plane.sh --yes
-```
-
-Optional settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
-`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`.
-OVHcloud vRack API automation uses transient `OVH_API_ENDPOINT`,
-`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`, and
-`OVH_VRACK_SERVICE_NAME`; set `OVH_VRACK_AUTOMATE_ACCOUNT=false` when interfaces
-were attached manually. Preconfigured non-interactive workers still use
-`K3S_WORKER_IPS`.
-Non-interactive Tailscale enrollment uses `K3S_NODE_TRANSPORT=tailscale`,
-`K3S_WORKER_HOSTS`, `TAILSCALE_TAILNET`, `TAILSCALE_MESH_NAME`, and a transient
-`TAILSCALE_API_TOKEN`; common SSH defaults remain available through the worker
-variables above. Interactive hidden input is preferred when servers have
-different SSH settings. New metrics/logging DaemonSets automatically run on
-eligible workers. Ingress remains pinned to the control plane, and Longhorn's
-default for new volumes follows the Ready-node count, capped at three.
 
 ## Host security policy
 
@@ -347,14 +258,19 @@ latest seven under `/var/backups/bm-cluster/k3s`. Run one immediately with
 encrypted off-node storage; a backup that remains on this server does not cover
 disk or host loss.
 
-Ansible remains available for repeatable local deployments:
+### Interactive scripts versus Ansible
+
+| Path | Use it for | Prerequisites | Behavior |
+|---|---|---|---|
+| `./install-control-plane.sh` and `./install-worker.sh` | First installation, guided transport preparation, K3s installation, and worker onboarding | Supported Ubuntu/Debian host, non-root sudo user; workers also need SSH keys and passwordless sudo; vRack needs tested KVM/rescue access | Interactive and resumable; pauses for account work, verifies it, configures private networking before UFW, then installs K3s/platform resources |
+| `ansible/deploy.yml` | Repeatable platform reconciliation on an existing control plane, including CI | Working K3s cluster and kubeconfig, `ansible-playbook`, `kubectl`, Helm, repository checkout, and sudo; transport account prerequisites must already be complete | Non-interactive; uses `config/platform.env` and the same transport/security scripts, but does not install the K3s control plane or enroll worker operating systems |
+
+Run Ansible from the control-plane repository checkout with its local inventory:
 
 ```bash
-ansible-playbook ansible/deploy.yml
-ansible-playbook ansible/deploy.yml -e server_exposure=local
-ansible-playbook ansible/deploy.yml -e install_odoo=false
-ansible-playbook ansible/deploy.yml -e deploy_platform_services=false
-ansible-playbook ansible/deploy.yml -e k3s_node_network_cidr=10.0.0.0/24
+ansible-playbook -i ansible/inventory ansible/deploy.yml
+ansible-playbook -i ansible/inventory ansible/deploy.yml -e server_exposure=local
+ansible-playbook -i ansible/inventory ansible/deploy.yml -e install_odoo=false
 ```
 
 Ansible uses the same release versions, ordered manifest inventories,
@@ -366,13 +282,61 @@ all feature groups by default except Cloudflare. Feature switches are
 automatically: platform services and Odoo require data stores; data stores
 require Vault and External Secrets; Cloudflare requires ingress.
 
+Transport reconciliation is opt-in because it can change host networking. It
+always runs before K3s network binding and host UFW. Ansible does not pause for
+account setup: first complete the same prerequisites shown by the interactive
+wizard, then export secrets in the current shell.
+
+For vRack that means an activated OVHcloud vRack, tested KVM/rescue access, an
+unused RFC1918 subnet, the service name and private NIC for each server, and a
+temporary AK/AS/CK allowed `GET /vrack`, `GET /vrack/*`,
+`POST /vrack/*/dedicatedServerInterface`, and
+`GET /dedicated/server/*/networking`. For Tailscale it means a tailnet and a
+short-lived personal `tskey-api-` token created by an Owner, Admin, IT admin, or
+Network admin. Revoke temporary credentials after reconciliation.
+
+For an already activated OVHcloud vRack, with API attachment enabled:
+
+```bash
+export OVH_API_ENDPOINT=ovh-eu
+export OVH_APPLICATION_KEY='temporary application key'
+export OVH_APPLICATION_SECRET='temporary application secret'
+export OVH_CONSUMER_KEY='temporary consumer key'
+export OVH_VRACK_SERVICE_NAME='pn-XXXXXX'
+export OVH_CONTROL_PLANE_SERVICE_NAME='nsXXXXXX.ip-XX-XX-XX.eu'
+ansible-playbook -i ansible/inventory ansible/deploy.yml \
+  -e manage_private_transport=true \
+  -e k3s_node_transport=vrack \
+  -e ovh_vrack_automate_account=true \
+  -e k3s_private_address=10.50.0.10 \
+  -e k3s_private_interface=eno2 \
+  -e k3s_node_network_cidr=10.50.0.0/24
+```
+
+For Tailscale, after creating the personal `tskey-api-` access token:
+
+```bash
+export TAILSCALE_API_TOKEN='temporary tskey-api token'
+export TAILSCALE_TAILNET='example.com' # or '-' for the token's tailnet
+export TAILSCALE_MESH_NAME='bm-cluster'
+export TAILSCALE_NODE_HOSTNAME='bm-control-plane'
+ansible-playbook -i ansible/inventory ansible/deploy.yml \
+  -e manage_private_transport=true \
+  -e k3s_node_transport=tailscale
+```
+
+Unset or revoke temporary credentials after the run. To reconcile only the
+platform on an already configured private network, omit
+`manage_private_transport`; provide `K3S_NODE_NETWORK_CIDR` when host security
+must trust worker traffic.
+
 To run the same non-interactive Cloudflare reconciliation from Ansible, export
 the secret inputs and opt in explicitly:
 
 ```bash
 export CLOUDFLARE_API_TOKEN='your Cloudflare User API Token (cfut_... type)'
 export CLOUDFLARE_ACCESS_ALLOWED_EMAILS='admin@example.com'
-ansible-playbook ansible/deploy.yml -e configure_cloudflare=true
+ansible-playbook -i ansible/inventory ansible/deploy.yml -e configure_cloudflare=true
 ```
 
 The playbook deploys platform resources through the active kubeconfig; K3s
@@ -408,6 +372,7 @@ Ansible, YAML, immutable image references, and hostname inventories:
 | `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
+| `scripts/lib/transport-guide.sh` | Shared guided vRack/Tailscale account prerequisites and verification |
 | `scripts/validate-repository.sh` | Consistency checks and optional live server dry-run |
 | `deployments/` | Kubernetes resources |
 | `ansible/` | Ansible deployment entry point |

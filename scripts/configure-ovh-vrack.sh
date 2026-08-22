@@ -54,6 +54,9 @@ Automate OVHcloud-only vRack attachment and host private networking.
 Account attachment:
   scripts/configure-ovh-vrack.sh --attach-server SERVER --vrack pn-XXXXXX
 
+Read-only account check:
+  scripts/configure-ovh-vrack.sh --verify-account --vrack pn-XXXXXX
+
 Host networking (run on the target server):
   scripts/configure-ovh-vrack.sh --configure-node \
     --private-ip 10.50.0.12 --network-cidr 10.50.0.0/24 \
@@ -61,6 +64,7 @@ Host networking (run on the target server):
 
 Account options:
   --attach-server NAME     OVHcloud Dedicated Server service name
+  --verify-account         Verify credentials and vRack access without changes
   --vrack NAME             Existing vRack service name (pn-...)
   --ovh-endpoint NAME      ovh-eu, ovh-ca, or ovh-us
 
@@ -104,6 +108,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --attach-server) shift; [[ $# -gt 0 ]] || error "Missing value for --attach-server"; DEDICATED_SERVER="$1"; MODE=attach ;;
         --attach-server=*) DEDICATED_SERVER="${1#*=}"; MODE=attach ;;
+        --verify-account) MODE=verify ;;
         --vrack) shift; [[ $# -gt 0 ]] || error "Missing value for --vrack"; VRACK_SERVICE="$1" ;;
         --vrack=*) VRACK_SERVICE="${1#*=}" ;;
         --ovh-endpoint) shift; [[ $# -gt 0 ]] || error "Missing value for --ovh-endpoint"; OVH_ENDPOINT="$1" ;;
@@ -126,7 +131,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-[[ -n "$MODE" ]] || error "Select --attach-server or --configure-node."
+[[ -n "$MODE" ]] || error "Select --attach-server, --verify-account, or --configure-node."
 TEMP_DIR="$(mktemp -d /tmp/bm-cluster-vrack.XXXXXX)"
 chmod 700 "$TEMP_DIR"
 
@@ -194,12 +199,9 @@ wait_for_vrack_task() {
     error "Timed out waiting for OVHcloud vRack task $task_id."
 }
 
-attach_server() {
-    local attached_file="$TEMP_DIR/attached.json" details_file="$TEMP_DIR/details.json"
-    local command_name interface_id interface_name task_id
-    local private_macs=()
+prepare_account_api() {
+    local command_name
 
-    [[ "$DEDICATED_SERVER" =~ ^[A-Za-z0-9._-]+$ ]] || error "Invalid OVHcloud Dedicated Server service name."
     [[ "$VRACK_SERVICE" =~ ^pn-[A-Za-z0-9-]+$ ]] || error "vRack service name must begin with pn-."
     configure_api_endpoint
     for command_name in curl jq sha1sum; do
@@ -223,6 +225,22 @@ attach_server() {
     ovh_api_request GET /vrack
     jq -e --arg vrack "$VRACK_SERVICE" 'index($vrack) != null' "$API_RESPONSE" >/dev/null || \
         error "vRack $VRACK_SERVICE is not available to these OVHcloud credentials."
+}
+
+verify_account() {
+    prepare_account_api
+    ovh_api_request GET "/vrack/$VRACK_SERVICE/dedicatedServerInterface"
+    ovh_api_request GET "/vrack/$VRACK_SERVICE/dedicatedServerInterfaceDetails"
+    info "OVHcloud API credentials and vRack $VRACK_SERVICE access are valid."
+}
+
+attach_server() {
+    local attached_file="$TEMP_DIR/attached.json" details_file="$TEMP_DIR/details.json"
+    local interface_id interface_name task_id
+    local private_macs=()
+
+    [[ "$DEDICATED_SERVER" =~ ^[A-Za-z0-9._-]+$ ]] || error "Invalid OVHcloud Dedicated Server service name."
+    prepare_account_api
     ovh_api_request GET "/vrack/$VRACK_SERVICE/dedicatedServerInterface"
     cp "$API_RESPONSE" "$attached_file"
     ovh_api_request GET "/vrack/$VRACK_SERVICE/dedicatedServerInterfaceDetails"
@@ -457,5 +475,6 @@ iface $PRIVATE_INTERFACE inet static
 
 case "$MODE" in
     attach) attach_server ;;
+    verify) verify_account ;;
     node) configure_node ;;
 esac

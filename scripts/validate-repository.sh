@@ -99,15 +99,22 @@ control_vrack_setup_line="$(grep -n 'Configuring and validating the control-plan
 control_firewall_line="$(grep -n 'Applying the .* control-plane host security policy' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
 worker_vrack_attach_line="$(grep -n '"\$OVH_VRACK_CONFIGURATOR" --attach-server' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" | cut -d: -f1 || true)"
 worker_vrack_network_line="$(grep -n 'Configuring \$worker_ip on the OVHcloud private NIC before UFW changes' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" | cut -d: -f1 || true)"
+ansible_tailscale_line="$(grep -n 'Reconcile Tailscale before host firewall changes' "$REPOSITORY_ROOT/ansible/deploy.yml" | cut -d: -f1 || true)"
+ansible_vrack_line="$(grep -n 'Reconcile the OVHcloud vRack host interface before firewall changes' "$REPOSITORY_ROOT/ansible/deploy.yml" | cut -d: -f1 || true)"
+ansible_k3s_network_line="$(grep -n 'Reconcile K3s private networking before host firewall changes' "$REPOSITORY_ROOT/ansible/deploy.yml" | cut -d: -f1 || true)"
+ansible_firewall_line="$(grep -n 'Apply role-aware control-plane host security policy' "$REPOSITORY_ROOT/ansible/deploy.yml" | cut -d: -f1 || true)"
 if [[ -n "$tailscale_firewall_line" && -n "$private_ssh_line" && -n "$ufw_apply_line" && -n "$tailscale_handoff_line" &&
       -n "$tailscale_worker_setup_line" && -n "$vrack_worker_setup_line" && -n "$worker_firewall_line" &&
       -n "$control_tailscale_setup_line" && -n "$control_vrack_attach_line" && -n "$control_vrack_setup_line" &&
-      -n "$control_firewall_line" && -n "$worker_vrack_attach_line" && -n "$worker_vrack_network_line" ]] &&
+      -n "$control_firewall_line" && -n "$worker_vrack_attach_line" && -n "$worker_vrack_network_line" &&
+      -n "$ansible_tailscale_line" && -n "$ansible_vrack_line" && -n "$ansible_k3s_network_line" && -n "$ansible_firewall_line" ]] &&
    (( tailscale_firewall_line < private_ssh_line && private_ssh_line < ufw_apply_line && ufw_apply_line < tailscale_handoff_line &&
       tailscale_worker_setup_line < worker_firewall_line && vrack_worker_setup_line < worker_firewall_line &&
       control_tailscale_setup_line < control_firewall_line &&
       control_vrack_attach_line < control_vrack_setup_line && control_vrack_setup_line < control_firewall_line &&
-      worker_vrack_attach_line < worker_vrack_network_line )); then
+      worker_vrack_attach_line < worker_vrack_network_line &&
+      ansible_tailscale_line < ansible_k3s_network_line && ansible_vrack_line < ansible_k3s_network_line &&
+      ansible_k3s_network_line < ansible_firewall_line )); then
     pass "private transport setup and SSH preflight precede worker UFW enforcement"
 else
     fail "private transport setup and SSH preflight precede worker UFW enforcement"
@@ -169,6 +176,21 @@ else
     fail "private transport choices are explicitly provider-scoped"
 fi
 
+if [[ -r "$REPOSITORY_ROOT/scripts/lib/transport-guide.sh" ]] &&
+   grep -Fq 'transport_guide_tailscale_account' "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq 'transport_guide_vrack_account' "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq 'transport_guide_tailscale_account' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq 'transport_guide_vrack_account' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq 'transport_guide_tailscale_account' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" &&
+   grep -Fq 'transport_guide_vrack_account' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" &&
+   grep -Fq '"$NETWORK_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY"' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq -- '--verify-account' "$REPOSITORY_ROOT/scripts/configure-tailscale.sh" &&
+   grep -Fq -- '--verify-account' "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh"; then
+    pass "installers share guided, read-only transport prerequisite verification"
+else
+    fail "installers share guided, read-only transport prerequisite verification"
+fi
+
 if grep -Eq 'CHART_VERSION="\$\{[^}]+:-[0-9]|K3S_INSTALL_VERSION="\$\{[^}]+:-v[0-9]' "$REPOSITORY_ROOT/install-control-plane.sh" ||
    grep -Eq '^\s+[a-z_]+_(chart_version|image_tag):\s+"?[v0-9]' "$REPOSITORY_ROOT/ansible/deploy.yml"; then
     fail "installers do not embed release defaults outside the contract"
@@ -227,7 +249,8 @@ else
 fi
 
 if command -v ansible-playbook >/dev/null 2>&1; then
-    if ansible-playbook --syntax-check "$REPOSITORY_ROOT/ansible/deploy.yml" >/dev/null; then
+    if ansible-playbook -i "$REPOSITORY_ROOT/ansible/inventory" \
+        --syntax-check "$REPOSITORY_ROOT/ansible/deploy.yml" >/dev/null; then
         pass "Ansible playbook syntax"
     else
         fail "Ansible playbook syntax"
