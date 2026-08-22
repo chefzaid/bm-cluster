@@ -74,7 +74,7 @@ Requirements:
 Run the interactive installer:
 
 ```bash
-chmod +x install-infrastructure.sh scripts/*.sh
+chmod +x install-infrastructure.sh install-worker.sh scripts/*.sh
 ./install-infrastructure.sh
 ```
 
@@ -89,11 +89,13 @@ provided.
 
 ## Adding worker nodes
 
-The main installer can add any number of workers. Answer **yes** to “Add or
-reconcile K3s worker nodes over SSH”; it asks for the SSH settings and each
-worker's address, unique node name, optional private IP, labels, and taints. The
-control plane remains the only server, so adding workers increases workload
-capacity but does not make the Kubernetes control plane highly available.
+Worker enrollment is built into `install-infrastructure.sh`; no separate setup
+step is required during the initial installation. Answer **yes** to “Add or
+reconcile K3s worker nodes over SSH.” It accepts any number of workers and asks
+for the SSH settings and each worker's address, unique node name, optional
+private IP, labels, and taints. The control plane remains the only server, so
+adding workers increases workload capacity but does not make the Kubernetes
+control plane highly available.
 
 Worker requirements:
 
@@ -104,32 +106,29 @@ Worker requirements:
   from the server to workers, restricted to the private node network
 - Enough CPU, memory, and disk for the workloads assigned to the node
 
-Run the dedicated enrollment assistant on the control-plane node at any time:
+To add workers later, run the unified worker assistant from either the control
+plane or the new worker:
 
 ```bash
-./scripts/add-k3s-workers.sh
+./install-worker.sh
 ```
 
-It reads the local token without printing it, copies the worker installer over
-SSH, installs the K3s agent and Longhorn prerequisites, and waits for the node to
-become Ready. It also asks once whether to harden every worker. When selected,
-the remote installer applies SSH hardening, worker-specific UFW rules,
-Fail2ban, CrowdSec, log retention, and a Lynis audit. These are the commands it
-displays if a token must be obtained manually; the second creates an optional
-short-lived token:
+It first asks where it is running. **Control-plane mode** asks how many workers
+to add and for their SSH addresses, reads the local token without printing it,
+copies the installer to every worker, and waits for each node to become Ready.
+**Worker mode** joins the current machine and asks for the control-plane address
+and token. It displays these commands to run on the control plane; the second
+creates an optional short-lived token:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
 sudo k3s token create --ttl 1h --description worker-join
 ```
 
-To join from the worker itself instead, copy or clone this repository there and
-run the interactive worker installer. The token prompt is hidden, and this path
-asks whether the local worker should be hardened:
-
-```bash
-./install-worker.sh
-```
+Both modes ask about worker host hardening. When selected, the installer applies
+SSH hardening, worker-specific UFW rules, Fail2ban, CrowdSec, log retention, and
+a Lynis audit. Token input is hidden and is never placed in command-line
+arguments or copied to disk.
 
 For repeatable enrollment through the main installer:
 
@@ -223,9 +222,9 @@ above, not by the Ansible inventory.
 | Path | Purpose |
 |---|---|
 | `install-infrastructure.sh` | Interactive bare-metal installer |
-| `install-worker.sh` | Join the current machine to an existing control plane as a worker |
-| `scripts/add-k3s-workers.sh` | Multi-worker enrollment over SSH from the control plane |
-| `scripts/install-k3s-worker.sh` | Worker installation implementation reused by both enrollment entry points |
+| `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
+| `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
+| `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |

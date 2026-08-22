@@ -31,10 +31,10 @@ usage() {
 Add one or more Debian/Ubuntu machines to this K3s cluster as workers.
 
 Interactive usage (run on the K3s control-plane node):
-  ./scripts/add-k3s-workers.sh
+  ./install-worker.sh --control-plane
 
 Non-interactive host selection:
-  ./scripts/add-k3s-workers.sh \
+  ./install-worker.sh --control-plane \
     --hosts ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
     --identity-file ~/.ssh/id_ed25519

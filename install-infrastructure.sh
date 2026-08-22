@@ -10,7 +10,7 @@ DEPLOY_DIR="$SCRIPT_DIR/deployments"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
-WORKER_MANAGER_SCRIPT="$SCRIPT_DIR/scripts/add-k3s-workers.sh"
+WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
@@ -359,7 +359,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
-        [[ -f "$WORKER_MANAGER_SCRIPT" ]] || error "Worker manager not found at $WORKER_MANAGER_SCRIPT"
+        [[ -x "$WORKER_INSTALLER_SCRIPT" ]] || error "Worker installer not found or not executable at $WORKER_INSTALLER_SCRIPT"
         worker_manager_args=()
         [[ -z "${K3S_WORKER_HOSTS:-}" ]] || worker_manager_args+=(--hosts "$K3S_WORKER_HOSTS")
         [[ -z "${K3S_SERVER_URL:-}" ]] || worker_manager_args+=(--server-url "$K3S_SERVER_URL")
@@ -375,7 +375,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             worker_manager_args+=(--skip-worker-hardening)
         fi
         step "Adding K3s worker nodes..."
-        bash "$WORKER_MANAGER_SCRIPT" "${worker_manager_args[@]}"
+        "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
     fi
 
     step "Creating infra namespace..."
@@ -603,7 +603,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         echo "  Odoo:     username admin; password: kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
     fi
     echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
-    echo "  Add workers:          ./scripts/add-k3s-workers.sh"
+    echo "  Add workers:          ./install-worker.sh"
     echo "  Worker join token:    sudo cat /var/lib/rancher/k3s/server/node-token"
     echo ""
 

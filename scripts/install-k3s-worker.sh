@@ -30,10 +30,10 @@ usage() {
 Install this machine as a K3s worker (agent).
 
 Interactive usage:
-  ./install-worker.sh
+  ./install-worker.sh --worker
 
 Automation usage (the token is deliberately accepted only through stdin):
-  printf '%s\n' "$K3S_JOIN_TOKEN" | ./install-worker.sh \
+  printf '%s\n' "$K3S_JOIN_TOKEN" | ./install-worker.sh --worker \
     --non-interactive \
     --server-url https://10.0.0.10:6443 \
     --token-stdin \
