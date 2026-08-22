@@ -9,6 +9,15 @@ metadata:
   annotations:
     ds-cluster.swirlit.dev/enforced-by: scripts/configure-node-security.sh
 data:
+  node-policy.yaml: |
+    control-plane:
+      local: [ufw, lynis]
+      internet: [ufw, fail2ban, crowdsec, lynis]
+    worker:
+      local: [ufw]
+      internet: [ufw, fail2ban, crowdsec]
+    lynis-worker-audits: transient-ssh-copy-from-control-plane
+
   fail2ban-jail.local: |
     # Managed by scripts/configure-node-security.sh
     [DEFAULT]

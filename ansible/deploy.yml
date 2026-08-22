@@ -7,7 +7,7 @@
     infra_namespace: "{{ infra_ns | default('infra') }}"
     k8s_dir: "{{ playbook_dir }}/../deployments"
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
-    apply_host_security_suite: "{{ harden_firewall | default(server_exposure_mode == 'internet') }}"
+    apply_host_security_suite: "{{ harden_firewall | default(true) }}"
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     deploy_odoo: "{{ install_odoo | default(true) }}"
     ingress_nginx_chart_version: "4.15.1"
@@ -43,23 +43,21 @@
     - name: Configure daily consistent K3s recovery archives
       command: "{{ playbook_dir }}/../scripts/configure-k3s-backups.sh"
 
-    - name: Apply internet-facing host security tooling
-      command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply --server-exposure {{ server_exposure_mode }}"
+    - name: Apply role-aware control-plane host security policy
+      command: "{{ playbook_dir }}/../scripts/configure-node-security.sh --apply --server-exposure {{ server_exposure_mode }} --node-role control-plane"
       environment:
         K3S_NODE_NETWORK_CIDR: "{{ trusted_node_cidr }}"
       when:
-        - server_exposure_mode == 'internet'
         - apply_host_security_suite | bool
 
     - name: Publish host security policy record to Kubernetes
       command: kubectl apply -f {{ k8s_dir }}/host-security-config.yaml
-      when: server_exposure_mode == 'internet'
       register: host_security_config
       changed_when: "'created' in host_security_config.stdout or 'configured' in host_security_config.stdout"
 
-    - name: Skip internet-facing host security tooling for local-only servers
+    - name: Report local-only host security policy
       debug:
-        msg: "server_exposure=local, skipping UFW, Fail2ban, CrowdSec, and Lynis automation."
+        msg: "server_exposure=local: UFW and control-plane Lynis are enabled; Fail2ban and CrowdSec are absent."
       when: server_exposure_mode == 'local'
 
     - name: Add Helm repositories

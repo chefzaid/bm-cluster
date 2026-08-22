@@ -14,7 +14,7 @@ Odoo.
 - Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
 - Homepage service catalog and Kubernetes status dashboard
-- UFW, Fail2ban, CrowdSec, and Lynis on internet-exposed hosts
+- UFW on every node, Fail2ban and CrowdSec on internet-facing nodes, and control-plane Lynis audits
 
 ## Architecture
 
@@ -100,8 +100,10 @@ control plane highly available.
 Worker requirements:
 
 - Debian or Ubuntu, a unique hostname, and network access to the control plane
-- SSH key authentication as root or a user with passwordless `sudo`; selected
-  host hardening requires the non-root option because it disables root SSH login
+- SSH key authentication as root or a user with passwordless `sudo`; workers
+  marked internet-facing require the non-root option because that policy disables
+  root SSH login
+- A trusted private node CIDR so UFW can allow only required cluster traffic
 - TCP 6443 from workers to the server, UDP 8472 between nodes, and TCP 10250
   from the server to workers, restricted to the private node network
 - Enough CPU, memory, and disk for the workloads assigned to the node
@@ -125,31 +127,52 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 sudo k3s token create --ttl 1h --description worker-join
 ```
 
-Both modes ask about worker host hardening. When selected, the installer applies
-SSH hardening, worker-specific UFW rules, Fail2ban, CrowdSec, log retention, and
-a Lynis audit. Token input is hidden and is never placed in command-line
-arguments or copied to disk.
+Both modes ask whether the worker is internet-facing or local/private. UFW is
+configured on every worker. Fail2ban, CrowdSec, and additional SSH hardening are
+installed only on internet-facing workers. Lynis is never installed persistently
+on workers. Token input is hidden and is never placed in command-line arguments
+or copied to disk.
 
 For repeatable enrollment through the control-plane installer:
 
 ```bash
 K3S_WORKER_HOSTS=ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
 K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
+K3S_WORKER_EXPOSURE=local \
 K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 ./install-control-plane.sh --yes
 ```
 
 Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
-`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`. New
+`K3S_WORKER_SSH_PORT`, `K3S_WORKER_EXPOSURE`, `K3S_WORKER_LABELS`, and
+`K3S_WORKER_TAINTS`. Worker exposure defaults to `local`; set it to `internet`
+only when the worker itself accepts traffic from the public internet. New
 DaemonSet workloads, including node metrics and log collection, automatically
 run on eligible workers. The installer sets Longhorn's default replica count for
 new volumes to the number of Ready nodes, capped at three; it does not relocate
-or change existing volumes. Control-plane-driven enrollment passes an explicit
-hardening choice to the worker installer, so the suite runs on each worker only
-once. Non-interactive use can select `--harden-workers` or
-`--skip-worker-hardening` and defaults to hardening when neither is provided;
-standalone worker enrollment uses
-`--harden-security` or `--skip-security-hardening`.
+or change existing volumes.
+
+## Host security policy
+
+| Node | Local/private | Internet-facing |
+|---|---|---|
+| Control plane | UFW and Lynis | UFW, Fail2ban, CrowdSec, SSH hardening, and Lynis |
+| Worker | UFW | UFW, Fail2ban, CrowdSec, and SSH hardening |
+
+Lynis is installed only on the control plane. To audit the complete cluster,
+run the control-plane audit assistant as the same user and SSH identity used to
+enroll workers:
+
+```bash
+bm-cluster-audit-nodes
+```
+
+It discovers worker InternalIPs from Kubernetes, asks for SSH settings, copies
+the control plane's Lynis files into a temporary worker directory, performs a
+root audit through passwordless `sudo`, retrieves the reports under
+`~/.local/state/bm-cluster/lynis-reports`, and removes the temporary copy. Explicit
+targets can be supplied with `--targets user@host,user@host`; run
+`bm-cluster-audit-nodes --help` for automation options.
 
 ## Initial credentials
 
@@ -225,6 +248,7 @@ above, not by the Ansible inventory.
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
+| `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
@@ -240,7 +264,7 @@ above, not by the Ansible inventory.
 - Keep administrative UI hostnames behind Cloudflare Access.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.
-- Local-only installs skip the internet-facing host security suite and Cloudflare.
+- Local-only nodes keep UFW but omit Fail2ban and CrowdSec; local control planes retain Lynis.
 
 ## License
 

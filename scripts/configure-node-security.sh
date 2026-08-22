@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPLY=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 NODE_ROLE="${NODE_ROLE:-control-plane}"
@@ -120,6 +121,22 @@ ensure_service() {
   local service_name="$1"
   sudo systemctl enable --now "$service_name" >/dev/null 2>&1
   sudo systemctl restart "$service_name" >/dev/null 2>&1
+}
+
+remove_packages_if_installed() {
+  local installed=()
+  local package
+
+  for package in "$@"; do
+    if dpkg -s "$package" >/dev/null 2>&1; then
+      installed+=("$package")
+    fi
+  done
+
+  if [[ ${#installed[@]} -gt 0 ]]; then
+    info "Removing packages excluded by this node's security policy: ${installed[*]}"
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get purge -y -qq "${installed[@]}" >/dev/null
+  fi
 }
 
 ensure_crowdsec_repo() {
@@ -388,7 +405,9 @@ configure_ufw() {
   fi
 
   if [[ "$NODE_ROLE" == "control-plane" ]]; then
-    if [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
+    if [[ "$SERVER_EXPOSURE" == "local" ]]; then
+      CLOUDFLARE_PROXY_ONLY=false
+    elif [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
       if sudo test -f /etc/bm-cluster/cloudflare-proxy-only; then
         CLOUDFLARE_PROXY_ONLY=true
       else
@@ -613,10 +632,26 @@ configure_crowdsec() {
   ensure_service crowdsec-firewall-bouncer
 }
 
-run_lynis_audit() {
-  ensure_packages lynis
+configure_lynis_control_plane() {
+  ensure_packages lynis openssh-client
+  if [[ -x "$SCRIPT_DIR/audit-cluster-nodes.sh" ]]; then
+    sudo install -D -o root -g root -m 0755 \
+      "$SCRIPT_DIR/audit-cluster-nodes.sh" /usr/local/sbin/bm-cluster-audit-nodes
+  fi
   info "Running Lynis baseline audit..."
   sudo lynis audit system --quick >/dev/null
+}
+
+remove_internet_only_tools() {
+  sudo fail2ban-client stop >/dev/null 2>&1 || true
+  sudo systemctl disable --now fail2ban crowdsec crowdsec-firewall-bouncer \
+    crowdsec-firewall-bouncer.service >/dev/null 2>&1 || true
+  remove_packages_if_installed \
+    fail2ban crowdsec crowdsec-firewall-bouncer-nftables crowdsec-firewall-bouncer-iptables
+}
+
+remove_worker_lynis() {
+  remove_packages_if_installed lynis
 }
 
 show_status() {
@@ -647,22 +682,30 @@ if [[ "$APPLY" != "true" ]]; then
   exit 0
 fi
 
-if [[ "$SERVER_EXPOSURE" == "local" ]]; then
-  info "Server marked local-only. Skipping internet-facing host security tooling."
-  exit 0
-fi
-
 if [[ "$NODE_ROLE" == "worker" && -z "$K3S_NODE_NETWORK_CIDR" ]]; then
-  err "K3S_NODE_NETWORK_CIDR is required when hardening a worker"
+  err "K3S_NODE_NETWORK_CIDR is required when configuring a worker firewall"
 fi
 
-configure_sshd
-disable_unused_rpcbind
 configure_ufw
-configure_fail2ban
-configure_crowdsec
-configure_log_retention
-run_lynis_audit
+if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
+  configure_sshd
+  disable_unused_rpcbind
+  configure_fail2ban
+  configure_crowdsec
+  configure_log_retention
+  info "Internet-facing SSH protection applied with Fail2ban and CrowdSec."
+else
+  remove_internet_only_tools
+  info "Local-only node: UFW applied; Fail2ban and CrowdSec are not installed."
+fi
 
-info "Host security tooling applied for internet-exposed $NODE_ROLE node."
+if [[ "$NODE_ROLE" == "control-plane" ]]; then
+  configure_lynis_control_plane
+  info "Lynis is installed on the control plane for local and remote-node audits."
+else
+  remove_worker_lynis
+  info "Worker node: Lynis is not installed persistently."
+fi
+
+info "Host security policy applied for $SERVER_EXPOSURE $NODE_ROLE node."
 show_status

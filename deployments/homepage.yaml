@@ -311,16 +311,16 @@ data:
             description: DNS, TLS, CDN, WAF, rate limiting, and Access
         - CrowdSec:
             icon: crowdsec.png
-            description: Host intrusion detection and collaborative blocking
+            description: Internet-facing node detection and collaborative blocking
         - Fail2ban:
             icon: fail2ban.png
-            description: Host log-based abuse banning
+            description: Internet-facing node SSH abuse banning
         - UFW:
             icon: mdi-wall-fire
-            description: Host firewall and Cloudflare origin restriction
+            description: Every-node firewall and Cloudflare origin restriction
         - Lynis:
             icon: ubuntu-linux.png
-            description: Host security auditing
+            description: Control-plane audit engine with transient remote worker scans
 
     - Kubernetes System:
         - CoreDNS:

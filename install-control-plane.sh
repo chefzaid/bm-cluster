@@ -169,7 +169,7 @@ echo ""
 echo "This script will:"
 echo "  - Prompt you for each install feature group one by one"
 echo "  - Install only selected components"
-echo "  - Apply host security tooling automatically for internet-exposed servers"
+echo "  - Apply UFW everywhere and add intrusion prevention only when internet-exposed"
 echo ""
 
 ask_with_default "Proceed with installation and deployment?" "Y" || { info "Aborted."; exit 0; }
@@ -177,11 +177,9 @@ ask_with_default "Proceed with installation and deployment?" "Y" || { info "Abor
 step "Select features to install (answer each prompt)"
 SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
-    APPLY_HOST_SECURITY=true
-    info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and Lynis."
+    info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and control-plane Lynis."
 else
-    APPLY_HOST_SECURITY=false
-    info "Local-only mode selected: skipping internet-facing host security tooling."
+    info "Local-only mode selected: enabling UFW and control-plane Lynis; skipping Fail2ban and CrowdSec."
 fi
 
 if command -v k3s &>/dev/null; then
@@ -198,12 +196,12 @@ if [[ "$AUTO_APPROVE" == "true" ]]; then
 else
     ask_with_default "Add or reconcile K3s worker nodes over SSH?" "N" && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
 fi
-if [[ "$ADD_K3S_WORKERS" == "true" && "$SERVER_EXPOSURE" == "internet" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
+if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
     if [[ "$AUTO_APPROVE" == "true" ]]; then
-        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_HOSTS on an internet-exposed server."
+        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_HOSTS so worker UFW rules can be configured safely."
     fi
     read -rp "$(echo -e "${YELLOW}Trusted private node CIDR (for example 10.0.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
-    [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted node CIDR is required when adding workers to an internet-exposed server."
+    [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted node CIDR is required when adding workers."
     export K3S_NODE_NETWORK_CIDR
 fi
 ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
@@ -338,13 +336,11 @@ if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
     curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
 fi
 
-if [[ "$APPLY_HOST_SECURITY" == "true" ]]; then
-    if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then
-        step "Applying host security tooling for internet-exposed server..."
-        "$SECURITY_HARDEN_SCRIPT" --apply --server-exposure "$SERVER_EXPOSURE"
-    else
-        warn "Host security script not found at $SECURITY_HARDEN_SCRIPT"
-    fi
+if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then
+    step "Applying the $SERVER_EXPOSURE control-plane host security policy..."
+    "$SECURITY_HARDEN_SCRIPT" --apply --server-exposure "$SERVER_EXPOSURE" --node-role control-plane
+else
+    warn "Host security script not found at $SECURITY_HARDEN_SCRIPT"
 fi
 
 # ---------- Infrastructure section ---------------------------------------------
@@ -369,11 +365,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || worker_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
         [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
         [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
-        if [[ "$APPLY_HOST_SECURITY" == "true" ]]; then
-            worker_manager_args+=(--harden-workers)
-        else
-            worker_manager_args+=(--skip-worker-hardening)
-        fi
+        [[ -z "${K3S_WORKER_EXPOSURE:-}" ]] || worker_manager_args+=(--worker-exposure "$K3S_WORKER_EXPOSURE")
         step "Adding K3s worker nodes..."
         "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
     fi
@@ -382,10 +374,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     kubectl create namespace infra 2>/dev/null || true
     kubectl apply -f "$DEPLOY_DIR/security-baseline.yaml"
 
-    if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
-        step "Publishing host security policy record..."
-        kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
-    fi
+    step "Publishing host security policy record..."
+    kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
 
     if [[ "$CONFIGURE_CLOUDFLARE" != "true" && ( "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ) ]]; then
         step "Ensuring HTTPS TLS secret..."

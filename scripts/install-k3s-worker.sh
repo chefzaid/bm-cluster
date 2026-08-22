@@ -12,7 +12,7 @@ NODE_LABELS=""
 NODE_TAINTS=""
 NODE_NETWORK_CIDR=""
 K3S_VERSION=""
-HARDEN_SECURITY=""
+WORKER_EXPOSURE="${K3S_WORKER_EXPOSURE:-}"
 HARDENING_SSH_PORT=""
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -38,7 +38,8 @@ Automation usage (the token is deliberately accepted only through stdin):
     --server-url https://10.0.0.10:6443 \
     --token-stdin \
     --node-name worker-01 \
-    --node-network-cidr 10.0.0.0/24
+    --node-network-cidr 10.0.0.0/24 \
+    --worker-exposure local
 
 Options:
   --server-url URL          K3s server URL; https:// and :6443 are added if omitted
@@ -49,9 +50,10 @@ Options:
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  Trusted private network shared by cluster nodes
   --k3s-version VERSION     Install the exact server version, for example v1.36.3+k3s1
-  --harden-security         Apply worker-specific UFW, SSH, Fail2ban, CrowdSec, and Lynis hardening
-  --skip-security-hardening Do not apply the host hardening suite
-  --ssh-port PORT           SSH server port retained by host hardening (default: current session or 22)
+  --worker-exposure MODE    Worker exposure: internet or local (default: local)
+  --harden-security         Compatibility alias for --worker-exposure internet
+  --skip-security-hardening Compatibility alias for --worker-exposure local; UFW is still applied
+  --ssh-port PORT           SSH port retained by internet-facing hardening (default: current session or 22)
   --non-interactive         Fail instead of prompting for missing required values
   -h, --help                Show this help
 
@@ -78,8 +80,10 @@ while [[ $# -gt 0 ]]; do
         --node-network-cidr=*) NODE_NETWORK_CIDR="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
-        --harden-security)  HARDEN_SECURITY=true ;;
-        --skip-security-hardening) HARDEN_SECURITY=false ;;
+        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; WORKER_EXPOSURE="$1" ;;
+        --worker-exposure=*) WORKER_EXPOSURE="${1#*=}" ;;
+        --harden-security)  WORKER_EXPOSURE=internet ;;
+        --skip-security-hardening) WORKER_EXPOSURE=local ;;
         --ssh-port)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-port"; HARDENING_SSH_PORT="$1" ;;
         --ssh-port=*)       HARDENING_SSH_PORT="${1#*=}" ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
@@ -95,14 +99,6 @@ prompt() {
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
 }
 
-ask_with_default() {
-    local prompt_text="$1" default_choice="${2:-N}" answer="" suffix="[y/N]"
-    [[ "$default_choice" == "Y" ]] && suffix="[Y/n]"
-    read -rp "$prompt_text $suffix " answer
-    answer="${answer:-$default_choice}"
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
-
 normalize_server_url() {
     local value="${1%/}" authority
 
@@ -113,6 +109,14 @@ normalize_server_url() {
         value="${value}:6443"
     fi
     printf '%s\n' "$value"
+}
+
+normalize_worker_exposure() {
+    case "${1,,}" in
+        internet|internet-exposed|public|external) printf 'internet\n' ;;
+        local|local-only|private|internal|lan) printf 'local\n' ;;
+        *) return 1 ;;
+    esac
 }
 
 valid_node_name() {
@@ -152,21 +156,14 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
     [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "Trusted private node CIDR (required when UFW is active; e.g. 10.0.0.0/24)"
     [[ -n "$K3S_VERSION" ]] || prompt K3S_VERSION "Exact K3s version (blank to use the current stable release)"
-    if [[ -z "$HARDEN_SECURITY" ]]; then
-        if ask_with_default "Apply full host security hardening to this worker?" "Y"; then
-            HARDEN_SECURITY=true
-        else
-            HARDEN_SECURITY=false
-        fi
-    fi
-    if [[ "$HARDEN_SECURITY" == "true" ]]; then
-        while [[ -z "$NODE_NETWORK_CIDR" ]]; do
-            prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker hardening (e.g. 10.0.0.0/24)"
-        done
-    fi
+    [[ -n "$WORKER_EXPOSURE" ]] || prompt WORKER_EXPOSURE "Is this worker internet-exposed or local/private? [internet/local]" "local"
+    while [[ -z "$NODE_NETWORK_CIDR" ]]; do
+        prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
+    done
 fi
 
-HARDEN_SECURITY="${HARDEN_SECURITY:-false}"
+WORKER_EXPOSURE="${WORKER_EXPOSURE:-local}"
+WORKER_EXPOSURE="$(normalize_worker_exposure "$WORKER_EXPOSURE")" || error "Worker exposure must be 'internet' or 'local'."
 if [[ -z "$HARDENING_SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then
     read -r _ _ _ HARDENING_SSH_PORT <<< "$SSH_CONNECTION"
 fi
@@ -177,16 +174,15 @@ SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-pla
 [[ -n "$JOIN_TOKEN" ]] || error "A K3s join token is required; use --token-stdin or run interactively."
 NODE_NAME="${NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 valid_node_name "$NODE_NAME" || error "Invalid node name '$NODE_NAME'. Use lower-case DNS characters and a unique name."
-[[ -z "$NODE_NETWORK_CIDR" ]] || valid_cidr "$NODE_NETWORK_CIDR" || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
+[[ -n "$NODE_NETWORK_CIDR" ]] || error "A trusted node network CIDR is required for the worker firewall."
+valid_cidr "$NODE_NETWORK_CIDR" || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
 [[ -z "$K3S_VERSION" || "$K3S_VERSION" != *[[:space:]]* ]] || error "The K3s version cannot contain whitespace."
-[[ "$HARDEN_SECURITY" =~ ^(true|false)$ ]] || error "Invalid security-hardening selection."
 [[ "$HARDENING_SSH_PORT" =~ ^[0-9]+$ && "$HARDENING_SSH_PORT" -ge 1 && "$HARDENING_SSH_PORT" -le 65535 ]] || \
     error "SSH port must be an integer from 1 to 65535."
-if [[ "$HARDEN_SECURITY" == "true" ]]; then
-    [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required with --harden-security."
-    [[ -x "$SECURITY_HARDENER" ]] || error "Security hardening script not found or not executable: $SECURITY_HARDENER"
+[[ -x "$SECURITY_HARDENER" ]] || error "Security policy script not found or not executable: $SECURITY_HARDENER"
+if [[ "$WORKER_EXPOSURE" == "internet" ]]; then
     if [[ $EUID -eq 0 && "${SUDO_USER:-root}" == "root" && -z "${SSH_ALLOWED_USERS:-}" ]]; then
-        error "Set SSH_ALLOWED_USERS to at least one non-root account before hardening; the policy disables root SSH login."
+        error "Set SSH_ALLOWED_USERS to at least one non-root account for an internet-facing worker; the policy disables root SSH login."
     fi
 fi
 
@@ -276,13 +272,9 @@ unset JOIN_TOKEN
 
 "${SUDO[@]}" systemctl is-active --quiet k3s-agent || error "k3s-agent did not become active; inspect: sudo journalctl -u k3s-agent"
 
-if [[ "$HARDEN_SECURITY" == "true" ]]; then
-    info "Applying worker-specific host security hardening..."
-    K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-        "$SECURITY_HARDENER" --apply --server-exposure internet --node-role worker --ssh-port "$HARDENING_SSH_PORT"
-else
-    info "Worker host security hardening was not selected."
-fi
+info "Applying the $WORKER_EXPOSURE worker security policy..."
+K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
+    "$SECURITY_HARDENER" --apply --server-exposure "$WORKER_EXPOSURE" --node-role worker --ssh-port "$HARDENING_SSH_PORT"
 
 info "Worker '$NODE_NAME' is running. On the control plane, verify it with:"
 printf '  kubectl wait --for=condition=Ready node/%s --timeout=5m\n' "$NODE_NAME"

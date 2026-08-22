@@ -17,7 +17,7 @@ NODE_NETWORK_CIDR=""
 COMMON_LABELS=""
 COMMON_TAINTS=""
 K3S_VERSION=""
-HARDEN_WORKERS=""
+WORKER_EXPOSURE="${K3S_WORKER_EXPOSURE:-}"
 NON_INTERACTIVE=false
 JOIN_TOKEN=""
 LOCAL_SUDO=()
@@ -37,6 +37,7 @@ Non-interactive host selection:
   ./install-worker.sh --control-plane \
     --hosts ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
+    --worker-exposure local \
     --identity-file ~/.ssh/id_ed25519
 
 Options:
@@ -49,14 +50,16 @@ Options:
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
-  --harden-workers          Apply full worker-specific host security hardening
-  --skip-worker-hardening   Enroll workers without the host hardening suite
+  --worker-exposure MODE    Worker exposure: internet or local (default: local)
+  --harden-workers          Compatibility alias for --worker-exposure internet
+  --skip-worker-hardening   Compatibility alias for --worker-exposure local; UFW is still applied
   --non-interactive         Fail instead of prompting; implied by --hosts
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
-Host hardening requires a non-root SSH account with passwordless sudo because
-the resulting SSH policy disables direct root login.
+Internet-facing worker hardening requires a non-root SSH account with
+passwordless sudo because that policy disables direct root login. Local workers
+may be enrolled as root, but still receive the UFW baseline.
 The join token is never placed in command-line arguments or copied to disk.
 
 Token commands, if this script is not run on the control plane:
@@ -85,8 +88,10 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         COMMON_TAINTS="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
-        --harden-workers)   HARDEN_WORKERS=true ;;
-        --skip-worker-hardening) HARDEN_WORKERS=false ;;
+        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; WORKER_EXPOSURE="$1" ;;
+        --worker-exposure=*) WORKER_EXPOSURE="${1#*=}" ;;
+        --harden-workers)   WORKER_EXPOSURE=internet ;;
+        --skip-worker-hardening) WORKER_EXPOSURE=local ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
         -h|--help)          usage; exit 0 ;;
         *)                  error "Unknown option: $1 (use --help)" ;;
@@ -114,19 +119,19 @@ prompt() {
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
 }
 
-ask_with_default() {
-    local prompt_text="$1" default_choice="${2:-N}" answer="" suffix="[y/N]"
-    [[ "$default_choice" == "Y" ]] && suffix="[Y/n]"
-    read -rp "$prompt_text $suffix " answer
-    answer="${answer:-$default_choice}"
-    [[ "$answer" =~ ^[Yy]$ ]]
-}
-
 detect_private_ip() {
     local detected=""
     detected="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')"
     [[ -n "$detected" ]] || detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
     printf '%s' "$detected"
+}
+
+normalize_worker_exposure() {
+    case "${1,,}" in
+        internet|internet-exposed|public|external) printf 'internet\n' ;;
+        local|local-only|private|internal|lan) printf 'local\n' ;;
+        *) return 1 ;;
+    esac
 }
 
 default_ip="$(detect_private_ip)"
@@ -163,22 +168,14 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     prompt SSH_PORT "Worker SSH port" "$SSH_PORT"
     prompt IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
     [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
-    prompt NODE_NETWORK_CIDR "Trusted private node CIDR (required on workers using UFW; e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
+    prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
     prompt COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
     prompt COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
     prompt K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
-    if [[ -z "$HARDEN_WORKERS" ]]; then
-        if ask_with_default "Apply full host security hardening to every worker?" "Y"; then
-            HARDEN_WORKERS=true
-        else
-            HARDEN_WORKERS=false
-        fi
-    fi
-    if [[ "$HARDEN_WORKERS" == "true" ]]; then
-        while [[ -z "$NODE_NETWORK_CIDR" ]]; do
-            prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker hardening (e.g. 10.0.0.0/24)"
-        done
-    fi
+    [[ -n "$WORKER_EXPOSURE" ]] || prompt WORKER_EXPOSURE "Are these workers internet-exposed or local/private? [internet/local]" "local"
+    while [[ -z "$NODE_NETWORK_CIDR" ]]; do
+        prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)"
+    done
 
     worker_count=""
     while [[ ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; do
@@ -188,14 +185,12 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
 else
     [[ -n "$WORKER_HOSTS" ]] || error "--hosts is required in non-interactive mode."
 fi
-HARDEN_WORKERS="${HARDEN_WORKERS:-true}"
+WORKER_EXPOSURE="${WORKER_EXPOSURE:-local}"
+WORKER_EXPOSURE="$(normalize_worker_exposure "$WORKER_EXPOSURE")" || error "Worker exposure must be 'internet' or 'local'."
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
-[[ -z "$NODE_NETWORK_CIDR" || "$NODE_NETWORK_CIDR" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]] || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
-[[ "$HARDEN_WORKERS" =~ ^(true|false)$ ]] || error "Invalid worker-hardening selection."
-if [[ "$HARDEN_WORKERS" == "true" ]]; then
-    [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required when hardening workers."
-    [[ -f "$SECURITY_HARDENER" ]] || error "Security hardening script not found: $SECURITY_HARDENER"
-fi
+[[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required for worker UFW."
+[[ "$NODE_NETWORK_CIDR" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]] || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
+[[ -f "$SECURITY_HARDENER" ]] || error "Security policy script not found: $SECURITY_HARDENER"
 
 if command -v ufw >/dev/null 2>&1 && "${LOCAL_SUDO[@]}" ufw status | grep -q '^Status: active'; then
     [[ -n "$NODE_NETWORK_CIDR" ]] || error "UFW is active on the control plane. Provide --node-network-cidr to open only the trusted private network."
@@ -232,8 +227,8 @@ check_target() {
     ssh "${ssh_options[@]}" "$target" \
         'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
         error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
-    if [[ "$HARDEN_WORKERS" == "true" ]] && [[ "$(ssh "${ssh_options[@]}" "$target" 'id -u')" == "0" ]]; then
-        error "Refusing to harden $target through a root-only SSH session because the policy disables root login. Use a non-root account with passwordless sudo."
+    if [[ "$WORKER_EXPOSURE" == "internet" ]] && [[ "$(ssh "${ssh_options[@]}" "$target" 'id -u')" == "0" ]]; then
+        error "Refusing to configure an internet-facing worker through root-only SSH because the policy disables root login. Use a non-root account with passwordless sudo."
     fi
 }
 
@@ -258,11 +253,7 @@ install_worker() {
     [[ -z "$taints" ]] || worker_args+=(--taints "$taints")
     [[ -z "$NODE_NETWORK_CIDR" ]] || worker_args+=(--node-network-cidr "$NODE_NETWORK_CIDR")
     [[ -z "$K3S_VERSION" ]] || worker_args+=(--k3s-version "$K3S_VERSION")
-    if [[ "$HARDEN_WORKERS" == "true" ]]; then
-        worker_args+=(--harden-security)
-    else
-        worker_args+=(--skip-security-hardening)
-    fi
+    worker_args+=(--worker-exposure "$WORKER_EXPOSURE")
 
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
@@ -271,19 +262,15 @@ install_worker() {
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
-    if [[ "$HARDEN_WORKERS" == "true" ]]; then
-        info "Copying the worker host-hardening script to $target..."
-        scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"
-    fi
+    info "Copying the worker host-security policy to $target..."
+    scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"
     remote_installer="$remote_dir/scripts/install-k3s-worker.sh"
 
     printf -v quoted_installer '%q' "$remote_installer"
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
-    if [[ "$HARDEN_WORKERS" == "true" ]]; then
-        remote_hardener="$remote_dir/scripts/configure-node-security.sh"
-        printf -v quoted_hardener '%q' "$remote_hardener"
-        remote_command="chmod 700 $quoted_installer $quoted_hardener && $quoted_installer"
-    fi
+    remote_hardener="$remote_dir/scripts/configure-node-security.sh"
+    printf -v quoted_hardener '%q' "$remote_hardener"
+    remote_command="chmod 700 $quoted_installer $quoted_hardener && $quoted_installer"
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"
