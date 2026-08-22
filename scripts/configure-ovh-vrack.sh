@@ -87,6 +87,19 @@ prompt() {
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
 }
 
+prefix_to_netmask() {
+    local prefix="$1" mask
+
+    [[ "$prefix" =~ ^[0-9]+$ ]] && (( prefix >= 1 && prefix <= 32 )) || \
+        error "Invalid IPv4 prefix: $prefix"
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    printf '%u.%u.%u.%u\n' \
+        "$(( (mask >> 24) & 255 ))" \
+        "$(( (mask >> 16) & 255 ))" \
+        "$(( (mask >> 8) & 255 ))" \
+        "$(( mask & 255 ))"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --attach-server) shift; [[ $# -gt 0 ]] || error "Missing value for --attach-server"; DEDICATED_SERVER="$1"; MODE=attach ;;
@@ -253,13 +266,14 @@ attach_server() {
             warn "Private NIC MAC discovery was unavailable. Grant GET /dedicated/server/*/networking or enter the Control Panel MAC manually."
         fi
     fi
+    info "OVHcloud account attachment is complete; configure and activate a unique private IP on this server next."
     printf '%s\n' "$interface_name"
 }
 
 configure_node() {
     local prefix configured_interface default_interface ssh_server_ip ssh_interface actual_mac existing_addresses existing_cidr
     local candidate_interface
-    local config_file backup_file="" config_content
+    local config_file backup_file="" config_content netmask
 
     if [[ -z "$PRIVATE_IP" || -z "$NETWORK_CIDR" ]]; then
         [[ "$NON_INTERACTIVE" != "true" ]] || error "--private-ip and --network-cidr are required."
@@ -407,9 +421,11 @@ configure_node() {
     elif [[ -d /etc/network/interfaces.d && -z "$VLAN_ID" ]]; then
         command -v ifup >/dev/null 2>&1 || error "ifupdown is required for this Debian network configuration."
         config_file="/etc/network/interfaces.d/90-bm-cluster-vrack"
+        netmask="$(prefix_to_netmask "$prefix")"
         config_content="auto $PRIVATE_INTERFACE
 iface $PRIVATE_INTERFACE inet static
-    address $PRIVATE_IP/$prefix"
+    address $PRIVATE_IP
+    netmask $netmask"
         if "${SUDO[@]}" test -f "$config_file"; then
             backup_file="$TEMP_DIR/ifupdown-backup"
             "${SUDO[@]}" cp "$config_file" "$backup_file"

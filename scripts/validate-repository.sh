@@ -94,14 +94,20 @@ tailscale_worker_setup_line="$(grep -n '^if \[\[ "$NODE_TRANSPORT" == "tailscale
 vrack_worker_setup_line="$(grep -n 'Configuring OVHcloud vRack before any UFW changes' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | cut -d: -f1 || true)"
 worker_firewall_line="$(grep -n '"\$SECURITY_HARDENER" --apply' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
 control_tailscale_setup_line="$(grep -n 'Reconciling the tailnet policy and control-plane role' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
+control_vrack_attach_line="$(grep -n 'Attaching the control-plane private interface to OVHcloud vRack' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
 control_vrack_setup_line="$(grep -n 'Configuring and validating the control-plane OVHcloud vRack interface before any firewall changes' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
 control_firewall_line="$(grep -n 'Applying the .* control-plane host security policy' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
+worker_vrack_attach_line="$(grep -n '"\$OVH_VRACK_CONFIGURATOR" --attach-server' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" | cut -d: -f1 || true)"
+worker_vrack_network_line="$(grep -n 'Configuring \$worker_ip on the OVHcloud private NIC before UFW changes' "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" | cut -d: -f1 || true)"
 if [[ -n "$tailscale_firewall_line" && -n "$private_ssh_line" && -n "$ufw_apply_line" && -n "$tailscale_handoff_line" &&
       -n "$tailscale_worker_setup_line" && -n "$vrack_worker_setup_line" && -n "$worker_firewall_line" &&
-      -n "$control_tailscale_setup_line" && -n "$control_vrack_setup_line" && -n "$control_firewall_line" ]] &&
+      -n "$control_tailscale_setup_line" && -n "$control_vrack_attach_line" && -n "$control_vrack_setup_line" &&
+      -n "$control_firewall_line" && -n "$worker_vrack_attach_line" && -n "$worker_vrack_network_line" ]] &&
    (( tailscale_firewall_line < private_ssh_line && private_ssh_line < ufw_apply_line && ufw_apply_line < tailscale_handoff_line &&
       tailscale_worker_setup_line < worker_firewall_line && vrack_worker_setup_line < worker_firewall_line &&
-      control_tailscale_setup_line < control_firewall_line && control_vrack_setup_line < control_firewall_line )); then
+      control_tailscale_setup_line < control_firewall_line &&
+      control_vrack_attach_line < control_vrack_setup_line && control_vrack_setup_line < control_firewall_line &&
+      worker_vrack_attach_line < worker_vrack_network_line )); then
     pass "private transport setup and SSH preflight precede worker UFW enforcement"
 else
     fail "private transport setup and SSH preflight precede worker UFW enforcement"

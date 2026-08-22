@@ -138,13 +138,20 @@ automation:
    private NIC MAC. Revoke the credentials afterward.
 
 The installer then signs OVHcloud API requests without persisting credentials,
-attaches eligible server interfaces to the existing vRack, matches the private
-MAC to the Linux NIC where possible, writes a dedicated Netplan/ifupdown file,
-and leaves the public/default-route configuration untouched. For each worker it
-first verifies bootstrap SSH survived, then proves SSH over the assigned vRack
-address from the control plane. Only that private SSH session may apply UFW.
+and enforces OVHcloud's documented order for every server:
+
+1. Attach the eligible Dedicated Server interface and wait for the OVHcloud
+   vRack task to reach `done`.
+2. Match the OVHcloud private MAC to the Linux NIC, assign that server's unique
+   private IP/prefix, write Netplan or Debian ifupdown configuration, and apply it.
+3. Verify the address is active without changing the public default route. For
+   workers, also prove a new SSH connection over that private address.
+4. Only after those checks may UFW and K3s use the private interface.
+
 Failure at any earlier step leaves UFW unchanged and reports the still-usable
-bootstrap endpoint. See OVHcloud's current
+bootstrap endpoint. An account attachment is intentionally left in place if
+host configuration fails, so rerunning safely resumes Step 2 without detaching
+an existing vRack service. See OVHcloud's current
 [Dedicated Server vRack guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server).
 
 Use control-plane mode for new nodes: `./install-worker.sh --control-plane`.
