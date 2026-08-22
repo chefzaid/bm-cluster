@@ -137,7 +137,7 @@ data:
             podSelector: app=odoo
         - Keycloak:
             icon: keycloak.png
-            href: https://keycloak.swirlit.dev
+            href: https://keycloak.swirlit.dev/auth
             description: Identity and access management
             namespace: infra
             podSelector: app=keycloak
@@ -243,11 +243,11 @@ data:
             description: Internal event streaming platform
             namespace: infra
             podSelector: app=kafka
-        - ZooKeeper:
-            icon: mdi-graph-outline
-            description: Internal Kafka coordination service
+        - Kafka Controller:
+            icon: kafka.png
+            description: Internal KRaft metadata controller
             namespace: infra
-            podSelector: app=zookeeper
+            podSelector: app=kafka-controller
 
     - Observability & Logging:
         - Grafana:
@@ -474,7 +474,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: ghcr.io/gethomepage/homepage:v1.13.2
+        image: ghcr.io/gethomepage/homepage:v2.1.2
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false

@@ -3,22 +3,49 @@ set -euo pipefail
 
 APPLY=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
+NODE_ROLE="${NODE_ROLE:-control-plane}"
 K3S_NODE_NETWORK_CIDR="${K3S_NODE_NETWORK_CIDR:-}"
+HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-22}"
 CLOUDFLARE_PROXY_ONLY="${CLOUDFLARE_PROXY_ONLY:-}"
 SSH_ALLOWED_USERS="${SSH_ALLOWED_USERS:-${SUDO_USER:-$USER}}"
 APT_UPDATED=false
+
+usage() {
+  echo "Usage: $0 [--apply] [--server-exposure internet|local] [--node-role control-plane|worker] [--ssh-port PORT]"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=true ;;
     --server-exposure)
       shift
-      [[ $# -gt 0 ]] || { echo "Missing value for --server-exposure"; echo "Usage: $0 [--apply] [--server-exposure internet|local]"; exit 1; }
+      [[ $# -gt 0 ]] || { echo "Missing value for --server-exposure"; usage; exit 1; }
       SERVER_EXPOSURE="$1"
       ;;
     --server-exposure=*)
       SERVER_EXPOSURE="${1#*=}"
       ;;
-    *) echo "Unknown option: $1"; echo "Usage: $0 [--apply] [--server-exposure internet|local]"; exit 1 ;;
+    --node-role)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --node-role"; usage; exit 1; }
+      NODE_ROLE="$1"
+      ;;
+    --node-role=*)
+      NODE_ROLE="${1#*=}"
+      ;;
+    --ssh-port)
+      shift
+      [[ $# -gt 0 ]] || { echo "Missing value for --ssh-port"; usage; exit 1; }
+      HARDENED_SSH_PORT="$1"
+      ;;
+    --ssh-port=*)
+      HARDENED_SSH_PORT="${1#*=}"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
   shift
 done
@@ -31,6 +58,14 @@ normalize_server_exposure() {
   case "${1,,}" in
     internet|internet-exposed|public|external) echo "internet" ;;
     local|local-only|private|internal|lan) echo "local" ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_node_role() {
+  case "${1,,}" in
+    control-plane|controlplane|server|master) echo "control-plane" ;;
+    worker|agent) echo "worker" ;;
     *) return 1 ;;
   esac
 }
@@ -114,7 +149,7 @@ ensure_crowdsec_collection() {
 
 write_fail2ban_config() {
   backup_file_if_exists /etc/fail2ban/jail.local
-  write_root_file /etc/fail2ban/jail.local <<'EOF'
+  write_root_file /etc/fail2ban/jail.local <<EOF
 # Managed by scripts/configure-node-security.sh
 [DEFAULT]
 # Stricter SSH brute-force policy: fewer attempts, longer observation window,
@@ -132,7 +167,7 @@ banaction = ufw
 
 [sshd]
 enabled = true
-port = ssh
+port = $HARDENED_SSH_PORT
 filter = sshd[mode=aggressive]
 backend = systemd
 journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
@@ -352,18 +387,23 @@ configure_ufw() {
     err "Invalid K3S_NODE_NETWORK_CIDR: $K3S_NODE_NETWORK_CIDR"
   fi
 
-  if [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
-    if sudo test -f /etc/bm-cluster/cloudflare-proxy-only; then
-      CLOUDFLARE_PROXY_ONLY=true
-    else
-      CLOUDFLARE_PROXY_ONLY=false
+  if [[ "$NODE_ROLE" == "control-plane" ]]; then
+    if [[ -z "$CLOUDFLARE_PROXY_ONLY" ]]; then
+      if sudo test -f /etc/bm-cluster/cloudflare-proxy-only; then
+        CLOUDFLARE_PROXY_ONLY=true
+      else
+        CLOUDFLARE_PROXY_ONLY=false
+      fi
     fi
+    [[ "$CLOUDFLARE_PROXY_ONLY" =~ ^(true|false)$ ]] || err "CLOUDFLARE_PROXY_ONLY must be true or false"
+  else
+    # Worker nodes do not terminate public ingress in this topology.
+    CLOUDFLARE_PROXY_ONLY=false
   fi
-  [[ "$CLOUDFLARE_PROXY_ONLY" =~ ^(true|false)$ ]] || err "CLOUDFLARE_PROXY_ONLY must be true or false"
 
   # Fetch and validate the allowlist before resetting UFW so a network/API
   # failure can never leave the host firewall disabled.
-  if [[ "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
+  if [[ "$NODE_ROLE" == "control-plane" && "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
     ensure_packages ca-certificates curl jq
     cloudflare_response="$(curl -fsS https://api.cloudflare.com/client/v4/ips)" || err "Unable to download Cloudflare proxy networks"
     jq -e '.success == true and ((.result.ipv4_cidrs | length) + (.result.ipv6_cidrs | length) > 0)' \
@@ -379,20 +419,26 @@ configure_ufw() {
   sudo ufw logging medium >/dev/null
 
   info "Allowing required inbound ports..."
-  sudo ufw allow OpenSSH >/dev/null
-  if [[ "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
-    info "Restricting ports 80/443 to Cloudflare proxy networks..."
-    for cidr in "${cloudflare_cidrs[@]}"; do
-      sudo ufw allow from "$cidr" to any port 80 proto tcp comment 'Cloudflare proxy' >/dev/null
-      sudo ufw allow from "$cidr" to any port 443 proto tcp comment 'Cloudflare proxy' >/dev/null
-    done
-  else
-    sudo ufw allow 80/tcp >/dev/null
-    sudo ufw allow 443/tcp >/dev/null
+  sudo ufw allow "$HARDENED_SSH_PORT/tcp" >/dev/null
+  if [[ "$NODE_ROLE" == "control-plane" ]]; then
+    if [[ "$CLOUDFLARE_PROXY_ONLY" == "true" ]]; then
+      info "Restricting ports 80/443 to Cloudflare proxy networks..."
+      for cidr in "${cloudflare_cidrs[@]}"; do
+        sudo ufw allow from "$cidr" to any port 80 proto tcp comment 'Cloudflare proxy' >/dev/null
+        sudo ufw allow from "$cidr" to any port 443 proto tcp comment 'Cloudflare proxy' >/dev/null
+      done
+    else
+      sudo ufw allow 80/tcp >/dev/null
+      sudo ufw allow 443/tcp >/dev/null
+    fi
   fi
   if [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
-    info "Restricting K3s API, Flannel, and kubelet traffic to $K3S_NODE_NETWORK_CIDR..."
-    sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+    if [[ "$NODE_ROLE" == "control-plane" ]]; then
+      info "Restricting the K3s API, Flannel, and kubelet traffic to $K3S_NODE_NETWORK_CIDR..."
+      sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+    else
+      info "Restricting worker Flannel and kubelet traffic to $K3S_NODE_NETWORK_CIDR..."
+    fi
     sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
     sudo ufw allow from "$K3S_NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
     sudo ufw allow from 10.42.0.0/16 to any >/dev/null
@@ -591,6 +637,9 @@ show_status() {
 
 command -v sudo >/dev/null 2>&1 || err "sudo is required"
 SERVER_EXPOSURE="$(normalize_server_exposure "$SERVER_EXPOSURE")" || err "server exposure must be 'internet' or 'local'"
+NODE_ROLE="$(normalize_node_role "$NODE_ROLE")" || err "node role must be 'control-plane' or 'worker'"
+[[ "$HARDENED_SSH_PORT" =~ ^[0-9]+$ && "$HARDENED_SSH_PORT" -ge 1 && "$HARDENED_SSH_PORT" -le 65535 ]] || \
+  err "SSH port must be an integer from 1 to 65535"
 
 if [[ "$APPLY" != "true" ]]; then
   info "Audit mode (no changes). Run with --apply to enforce rules."
@@ -603,6 +652,10 @@ if [[ "$SERVER_EXPOSURE" == "local" ]]; then
   exit 0
 fi
 
+if [[ "$NODE_ROLE" == "worker" && -z "$K3S_NODE_NETWORK_CIDR" ]]; then
+  err "K3S_NODE_NETWORK_CIDR is required when hardening a worker"
+fi
+
 configure_sshd
 disable_unused_rpcbind
 configure_ufw
@@ -611,5 +664,5 @@ configure_crowdsec
 configure_log_retention
 run_lynis_audit
 
-info "Host security tooling applied for internet-exposed server."
+info "Host security tooling applied for internet-exposed $NODE_ROLE node."
 show_status

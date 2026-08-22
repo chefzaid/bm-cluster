@@ -90,6 +90,7 @@ data:
         Generate_ID               On
         Write_Operation           index
         Replace_Dots              On
+        Buffer_Size               5M
         Retry_Limit               False
         Trace_Error               On
 
@@ -207,7 +208,7 @@ spec:
               readOnly: true
       containers:
         - name: fluent-bit
-          image: cr.fluentbit.io/fluent/fluent-bit@sha256:1abcf78fe8c9dee0c57fc2199693370a5a1f84e0af4716beddcd153b40cbbbb1
+          image: cr.fluentbit.io/fluent/fluent-bit@sha256:a941bdd5ca552b2c6597fc7b3bccf2e61d30873939bab5700963de0e94ac6169
           ports:
             - name: metrics
               containerPort: 2020

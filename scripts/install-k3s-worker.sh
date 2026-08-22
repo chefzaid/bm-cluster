@@ -12,11 +12,14 @@ NODE_LABELS=""
 NODE_TAINTS=""
 NODE_NETWORK_CIDR=""
 K3S_VERSION=""
+HARDEN_SECURITY=""
+HARDENING_SSH_PORT=""
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
+SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 
 info()  { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*" >&2; }
@@ -46,6 +49,9 @@ Options:
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  Trusted private network shared by cluster nodes
   --k3s-version VERSION     Install the exact server version, for example v1.34.4+k3s1
+  --harden-security         Apply worker-specific UFW, SSH, Fail2ban, CrowdSec, and Lynis hardening
+  --skip-security-hardening Do not apply the host hardening suite
+  --ssh-port PORT           SSH server port retained by host hardening (default: current session or 22)
   --non-interactive         Fail instead of prompting for missing required values
   -h, --help                Show this help
 
@@ -72,6 +78,10 @@ while [[ $# -gt 0 ]]; do
         --node-network-cidr=*) NODE_NETWORK_CIDR="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
+        --harden-security)  HARDEN_SECURITY=true ;;
+        --skip-security-hardening) HARDEN_SECURITY=false ;;
+        --ssh-port)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-port"; HARDENING_SSH_PORT="$1" ;;
+        --ssh-port=*)       HARDENING_SSH_PORT="${1#*=}" ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
         -h|--help)          usage; exit 0 ;;
         *)                  error "Unknown option: $1 (use --help)" ;;
@@ -83,6 +93,14 @@ prompt() {
     local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
     read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
+}
+
+ask_with_default() {
+    local prompt_text="$1" default_choice="${2:-N}" answer="" suffix="[y/N]"
+    [[ "$default_choice" == "Y" ]] && suffix="[Y/n]"
+    read -rp "$prompt_text $suffix " answer
+    answer="${answer:-$default_choice}"
+    [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 normalize_server_url() {
@@ -134,7 +152,25 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
     [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "Trusted private node CIDR (required when UFW is active; e.g. 10.0.0.0/24)"
     [[ -n "$K3S_VERSION" ]] || prompt K3S_VERSION "Exact K3s version (blank to use the current stable release)"
+    if [[ -z "$HARDEN_SECURITY" ]]; then
+        if ask_with_default "Apply full host security hardening to this worker?" "Y"; then
+            HARDEN_SECURITY=true
+        else
+            HARDEN_SECURITY=false
+        fi
+    fi
+    if [[ "$HARDEN_SECURITY" == "true" ]]; then
+        while [[ -z "$NODE_NETWORK_CIDR" ]]; do
+            prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker hardening (e.g. 10.0.0.0/24)"
+        done
+    fi
 fi
+
+HARDEN_SECURITY="${HARDEN_SECURITY:-false}"
+if [[ -z "$HARDENING_SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then
+    read -r _ _ _ HARDENING_SSH_PORT <<< "$SSH_CONNECTION"
+fi
+HARDENING_SSH_PORT="${HARDENING_SSH_PORT:-22}"
 
 [[ -n "$SERVER_URL" ]] || error "A control-plane URL is required."
 SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
@@ -143,6 +179,16 @@ NODE_NAME="${NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 valid_node_name "$NODE_NAME" || error "Invalid node name '$NODE_NAME'. Use lower-case DNS characters and a unique name."
 [[ -z "$NODE_NETWORK_CIDR" ]] || valid_cidr "$NODE_NETWORK_CIDR" || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
 [[ -z "$K3S_VERSION" || "$K3S_VERSION" != *[[:space:]]* ]] || error "The K3s version cannot contain whitespace."
+[[ "$HARDEN_SECURITY" =~ ^(true|false)$ ]] || error "Invalid security-hardening selection."
+[[ "$HARDENING_SSH_PORT" =~ ^[0-9]+$ && "$HARDENING_SSH_PORT" -ge 1 && "$HARDENING_SSH_PORT" -le 65535 ]] || \
+    error "SSH port must be an integer from 1 to 65535."
+if [[ "$HARDEN_SECURITY" == "true" ]]; then
+    [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required with --harden-security."
+    [[ -x "$SECURITY_HARDENER" ]] || error "Security hardening script not found or not executable: $SECURITY_HARDENER"
+    if [[ $EUID -eq 0 && "${SUDO_USER:-root}" == "root" && -z "${SSH_ALLOWED_USERS:-}" ]]; then
+        error "Set SSH_ALLOWED_USERS to at least one non-root account before hardening; the policy disables root SSH login."
+    fi
+fi
 
 if [[ $EUID -eq 0 ]]; then
     SUDO=()
@@ -229,6 +275,15 @@ JOIN_TOKEN=""
 unset JOIN_TOKEN
 
 "${SUDO[@]}" systemctl is-active --quiet k3s-agent || error "k3s-agent did not become active; inspect: sudo journalctl -u k3s-agent"
+
+if [[ "$HARDEN_SECURITY" == "true" ]]; then
+    info "Applying worker-specific host security hardening..."
+    K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
+        "$SECURITY_HARDENER" --apply --server-exposure internet --node-role worker --ssh-port "$HARDENING_SSH_PORT"
+else
+    info "Worker host security hardening was not selected."
+fi
+
 info "Worker '$NODE_NAME' is running. On the control plane, verify it with:"
 printf '  kubectl wait --for=condition=Ready node/%s --timeout=5m\n' "$NODE_NAME"
 printf '  kubectl get nodes -o wide\n'

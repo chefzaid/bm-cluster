@@ -20,6 +20,8 @@ sealed="$(jq -r '.sealed // empty' <<<"$status_json")"
 [[ "$sealed" == "true" ]] || exit 0
 
 unseal_key="$(<"$UNSEAL_KEY_FILE")"
-printf '%s\n' "$unseal_key" | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- \
-  env VAULT_ADDR="$VAULT_ADDR" vault operator unseal >/dev/null
+# Vault 2.0 refuses a key on non-TTY stdin. Passing it as the command argument
+# is the supported automation path; keep the host-side key file root-only.
+kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- \
+  env VAULT_ADDR="$VAULT_ADDR" vault operator unseal "$unseal_key" >/dev/null
 unset unseal_key

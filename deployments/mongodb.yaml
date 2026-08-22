@@ -48,6 +48,8 @@ metadata:
     app: mongodb
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: mongodb
@@ -58,7 +60,9 @@ spec:
     spec:
       containers:
         - name: mongodb
-          image: mongo:7.0
+          # MongoDB 8.x refuses Linux 6.19-7.0.13; 7.0.40 is the newest
+          # stable version compatible with Ubuntu 26.04's current 7.0.0 kernel.
+          image: mongo@sha256:8ef27524b4cde51b9f07bb0827a56d02c6d3b148d0b7d0ca8ff4dfd57351ff4f
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               valueFrom:

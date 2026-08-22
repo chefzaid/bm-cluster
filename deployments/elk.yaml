@@ -38,7 +38,7 @@ data:
     output {
       elasticsearch {
         hosts => ["http://elasticsearch.infra.svc.cluster.local:9200"]
-        index => "app-logs-%{+YYYY.MM.dd}"
+        index => "app-logs-%{+yyyy.MM.dd}"
         template => "/usr/share/logstash/config/app-logs-template.json"
         template_name => "app-logs-single-node"
         template_overwrite => true
@@ -47,11 +47,14 @@ data:
   app-logs-template.json: |
     {
       "index_patterns": ["app-logs-*"],
-      "settings": {
-        "number_of_shards": 1,
-        "number_of_replicas": 0,
-        "index.lifecycle.name": "bm-cluster-logs-7d"
-      }
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "index.lifecycle.name": "bm-cluster-logs-7d"
+        }
+      },
+      "priority": 200
     }
 
 ---
@@ -124,7 +127,7 @@ spec:
           mountPath: /data
       containers:
       - name: elasticsearch
-        image: docker.elastic.co/elasticsearch/elasticsearch@sha256:aaf1c65bc2d0d400d59ec70f0a137a5b4f3fb9c764319120ea3ca5a1e1e7869a
+        image: docker.elastic.co/elasticsearch/elasticsearch@sha256:857f6e8e25cdabf6e8225eaaf67fd8e0729bbd214731e4e117503f7f4b11636c
         ports:
         - containerPort: 9200
         - containerPort: 9300
@@ -209,12 +212,16 @@ spec:
           type: RuntimeDefault
       containers:
       - name: logstash
-        image: docker.elastic.co/logstash/logstash@sha256:4925b305fe4cd92116277fb697242fcf70b867dd433f7c28084d4c8ae3c2e156
+        image: docker.elastic.co/logstash/logstash@sha256:a0664a36744b4767b8648d24d1fa676f92349f24b69302879fcd7da0798b42fd
         ports:
         - containerPort: 5000
         env:
         - name: LS_JAVA_OPTS
           value: "-Xms512m -Xmx512m -XX:+ExitOnOutOfMemoryError"
+        - name: PIPELINE_BUFFER_TYPE
+          value: "heap"
+        - name: XPACK_MONITORING_ENABLED
+          value: "false"
         resources:
           limits:
             memory: "1536Mi"
@@ -283,7 +290,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kibana
-        image: docker.elastic.co/kibana/kibana@sha256:f526876eb801eda6b6a31bf7997f76e43206fa4b08c4153f5d491fcb1dd81455
+        image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
         ports:
         - containerPort: 5601
         env:
@@ -291,13 +298,15 @@ spec:
           value: '["http://elasticsearch.infra.svc.cluster.local:9200"]'
         - name: SERVER_BASEPATH
           value: ""
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=1536"
         resources:
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: "2Gi"
+            cpu: "1"
           requests:
-            memory: "256Mi"
-            cpu: "100m"
+            memory: "1Gi"
+            cpu: "250m"
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000

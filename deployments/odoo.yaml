@@ -63,7 +63,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: render-config
-          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
+          image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
           command: ["/bin/bash", "-ec"]
           securityContext:
             allowPrivilegeEscalation: false
@@ -113,7 +113,7 @@ spec:
             - name: odoo-config
               mountPath: /etc/odoo-generated
         - name: bootstrap-database
-          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
+          image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
           command: ["/bin/bash", "-ec"]
           securityContext:
             allowPrivilegeEscalation: false
@@ -233,7 +233,7 @@ spec:
               mountPath: /var/lib/odoo
       containers:
         - name: odoo
-          image: odoo@sha256:4872f23288454b724fd2d26c176a418276c2b3552e9aa752f9396b59d864b3a0
+          image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
           ports:
             - name: http
               containerPort: 8069

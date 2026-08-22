@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
+SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 WORKER_HOSTS=""
 SERVER_URL=""
 SSH_USER="${USER:-}"
@@ -16,6 +17,7 @@ NODE_NETWORK_CIDR=""
 COMMON_LABELS=""
 COMMON_TAINTS=""
 K3S_VERSION=""
+HARDEN_WORKERS=""
 NON_INTERACTIVE=false
 JOIN_TOKEN=""
 LOCAL_SUDO=()
@@ -47,10 +49,14 @@ Options:
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
+  --harden-workers          Apply full worker-specific host security hardening
+  --skip-worker-hardening   Enroll workers without the host hardening suite
   --non-interactive         Fail instead of prompting; implied by --hosts
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
+Host hardening requires a non-root SSH account with passwordless sudo because
+the resulting SSH policy disables direct root login.
 The join token is never placed in command-line arguments or copied to disk.
 
 Token commands, if this script is not run on the control plane:
@@ -79,6 +85,8 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         COMMON_TAINTS="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
+        --harden-workers)   HARDEN_WORKERS=true ;;
+        --skip-worker-hardening) HARDEN_WORKERS=false ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
         -h|--help)          usage; exit 0 ;;
         *)                  error "Unknown option: $1 (use --help)" ;;
@@ -104,6 +112,14 @@ prompt() {
     local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
     read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
+}
+
+ask_with_default() {
+    local prompt_text="$1" default_choice="${2:-N}" answer="" suffix="[y/N]"
+    [[ "$default_choice" == "Y" ]] && suffix="[Y/n]"
+    read -rp "$prompt_text $suffix " answer
+    answer="${answer:-$default_choice}"
+    [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 detect_private_ip() {
@@ -151,6 +167,18 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     prompt COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
     prompt COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
     prompt K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
+    if [[ -z "$HARDEN_WORKERS" ]]; then
+        if ask_with_default "Apply full host security hardening to every worker?" "Y"; then
+            HARDEN_WORKERS=true
+        else
+            HARDEN_WORKERS=false
+        fi
+    fi
+    if [[ "$HARDEN_WORKERS" == "true" ]]; then
+        while [[ -z "$NODE_NETWORK_CIDR" ]]; do
+            prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker hardening (e.g. 10.0.0.0/24)"
+        done
+    fi
 
     worker_count=""
     while [[ ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; do
@@ -160,8 +188,14 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
 else
     [[ -n "$WORKER_HOSTS" ]] || error "--hosts is required in non-interactive mode."
 fi
+HARDEN_WORKERS="${HARDEN_WORKERS:-true}"
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
 [[ -z "$NODE_NETWORK_CIDR" || "$NODE_NETWORK_CIDR" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]] || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
+[[ "$HARDEN_WORKERS" =~ ^(true|false)$ ]] || error "Invalid worker-hardening selection."
+if [[ "$HARDEN_WORKERS" == "true" ]]; then
+    [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required when hardening workers."
+    [[ -f "$SECURITY_HARDENER" ]] || error "Security hardening script not found: $SECURITY_HARDENER"
+fi
 
 if command -v ufw >/dev/null 2>&1 && "${LOCAL_SUDO[@]}" ufw status | grep -q '^Status: active'; then
     [[ -n "$NODE_NETWORK_CIDR" ]] || error "UFW is active on the control plane. Provide --node-network-cidr to open only the trusted private network."
@@ -198,6 +232,9 @@ check_target() {
     ssh "${ssh_options[@]}" "$target" \
         'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
         error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
+    if [[ "$HARDEN_WORKERS" == "true" ]] && [[ "$(ssh "${ssh_options[@]}" "$target" 'id -u')" == "0" ]]; then
+        error "Refusing to harden $target through a root-only SSH session because the policy disables root login. Use a non-root account with passwordless sudo."
+    fi
 }
 
 remote_hostname() {
@@ -206,13 +243,14 @@ remote_hostname() {
 
 install_worker() {
     local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5"
-    local remote_dir="" remote_installer=""
-    local remote_command quoted quoted_dir quoted_installer argument
+    local remote_dir="" remote_installer="" remote_hardener=""
+    local remote_command quoted quoted_dir quoted_installer quoted_hardener argument
     local worker_args=(
         --non-interactive
         --server-url "$SERVER_URL"
         --token-stdin
         --node-name "$node_name"
+        --ssh-port "$SSH_PORT"
     )
 
     [[ -z "$node_ip" ]] || worker_args+=(--node-ip "$node_ip")
@@ -220,6 +258,11 @@ install_worker() {
     [[ -z "$taints" ]] || worker_args+=(--taints "$taints")
     [[ -z "$NODE_NETWORK_CIDR" ]] || worker_args+=(--node-network-cidr "$NODE_NETWORK_CIDR")
     [[ -z "$K3S_VERSION" ]] || worker_args+=(--k3s-version "$K3S_VERSION")
+    if [[ "$HARDEN_WORKERS" == "true" ]]; then
+        worker_args+=(--harden-security)
+    else
+        worker_args+=(--skip-security-hardening)
+    fi
 
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
@@ -228,10 +271,19 @@ install_worker() {
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
+    if [[ "$HARDEN_WORKERS" == "true" ]]; then
+        info "Copying the worker host-hardening script to $target..."
+        scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"
+    fi
     remote_installer="$remote_dir/scripts/install-k3s-worker.sh"
 
     printf -v quoted_installer '%q' "$remote_installer"
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
+    if [[ "$HARDEN_WORKERS" == "true" ]]; then
+        remote_hardener="$remote_dir/scripts/configure-node-security.sh"
+        printf -v quoted_hardener '%q' "$remote_hardener"
+        remote_command="chmod 700 $quoted_installer $quoted_hardener && $quoted_installer"
+    fi
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"

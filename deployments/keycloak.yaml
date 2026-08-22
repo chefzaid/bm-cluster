@@ -31,11 +31,23 @@ spec:
     metadata:
       labels:
         app: keycloak
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /auth/metrics
+        prometheus.io/port: "9000"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: keycloak
-        image: quay.io/keycloak/keycloak:26.0
-        args: ["start-dev", "--import-realm"]
+        image: quay.io/keycloak/keycloak@sha256:831330513f55695572286e521f94fcd3c7e285250ed5b848090265a33192f669
+        args: ["start", "--import-realm"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         env:
         - name: KC_BOOTSTRAP_ADMIN_USERNAME
           valueFrom:
@@ -47,8 +59,10 @@ spec:
             secretKeyRef:
               name: keycloak-admin-secret
               key: KC_BOOTSTRAP_ADMIN_PASSWORD
-        - name: KC_PROXY
-          value: "edge"
+        - name: KC_PROXY_HEADERS
+          value: "xforwarded"
+        - name: KC_HTTP_ENABLED
+          value: "true"
         - name: KC_DB
           value: "postgres"
         - name: KC_DB_URL
@@ -63,13 +77,44 @@ spec:
             secretKeyRef:
               name: postgres-secret
               key: POSTGRES_PASSWORD
-        - name: KC_HOSTNAME_URL
-          value: "https://app.swirlit.dev/auth"
-        - name: KC_HOSTNAME_ADMIN_URL
-          value: "https://keycloak.swirlit.dev"
+        - name: KC_HOSTNAME
+          value: "https://devapp.swirlit.dev/auth"
+        - name: KC_HOSTNAME_ADMIN
+          value: "https://keycloak.swirlit.dev/auth"
+        - name: KC_HTTP_RELATIVE_PATH
+          value: "/auth"
+        - name: KC_HEALTH_ENABLED
+          value: "true"
+        - name: KC_METRICS_ENABLED
+          value: "true"
         ports:
         - name: http
           containerPort: 8080
+        - name: management
+          containerPort: 9000
+        startupProbe:
+          httpGet:
+            path: /auth/health/started
+            port: management
+          periodSeconds: 5
+          failureThreshold: 36
+        readinessProbe:
+          httpGet:
+            path: /auth/health/ready
+            port: management
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /auth/health/live
+            port: management
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: 100m
+            memory: 384Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
         volumeMounts:
         - name: realm-config
           mountPath: /opt/keycloak/data/import

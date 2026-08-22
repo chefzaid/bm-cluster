@@ -35,19 +35,6 @@ spec:
     requests:
       storage: 5Gi
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: postgres-data
-  namespace: infra
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-
----
 
 apiVersion: apps/v1
 kind: Deployment
@@ -92,14 +79,64 @@ spec:
           mountPath: /opt/sonarqube/extensions
         - name: sonarqube-logs
           mountPath: /opt/sonarqube/logs
+      - name: init-database
+        image: postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          runAsGroup: 999
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: POSTGRES_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_USER
+        - name: POSTGRES_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: POSTGRES_PASSWORD
+        - name: SONAR_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-db-credentials
+              key: jdbc-password
+        command:
+        - sh
+        - -ec
+        - |
+          until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
+            --host=postgres.infra.svc.cluster.local \
+            --username="$POSTGRES_ADMIN_USER" \
+            --dbname=postgres \
+            --command='SELECT 1' >/dev/null 2>&1; do
+            echo "Waiting for shared PostgreSQL..."
+            sleep 2
+          done
+          PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
+            --host=postgres.infra.svc.cluster.local \
+            --username="$POSTGRES_ADMIN_USER" \
+            --dbname=postgres \
+            --set=ON_ERROR_STOP=1 \
+            --set=sonar_password="$SONAR_DB_PASSWORD" <<'SQL'
+          SELECT 'CREATE ROLE sonar LOGIN'
+          WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sonar') \gexec
+          ALTER ROLE sonar WITH LOGIN PASSWORD :'sonar_password';
+          SELECT 'CREATE DATABASE sonarqube OWNER sonar'
+          WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'sonarqube') \gexec
+          ALTER DATABASE sonarqube OWNER TO sonar;
+          SQL
       containers:
       - name: sonarqube
-        image: sonarqube@sha256:f709975ab31d2d08f5a3ae2dc73a31ee011afc8cf28845082c17c55d45df9df5
+        image: sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70
         ports:
         - containerPort: 9000
         env:
         - name: SONAR_JDBC_URL
-          value: "jdbc:postgresql://localhost:5432/sonarqube"
+          value: "jdbc:postgresql://postgres.infra.svc.cluster.local:5432/sonarqube"
         - name: SONAR_JDBC_USERNAME
           value: "sonar"
         - name: SONAR_JDBC_PASSWORD
@@ -133,7 +170,7 @@ spec:
             command:
               - sh
               - -c
-              - wget -qO- http://127.0.0.1:9000/api/system/status >/dev/null
+              - curl -fsS http://127.0.0.1:9000/api/system/status >/dev/null
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 60
@@ -142,7 +179,7 @@ spec:
             command:
               - sh
               - -c
-              - wget -qO- http://127.0.0.1:9000/api/system/status | grep -q '"status":"UP"'
+              - curl -fsS http://127.0.0.1:9000/api/system/status | grep -q '"status":"UP"'
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 6
@@ -151,55 +188,6 @@ spec:
             port: 9000
           periodSeconds: 30
           timeoutSeconds: 5
-          failureThreshold: 6
-      - name: db
-        image: postgres@sha256:dafc4d8e8369da730a5ee9a320a0f0b3c6aa516f41244689c4493a27dc84472d
-        env:
-        - name: POSTGRES_USER
-          value: "sonar"
-        - name: POSTGRES_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: sonarqube-db-credentials
-              key: postgresql-password
-        - name: POSTGRES_DB
-          value: "sonarqube"
-        - name: PGDATA
-          value: "/var/lib/postgresql/data/pgdata"
-        volumeMounts:
-        - name: postgres-data
-          mountPath: /var/lib/postgresql/data
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "100m"
-          limits:
-            memory: "1Gi"
-            cpu: "1"
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 999
-          runAsGroup: 999
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: ["ALL"]
-        startupProbe:
-          exec:
-            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
-          periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 60
-        readinessProbe:
-          exec:
-            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
-          periodSeconds: 10
-          timeoutSeconds: 3
-          failureThreshold: 3
-        livenessProbe:
-          exec:
-            command: ["pg_isready", "-U", "sonar", "-d", "sonarqube"]
-          periodSeconds: 30
-          timeoutSeconds: 3
           failureThreshold: 6
       volumes:
       - name: sonarqube-data
@@ -211,10 +199,6 @@ spec:
       - name: sonarqube-logs
         persistentVolumeClaim:
           claimName: sonarqube-logs
-      - name: postgres-data
-        persistentVolumeClaim:
-          claimName: postgres-data
-
 ---
 apiVersion: v1
 kind: Service

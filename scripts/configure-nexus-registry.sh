@@ -245,7 +245,6 @@ EOF
 cat > "$work_dir/npmrc" <<EOF
 registry=http://nexus.infra.svc.cluster.local:8081/repository/npm-group/
 //nexus.infra.svc.cluster.local:8081/repository/npm-group/:_auth=$npm_auth
-always-auth=true
 EOF
 jq -cn --rawfile settings_xml "$work_dir/settings.xml" --rawfile npmrc "$work_dir/npmrc" \
   '{data:{settings_xml:$settings_xml,npmrc:$npmrc}}' > "$work_dir/vault-jenkins.json"
