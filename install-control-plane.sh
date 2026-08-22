@@ -36,6 +36,10 @@ AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 K3S_NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
+TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-$DEFAULT_TAILSCALE_TAILNET}"
+TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-$DEFAULT_TAILSCALE_MESH_NAME}"
+TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-$DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS}"
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -273,6 +277,20 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
     export K3S_NODE_TRANSPORT
     if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
         [[ -x "$TAILSCALE_SCRIPT" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_SCRIPT"
+        if [[ "$AUTO_APPROVE" != "true" ]]; then
+            read -rp "$(echo -e "${YELLOW}Tailnet name/login domain ('-' uses the API token's tailnet) [$TAILSCALE_TAILNET]:${NC} ")" tailscale_answer
+            TAILSCALE_TAILNET="${tailscale_answer:-$TAILSCALE_TAILNET}"
+            read -rp "$(echo -e "${YELLOW}Unique Tailscale mesh name [$TAILSCALE_MESH_NAME]:${NC} ")" tailscale_answer
+            TAILSCALE_MESH_NAME="${tailscale_answer:-$TAILSCALE_MESH_NAME}"
+            read -rp "$(echo -e "${YELLOW}Tailscale hostname for this control plane [$TAILSCALE_NODE_HOSTNAME]:${NC} ")" tailscale_answer
+            TAILSCALE_NODE_HOSTNAME="${tailscale_answer:-$TAILSCALE_NODE_HOSTNAME}"
+            [[ "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Tailscale auth-key expiry must be a number of seconds."
+            tailscale_expiry_minutes="$((TAILSCALE_AUTH_KEY_EXPIRY_SECONDS / 60))"
+            read -rp "$(echo -e "${YELLOW}One-use node auth-key lifetime in minutes [$tailscale_expiry_minutes]:${NC} ")" tailscale_answer
+            tailscale_expiry_minutes="${tailscale_answer:-$tailscale_expiry_minutes}"
+            [[ "$tailscale_expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Tailscale auth-key lifetime must be a positive whole number of minutes."
+            TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$((tailscale_expiry_minutes * 60))"
+        fi
         if [[ -z "$TAILSCALE_API_TOKEN" ]]; then
             [[ "$AUTO_APPROVE" != "true" ]] || error "Set TAILSCALE_API_TOKEN to a personal tskey-api access token for non-interactive Tailscale setup."
             read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " TAILSCALE_API_TOKEN
@@ -281,10 +299,17 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || error "Expected a Tailscale API access token beginning with tskey-api-."
         step "Reconciling the tailnet policy and control-plane role..."
         K3S_PRIVATE_ADDRESS="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-            "$TAILSCALE_SCRIPT" --role control-plane --api-token-stdin)"
+            "$TAILSCALE_SCRIPT" --role control-plane \
+                --tailnet "$TAILSCALE_TAILNET" \
+                --mesh-name "$TAILSCALE_MESH_NAME" \
+                --hostname "$TAILSCALE_NODE_HOSTNAME" \
+                --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" \
+                --api-token-stdin)"
         K3S_PRIVATE_INTERFACE=tailscale0
         K3S_NODE_NETWORK_CIDR=100.64.0.0/10
         export K3S_PRIVATE_ADDRESS K3S_PRIVATE_INTERFACE K3S_NODE_NETWORK_CIDR
+        TAILSCALE_CONFIG_PREPARED=true
+        export TAILSCALE_TAILNET TAILSCALE_MESH_NAME TAILSCALE_NODE_HOSTNAME TAILSCALE_AUTH_KEY_EXPIRY_SECONDS TAILSCALE_CONFIG_PREPARED
     else
         if [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then

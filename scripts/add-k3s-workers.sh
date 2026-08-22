@@ -38,6 +38,11 @@ K3S_VERSION=""
 NON_INTERACTIVE=false
 TAILSCALE_API_TOKEN_STDIN=false
 TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
+TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-${DEFAULT_TAILSCALE_TAILNET:--}}"
+TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cluster}}"
+TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-${DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-3600}}"
+TAILSCALE_CONFIG_PREPARED="${TAILSCALE_CONFIG_PREPARED:-false}"
 JOIN_TOKEN=""
 LOCAL_SUDO=()
 
@@ -64,15 +69,20 @@ Options:
   --worker-ips CSV          vRack/private RFC1918 addresses of workers
   --worker-hosts CSV        Tailscale bootstrap SSH hosts/IPs (one or more)
   --server-url URL          K3s URL using this control plane's private IPv4
-  --ssh-user USER           Common SSH user (default: current user)
-  --ssh-port PORT           Common SSH port (default: 22)
-  --identity-file PATH      SSH private key (default: SSH agent/config)
+  --ssh-user USER           Default SSH user (each server can override it)
+  --ssh-port PORT           Default SSH port (each server can override it)
+  --identity-file PATH      Default private key (each server can override it)
   --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
   --tailscale-api-token-stdin
                             Read a personal tskey-api access token from stdin
+  --tailscale-tailnet NAME  Tailnet name; "-" uses the token's tailnet
+  --tailscale-mesh NAME     Unique mesh name used to isolate policy tags
+  --tailscale-hostname NAME Tailscale hostname for this control plane
+  --tailscale-key-expiry SEC
+                            One-use node auth-key validity in seconds
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-worker-hardening   Deprecated no-op; the local-worker firewall is always enforced
   --non-interactive         Fail instead of prompting; implied by either worker list
@@ -117,6 +127,14 @@ while [[ $# -gt 0 ]]; do
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
         --tailscale-api-token-stdin) TAILSCALE_API_TOKEN_STDIN=true ;;
+        --tailscale-tailnet) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-tailnet"; TAILSCALE_TAILNET="$1" ;;
+        --tailscale-tailnet=*) TAILSCALE_TAILNET="${1#*=}" ;;
+        --tailscale-mesh) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-mesh"; TAILSCALE_MESH_NAME="$1" ;;
+        --tailscale-mesh=*) TAILSCALE_MESH_NAME="${1#*=}" ;;
+        --tailscale-hostname) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-hostname"; TAILSCALE_NODE_HOSTNAME="$1" ;;
+        --tailscale-hostname=*) TAILSCALE_NODE_HOSTNAME="${1#*=}" ;;
+        --tailscale-key-expiry) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-key-expiry"; TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$1" ;;
+        --tailscale-key-expiry=*) TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${1#*=}" ;;
         --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --harden-workers)   error "Internet-facing workers are forbidden; worker hardening is always local-only" ;;
@@ -187,6 +205,16 @@ detect_private_ip() {
 
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    if [[ "$NON_INTERACTIVE" != "true" && "$TAILSCALE_CONFIG_PREPARED" != "true" ]]; then
+        prompt TAILSCALE_TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILSCALE_TAILNET"
+        prompt TAILSCALE_MESH_NAME "Unique Tailscale mesh/cluster name" "$TAILSCALE_MESH_NAME"
+        prompt TAILSCALE_NODE_HOSTNAME "Tailscale hostname for this control plane" "$TAILSCALE_NODE_HOSTNAME"
+        [[ "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Auth-key expiry must be a number of seconds."
+        tailscale_expiry_minutes="$((TAILSCALE_AUTH_KEY_EXPIRY_SECONDS / 60))"
+        prompt tailscale_expiry_minutes "One-use node auth-key lifetime in minutes" "$tailscale_expiry_minutes"
+        [[ "$tailscale_expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Auth-key lifetime must be a positive whole number of minutes."
+        TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$((tailscale_expiry_minutes * 60))"
+    fi
     if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
         IFS= read -r TAILSCALE_API_TOKEN || error "Could not read the Tailscale API access token from stdin."
     elif [[ -z "$TAILSCALE_API_TOKEN" ]]; then
@@ -198,7 +226,12 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
         error "Expected a Tailscale API access token beginning with tskey-api-."
     info "Reconciling the tailnet policy and control-plane role."
     default_ip="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-        "$TAILSCALE_CONFIGURATOR" --role control-plane --api-token-stdin)"
+        "$TAILSCALE_CONFIGURATOR" --role control-plane \
+            --tailnet "$TAILSCALE_TAILNET" \
+            --mesh-name "$TAILSCALE_MESH_NAME" \
+            --hostname "$TAILSCALE_NODE_HOSTNAME" \
+            --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" \
+            --api-token-stdin)"
     NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
 else
     default_ip="$(detect_private_ip || true)"
@@ -314,12 +347,17 @@ if command -v ufw >/dev/null 2>&1 && "${LOCAL_SUDO[@]}" ufw status | grep -q '^S
     "${LOCAL_SUDO[@]}" ufw reload >/dev/null
 fi
 
-ssh_options=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p "$SSH_PORT")
-scp_options=(-q -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -P "$SSH_PORT")
-if [[ -n "$IDENTITY_FILE" ]]; then
-    ssh_options+=(-i "$IDENTITY_FILE")
-    scp_options+=(-i "$IDENTITY_FILE")
-fi
+configure_ssh_options() {
+    [[ "$SSH_PORT" =~ ^[0-9]+$ && "$SSH_PORT" -ge 1 && "$SSH_PORT" -le 65535 ]] || error "Invalid SSH port: $SSH_PORT"
+    [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
+    ssh_options=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p "$SSH_PORT")
+    scp_options=(-q -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -P "$SSH_PORT")
+    if [[ -n "$IDENTITY_FILE" ]]; then
+        ssh_options+=(-i "$IDENTITY_FILE")
+        scp_options+=(-i "$IDENTITY_FILE")
+    fi
+}
+configure_ssh_options
 
 build_target() {
     local host="$1"
@@ -340,13 +378,20 @@ check_bootstrap_target() {
 }
 
 provision_tailscale_target() {
-    local bootstrap_target="$1" remote_dir remote_script quoted_dir quoted_script node_auth_key worker_ip
+    local bootstrap_target="$1" requested_hostname="${2:-}" remote_dir remote_script quoted_dir quoted_script node_auth_key worker_ip detected_hostname
     local tagged_target="" reachable=false
 
-    info "Checking bootstrap SSH access to $bootstrap_target..."
-    check_bootstrap_target "$bootstrap_target"
-    TAILSCALE_NODE_NAME="$(remote_hostname "$bootstrap_target")"
+    if [[ -z "$requested_hostname" ]]; then
+        info "Checking bootstrap SSH access to $bootstrap_target..."
+        check_bootstrap_target "$bootstrap_target"
+        detected_hostname="$(remote_hostname "$bootstrap_target")"
+        TAILSCALE_NODE_NAME="$detected_hostname"
+    else
+        TAILSCALE_NODE_NAME="$requested_hostname"
+    fi
     [[ -n "$TAILSCALE_NODE_NAME" ]] || error "Could not determine the hostname of $bootstrap_target."
+    [[ "$TAILSCALE_NODE_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
+        error "Invalid Tailscale hostname '$TAILSCALE_NODE_NAME'; use lower-case letters, numbers, and hyphens."
 
     remote_dir="$(ssh "${ssh_options[@]}" "$bootstrap_target" 'mktemp -d /tmp/bm-cluster-tailscale.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-tailscale.* ]] || error "Could not create a safe Tailscale bootstrap directory on $bootstrap_target."
@@ -356,13 +401,16 @@ provision_tailscale_target() {
     remote_script="$remote_dir/configure-tailscale.sh"
     printf -v quoted_script '%q' "$remote_script"
 
-    info "Creating a one-use, one-hour Tailscale worker key for $TAILSCALE_NODE_NAME."
+    info "Creating a one-use Tailscale worker key for $TAILSCALE_NODE_NAME."
     node_auth_key="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-        "$TAILSCALE_CONFIGURATOR" --role worker --create-auth-key --api-token-stdin)"
+        "$TAILSCALE_CONFIGURATOR" --role worker \
+            --tailnet "$TAILSCALE_TAILNET" --mesh-name "$TAILSCALE_MESH_NAME" \
+            --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" \
+            --create-auth-key --api-token-stdin)"
     [[ "$node_auth_key" =~ ^tskey-auth-[A-Za-z0-9_-]+$ ]] || error "Could not create a Tailscale worker auth key."
     info "Installing and connecting Tailscale on $bootstrap_target."
     if ! worker_ip="$(printf '%s\n' "$node_auth_key" | ssh "${ssh_options[@]}" "$bootstrap_target" \
-        "chmod 700 $quoted_script && $quoted_script --role worker --hostname $(printf '%q' "$TAILSCALE_NODE_NAME") --auth-key-stdin")"; then
+        "chmod 700 $quoted_script && $quoted_script --role worker --tailnet $(printf '%q' "$TAILSCALE_TAILNET") --mesh-name $(printf '%q' "$TAILSCALE_MESH_NAME") --hostname $(printf '%q' "$TAILSCALE_NODE_NAME") --auth-key-stdin")"; then
         node_auth_key=""
         ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
         error "Tailscale provisioning failed on $bootstrap_target."
@@ -371,7 +419,9 @@ provision_tailscale_target() {
     worker_ip="$(awk 'NF {value=$0} END {print value}' <<< "$worker_ip")"
     tailscale_ipv4 "$worker_ip" || error "The worker did not return a valid Tailscale IPv4 address: ${worker_ip:-none}"
     printf '%s\n' "$TAILSCALE_API_TOKEN" | \
-        "$TAILSCALE_CONFIGURATOR" --role worker --tag-ip "$worker_ip" --api-token-stdin >/dev/null
+        "$TAILSCALE_CONFIGURATOR" --role worker \
+            --tailnet "$TAILSCALE_TAILNET" --mesh-name "$TAILSCALE_MESH_NAME" \
+            --tag-ip "$worker_ip" --api-token-stdin >/dev/null
     ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
 
     "${LOCAL_SUDO[@]}" tailscale ping --c=3 --timeout=5s "$worker_ip" >/dev/null || \
@@ -486,6 +536,10 @@ install_worker() {
     kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb- >/dev/null 2>&1 || true
 }
 
+DEFAULT_WORKER_SSH_USER="$SSH_USER"
+DEFAULT_WORKER_SSH_PORT="$SSH_PORT"
+DEFAULT_WORKER_IDENTITY_FILE="$IDENTITY_FILE"
+
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
     if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
         IFS=',' read -r -a hosts <<< "$WORKER_HOSTS"
@@ -520,10 +574,26 @@ else
         printf '\nWorker %d of %d\n' "$index" "$worker_count"
         worker_host=""
         if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
-            prompt worker_host "Worker bootstrap SSH host or IP (used only until Tailscale is ready)"
+            worker_ssh_user="$DEFAULT_WORKER_SSH_USER"
+            worker_ssh_port="$DEFAULT_WORKER_SSH_PORT"
+            worker_identity_file="$DEFAULT_WORKER_IDENTITY_FILE"
+            prompt worker_host "Existing server IP or DNS name reachable over SSH (bootstrap only)"
             [[ -n "$worker_host" ]] || error "A worker bootstrap SSH host is required."
+            prompt worker_ssh_user "SSH user for this server" "$worker_ssh_user"
+            prompt worker_ssh_port "SSH port for this server" "$worker_ssh_port"
+            prompt worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
+            [[ "$worker_identity_file" != "-" ]] || worker_identity_file=""
+            SSH_USER="$worker_ssh_user"
+            SSH_PORT="$worker_ssh_port"
+            IDENTITY_FILE="$worker_identity_file"
+            configure_ssh_options
             bootstrap_target="$(build_target "$worker_host")"
-            provision_tailscale_target "$bootstrap_target"
+            info "Checking bootstrap SSH access to $bootstrap_target..."
+            check_bootstrap_target "$bootstrap_target"
+            detected_tailscale_name="$(remote_hostname "$bootstrap_target")"
+            requested_tailscale_name=""
+            prompt requested_tailscale_name "Tailscale hostname for this server" "$detected_tailscale_name"
+            provision_tailscale_target "$bootstrap_target" "$requested_tailscale_name"
             target="$TAILSCALE_TARGET"
             worker_host="$TAILSCALE_WORKER_IP"
             detected_name="$TAILSCALE_NODE_NAME"

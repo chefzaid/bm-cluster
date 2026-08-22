@@ -21,6 +21,15 @@ REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
+if [[ -r "$PLATFORM_CONFIG" ]]; then
+    # shellcheck source=../config/platform.env
+    source "$PLATFORM_CONFIG"
+fi
+TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-${DEFAULT_TAILSCALE_TAILNET:--}}"
+TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cluster}}"
+TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-${DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-3600}}"
 NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
 if [[ ! -r "$NETWORK_LIBRARY" ]]; then
     echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
@@ -67,6 +76,11 @@ Options:
   --transport MODE          Private transport: vrack or tailscale
   --tailscale-api-token-stdin
                             Read a tskey-api access token from stdin and automate Tailscale
+  --tailscale-tailnet NAME  Tailnet name; "-" uses the token's tailnet
+  --tailscale-mesh NAME     Unique mesh name used to isolate policy tags
+  --tailscale-hostname NAME Tailscale hostname for this worker
+  --tailscale-key-expiry SEC
+                            One-use node auth-key validity in seconds
   --tailscale-ready         Tailscale was already provisioned by the control plane
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-security-hardening Deprecated no-op; the local-worker firewall is always enforced
@@ -107,6 +121,14 @@ while [[ $# -gt 0 ]]; do
         --transport)        shift; [[ $# -gt 0 ]] || error "Missing value for --transport"; NODE_TRANSPORT="$1" ;;
         --transport=*)      NODE_TRANSPORT="${1#*=}" ;;
         --tailscale-api-token-stdin) TAILSCALE_API_TOKEN_STDIN=true ;;
+        --tailscale-tailnet) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-tailnet"; TAILSCALE_TAILNET="$1" ;;
+        --tailscale-tailnet=*) TAILSCALE_TAILNET="${1#*=}" ;;
+        --tailscale-mesh) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-mesh"; TAILSCALE_MESH_NAME="$1" ;;
+        --tailscale-mesh=*) TAILSCALE_MESH_NAME="${1#*=}" ;;
+        --tailscale-hostname) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-hostname"; TAILSCALE_NODE_HOSTNAME="$1" ;;
+        --tailscale-hostname=*) TAILSCALE_NODE_HOSTNAME="${1#*=}" ;;
+        --tailscale-key-expiry) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-key-expiry"; TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$1" ;;
+        --tailscale-key-expiry=*) TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${1#*=}" ;;
         --tailscale-ready)  TAILSCALE_READY=true ;;
         --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
@@ -200,7 +222,13 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
     if [[ "$TAILSCALE_READY" != "true" ]]; then
         [[ "$TOKEN_STDIN" != "true" || "$TAILSCALE_API_TOKEN_STDIN" != "true" ]] || \
             error "K3s and Tailscale tokens cannot both use stdin; provision Tailscale first or use TAILSCALE_API_TOKEN."
-        tailscale_args=(--role worker)
+        tailscale_args=(
+            --role worker
+            --tailnet "$TAILSCALE_TAILNET"
+            --mesh-name "$TAILSCALE_MESH_NAME"
+            --hostname "$TAILSCALE_NODE_HOSTNAME"
+            --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS"
+        )
         if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
             tailscale_args+=(--api-token-stdin)
         fi

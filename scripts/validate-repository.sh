@@ -123,6 +123,17 @@ else
     pass "contract inventories are complete and unique"
 fi
 
+if [[ "${DEFAULT_TAILSCALE_MESH_NAME:-}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] &&
+   [[ ${#DEFAULT_TAILSCALE_MESH_NAME} -le 32 ]] &&
+   [[ "${DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-}" =~ ^[0-9]+$ ]] &&
+   (( DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS >= 60 && DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS <= 7776000 )) &&
+   [[ -x "$REPOSITORY_ROOT/scripts/configure-tailscale-fleet.sh" ]] &&
+   ! grep -Eq '^DEFAULT_TAILSCALE_(CONTROL_PLANE|WORKER)_TAG=' "$PLATFORM_CONFIG"; then
+    pass "Tailscale contract is mesh-scoped and provider-neutral"
+else
+    fail "Tailscale contract is mesh-scoped and provider-neutral"
+fi
+
 if grep -Eq 'CHART_VERSION="\$\{[^}]+:-[0-9]|K3S_INSTALL_VERSION="\$\{[^}]+:-v[0-9]' "$REPOSITORY_ROOT/install-control-plane.sh" ||
    grep -Eq '^\s+[a-z_]+_(chart_version|image_tag):\s+"?[v0-9]' "$REPOSITORY_ROOT/ansible/deploy.yml"; then
     fail "installers do not embed release defaults outside the contract"

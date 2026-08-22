@@ -1,11 +1,15 @@
 #!/bin/bash
-# Reconcile the bm-cluster tailnet policy and provision a tagged Tailscale node.
+# Reconcile one named K3s mesh in a tailnet and provision a tagged node.
 set -euo pipefail
 # Never inherit tracing into credential handling.
 set +x
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${1:-}" == "--fleet" ]]; then
+    shift
+    exec "$SCRIPT_DIR/configure-tailscale-fleet.sh" "$@"
+fi
 PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
 if [[ -r "$PLATFORM_CONFIG" ]]; then
     # shellcheck source=../config/platform.env
@@ -13,8 +17,9 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
 fi
 
 TAILNET="${TAILSCALE_TAILNET:-${DEFAULT_TAILSCALE_TAILNET:--}}"
-CONTROL_PLANE_TAG="${TAILSCALE_CONTROL_PLANE_TAG:-${DEFAULT_TAILSCALE_CONTROL_PLANE_TAG:-tag:bm-k3s-control-plane}}"
-WORKER_TAG="${TAILSCALE_WORKER_TAG:-${DEFAULT_TAILSCALE_WORKER_TAG:-tag:bm-k3s-worker}}"
+MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cluster}}"
+CONTROL_PLANE_TAG="${TAILSCALE_CONTROL_PLANE_TAG:-}"
+WORKER_TAG="${TAILSCALE_WORKER_TAG:-}"
 AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-${DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-3600}}"
 ROLE=""
 MODE="ensure-node"
@@ -46,11 +51,14 @@ trap cleanup EXIT HUP INT TERM
 
 usage() {
     cat <<'EOF'
-Configure Tailscale for the bm-cluster private node network.
+Configure Tailscale for a named, provider-neutral K3s private network.
 
 Interactive node setup:
   scripts/configure-tailscale.sh --role control-plane
   scripts/configure-tailscale.sh --role worker
+
+Interactive cross-provider fleet setup (asks for every server endpoint):
+  scripts/configure-tailscale.sh --fleet
 
 The prompt requires a personal Tailscale API access token beginning with
 "tskey-api-". Generate it in Tailscale Admin Console -> Settings -> Keys ->
@@ -58,9 +66,12 @@ Generate access token. Use an Owner, Admin, or Network admin because the script
 manages policy and device tags. Input is hidden and the token is never persisted.
 
 Options:
+  --fleet                  Provision an inventory of SSH-reachable servers
   --role ROLE              control-plane or worker
   --tailnet NAME           Tailnet name; "-" uses the API token's tailnet
+  --mesh-name NAME         Unique lower-case name used to isolate role tags
   --hostname NAME          Tailscale hostname (default: short system hostname)
+  --auth-key-expiry SEC    One-use node-key validity (60 seconds to 90 days)
   --api-token-stdin        Read the Tailscale API access token from stdin
   --auth-key-stdin         Node-only setup using a one-use tskey-auth key on stdin
   --create-auth-key        Reconcile policy and print one tagged auth key to stdout
@@ -79,6 +90,16 @@ normalize_role() {
         worker|agent) printf 'worker\n' ;;
         *) return 1 ;;
     esac
+}
+
+valid_mesh_name() {
+    [[ ${#1} -le 32 && "$1" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]
+}
+
+prompt_value() {
+    local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
+    read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
+    printf -v "$variable_name" '%s' "${answer:-$default_value}"
 }
 
 tailscale_ipv4() {
@@ -102,8 +123,12 @@ while [[ $# -gt 0 ]]; do
         --role=*) ROLE="${1#*=}" ;;
         --tailnet) shift; [[ $# -gt 0 ]] || error "Missing value for --tailnet"; TAILNET="$1" ;;
         --tailnet=*) TAILNET="${1#*=}" ;;
+        --mesh-name) shift; [[ $# -gt 0 ]] || error "Missing value for --mesh-name"; MESH_NAME="$1" ;;
+        --mesh-name=*) MESH_NAME="${1#*=}" ;;
         --hostname) shift; [[ $# -gt 0 ]] || error "Missing value for --hostname"; NODE_HOSTNAME="$1" ;;
         --hostname=*) NODE_HOSTNAME="${1#*=}" ;;
+        --auth-key-expiry) shift; [[ $# -gt 0 ]] || error "Missing value for --auth-key-expiry"; AUTH_KEY_EXPIRY_SECONDS="$1" ;;
+        --auth-key-expiry=*) AUTH_KEY_EXPIRY_SECONDS="${1#*=}" ;;
         --api-token-stdin) API_TOKEN_STDIN=true ;;
         --auth-key-stdin) AUTH_KEY_STDIN=true ;;
         --create-auth-key) MODE="create-auth-key" ;;
@@ -116,9 +141,31 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+if [[ -z "$ROLE" && "$NON_INTERACTIVE" != "true" ]]; then
+    prompt_value ROLE "Node role (control-plane or worker)" "worker"
+fi
 [[ -n "$ROLE" ]] || error "--role is required."
 ROLE="$(normalize_role "$ROLE")" || error "Role must be control-plane or worker."
+
+# A direct interactive run gathers the complete mesh identity. Parent
+# installers pass these values explicitly so piped credentials are never mixed
+# with prompts.
+if [[ -z "$API_TOKEN" && -z "$AUTH_KEY" && "$API_TOKEN_STDIN" != "true" && "$AUTH_KEY_STDIN" != "true" && "$NON_INTERACTIVE" != "true" ]]; then
+    prompt_value TAILNET "Tailnet name or login domain ('-' means this token's tailnet)" "$TAILNET"
+    prompt_value MESH_NAME "Unique mesh/cluster name (isolates this cluster's policy tags)" "$MESH_NAME"
+    if [[ "$MODE" == "ensure-node" ]]; then
+        prompt_value NODE_HOSTNAME "Tailscale hostname for this server" "${NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+    fi
+    [[ "$AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || error "Auth-key expiry must be a number of seconds."
+    expiry_minutes="$((AUTH_KEY_EXPIRY_SECONDS / 60))"
+    prompt_value expiry_minutes "One-use node auth-key lifetime in minutes" "$expiry_minutes"
+    [[ "$expiry_minutes" =~ ^[1-9][0-9]*$ ]] || error "Auth-key lifetime must be a positive whole number of minutes."
+    AUTH_KEY_EXPIRY_SECONDS="$((expiry_minutes * 60))"
+fi
 [[ "$TAILNET" =~ ^[-A-Za-z0-9@._]+$ ]] || error "Invalid tailnet name: $TAILNET"
+valid_mesh_name "$MESH_NAME" || error "Mesh name must be 1-32 lower-case letters, numbers, or hyphens."
+CONTROL_PLANE_TAG="${CONTROL_PLANE_TAG:-tag:${MESH_NAME}-control-plane}"
+WORKER_TAG="${WORKER_TAG:-tag:${MESH_NAME}-worker}"
 [[ "$CONTROL_PLANE_TAG" =~ ^tag:[a-z0-9][a-z0-9-]*$ ]] || error "Invalid control-plane tag: $CONTROL_PLANE_TAG"
 [[ "$WORKER_TAG" =~ ^tag:[a-z0-9][a-z0-9-]*$ ]] || error "Invalid worker tag: $WORKER_TAG"
 [[ "$CONTROL_PLANE_TAG" != "$WORKER_TAG" ]] || error "Control-plane and worker tags must differ."
@@ -251,7 +298,7 @@ reconcile_policy() {
     ' "$current" > "$merged"
 
     if cmp -s <(jq -S . "$current") <(jq -S . "$merged"); then
-        info "Tailscale policy and bm-cluster role tags are already current."
+        info "Tailscale policy and $MESH_NAME role tags are already current."
         return 0
     fi
 
@@ -273,7 +320,7 @@ reconcile_policy() {
 create_auth_key() {
     local tag payload="$TEMP_DIR/auth-key-request.json" body="$TEMP_DIR/auth-key-response.json" headers="$TEMP_DIR/auth-key.headers" key
     tag="$(role_tag)"
-    jq -n --arg tag "$tag" --arg description "bm cluster $ROLE" --argjson expiry "$AUTH_KEY_EXPIRY_SECONDS" '{
+    jq -n --arg tag "$tag" --arg description "$MESH_NAME $ROLE" --argjson expiry "$AUTH_KEY_EXPIRY_SECONDS" '{
         capabilities:{devices:{create:{reusable:false,ephemeral:false,preauthorized:true,tags:[$tag]}}},
         expirySeconds:$expiry,
         description:$description
@@ -336,7 +383,9 @@ ensure_local_node() {
             --timeout=60s >/dev/null
         AUTH_KEY=""
     else
-        "${SUDO[@]}" tailscale set --ssh=false --netfilter-mode=nodivert >/dev/null
+        set_args=(--ssh=false --netfilter-mode=nodivert)
+        [[ -z "$NODE_HOSTNAME" ]] || set_args+=(--hostname="$NODE_HOSTNAME")
+        "${SUDO[@]}" tailscale set "${set_args[@]}" >/dev/null
     fi
     local_ip="$("${SUDO[@]}" tailscale ip -4 | head -n 1)"
     tailscale_ipv4 "$local_ip" || error "Tailscale did not assign an IPv4 address."

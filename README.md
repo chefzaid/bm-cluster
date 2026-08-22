@@ -126,7 +126,8 @@ worker vRack IP and validates them before changing K3s or UFW.
 
 #### Tailscale — cross-provider alternative
 
-Use Tailscale when nodes span providers. The only account preparation is:
+Use Tailscale when nodes span providers, regions, or unrelated private
+networks. The only account preparation is:
 
 1. Create or sign in to a tailnet.
 2. Open [Tailscale Admin Console → Settings → Keys](https://login.tailscale.com/admin/settings/keys)
@@ -135,19 +136,37 @@ Use Tailscale when nodes span providers. The only account preparation is:
    Owner/Admin/Network-admin account, choose a short expiry, and revoke
    the access token after provisioning if it is no longer needed.
 3. Run `./install-control-plane.sh` or `./install-worker.sh`, select Tailscale,
-   and paste the access token into the hidden prompt.
+   and follow the inventory prompts.
 
 No manual Tailscale node, tag, policy, auth-key, address, or firewall setup is
 required. The automation installs Tailscale, validates and ETag-merges the
-current account policy, creates separate control-plane/worker tags and
-least-privilege grants, replaces only an untouched default allow-all policy,
-and preserves unrelated existing policy. It creates a one-use, pre-approved,
-one-hour tagged key per node, disables node-key expiry for the resulting tagged
-servers, removes its temporary secret material, disables Tailscale SSH, selects
-`nodivert` so UFW remains authoritative, and configures `100.64.0.0/10` as the
-node network. In control-plane mode, enter each worker's
-temporary SSH hostname/IP; enrollment switches to its Tailscale IP as soon as
-the overlay is ready.
+current account policy, derives separate control-plane/worker tags from the
+chosen mesh name, creates least-privilege grants, replaces only an untouched
+default allow-all policy, and preserves unrelated existing policy. It creates a
+one-use, pre-approved,
+short-lived tagged key per node, disables node-key expiry for the resulting
+tagged servers, removes its temporary secret material, disables Tailscale SSH,
+selects `nodivert` so UFW remains authoritative, and configures
+`100.64.0.0/10` as the node network.
+
+The assistant asks for the tailnet, a unique mesh/cluster name, control-plane
+Tailscale hostname, one-use key lifetime, and API token. It then asks how many
+servers to enroll and collects each server's existing SSH IP/DNS name, SSH
+user, port, private key, desired Tailscale hostname, and Kubernetes settings
+independently. Providers do not need to match. The existing address is only a
+temporary bootstrap route; Tailscale assigns the persistent overlay IP used by
+K3s after enrollment. No list of public peer IPs is placed in tailnet policy.
+
+To provision only the provider-neutral Tailscale mesh (without installing K3s
+workers), run:
+
+```bash
+./scripts/configure-tailscale.sh --fleet
+```
+
+This fleet assistant gathers the same per-server inventory, accepts
+control-plane or worker roles, configures every SSH-reachable Debian/Ubuntu
+server, and prints the resulting Tailscale IP map.
 
 To add workers later, run the unified worker assistant from either the control
 plane or the new worker:
@@ -186,10 +205,12 @@ K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 Optional settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
 `K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`.
 Non-interactive Tailscale enrollment uses `K3S_NODE_TRANSPORT=tailscale`,
-`K3S_WORKER_HOSTS`, and a transient `TAILSCALE_API_TOKEN`; interactive hidden
-input is preferred. New metrics/logging DaemonSets automatically run on eligible
-workers. Ingress remains pinned to the control plane, and Longhorn's default for
-new volumes follows the Ready-node count, capped at three.
+`K3S_WORKER_HOSTS`, `TAILSCALE_TAILNET`, `TAILSCALE_MESH_NAME`, and a transient
+`TAILSCALE_API_TOKEN`; common SSH defaults remain available through the worker
+variables above. Interactive hidden input is preferred when servers have
+different SSH settings. New metrics/logging DaemonSets automatically run on
+eligible workers. Ingress remains pinned to the control plane, and Longhorn's
+default for new volumes follows the Ready-node count, capped at three.
 
 ## Host security policy
 
@@ -327,7 +348,7 @@ Ansible, YAML, immutable image references, and hostname inventories:
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
-| `scripts/configure-tailscale.sh` | Tailnet policy, role tags, one-use keys, and node reconciliation |
+| `scripts/configure-tailscale.sh` | Provider-neutral tailnet policy, fleet inventory, role tags, one-use keys, and node reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
