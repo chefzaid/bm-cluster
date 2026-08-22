@@ -89,7 +89,7 @@ normalize_server_exposure() {
     esac
 }
 
-is_rfc1918_ipv4() {
+is_cluster_private_ipv4() {
     local ip="$1" octet a b
     local -a octets
     [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
@@ -101,7 +101,8 @@ is_rfc1918_ipv4() {
     b=$((10#${octets[1]}))
     (( a == 10 )) ||
         (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 ))
+        (( a == 192 && b == 168 )) ||
+        (( a == 100 && b >= 64 && b <= 127 ))
 }
 
 ask_server_exposure() {
@@ -214,15 +215,15 @@ else
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
     if [[ "$AUTO_APPROVE" == "true" ]]; then
-        error "K3S_PRIVATE_ADDRESS is required with workers and must be this control plane's RFC1918 local IPv4 address."
+        error "K3S_PRIVATE_ADDRESS is required with workers and must be this control plane's vRack/LAN or Tailscale IPv4 address."
     fi
-    read -rp "$(echo -e "${YELLOW}Control-plane local RFC1918 IPv4 address:${NC} ")" K3S_PRIVATE_ADDRESS
-    [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane local IPv4 address is required when adding workers."
+    read -rp "$(echo -e "${YELLOW}Control-plane private IPv4 (vRack/LAN or Tailscale):${NC} ")" K3S_PRIVATE_ADDRESS
+    [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane private IPv4 address is required when adding workers."
     export K3S_PRIVATE_ADDRESS
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
-    is_rfc1918_ipv4 "$K3S_PRIVATE_ADDRESS" || \
-        error "K3S_PRIVATE_ADDRESS must be this control plane's RFC1918 local IPv4 address."
+    is_cluster_private_ipv4 "$K3S_PRIVATE_ADDRESS" || \
+        error "K3S_PRIVATE_ADDRESS must be this control plane's RFC1918 or Tailscale IPv4 address."
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
     if [[ "$AUTO_APPROVE" == "true" ]]; then

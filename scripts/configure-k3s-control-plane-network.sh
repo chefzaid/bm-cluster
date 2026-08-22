@@ -19,15 +19,16 @@ Usage:
   configure-k3s-control-plane-network.sh [options]
 
 Options:
-  --private-ip IP          RFC1918 IPv4 used by cluster nodes
+  --private-ip IP          RFC1918 or Tailscale IPv4 used by cluster nodes
   --private-interface DEV  Interface that owns the private IP
   --public-ip IP           Public IPv4 advertised as the node ExternalIP
   --restart                Restart K3s after writing the drop-in
   -h, --help               Show this help
 
-Values are automatically detected when omitted. Only RFC1918 addresses on real
-local interfaces are accepted; no overlay network is assumed. The managed K3s
-drop-in sets node-ip, node-external-ip (when public), tls-san, and flannel-iface.
+Values are automatically detected when omitted. A provider/LAN RFC1918 address
+is preferred; Tailscale is used only as a fallback when it is already installed
+and connected. The managed K3s drop-in sets node-ip, node-external-ip (when
+public), tls-san, and flannel-iface.
 EOF
 }
 
@@ -63,7 +64,16 @@ trusted_private_ipv4() {
     a=$((10#$a)); b=$((10#$b))
     (( a == 10 )) ||
         (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 ))
+        (( a == 192 && b == 168 )) ||
+        (( a == 100 && b >= 64 && b <= 127 ))
+}
+
+tailscale_ipv4() {
+    local ip="$1" a b _
+    valid_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    (( a == 100 && b >= 64 && b <= 127 ))
 }
 
 detect_default_route_value() {
@@ -81,7 +91,7 @@ fi
 
 if [[ -z "$PRIVATE_IP" ]]; then
     while read -r interface address; do
-        [[ "$interface" =~ ^(lo|docker|br-|cni|flannel|veth) ]] && continue
+        [[ "$interface" =~ ^(lo|docker|br-|cni|flannel|veth|tailscale) ]] && continue
         address="${address%/*}"
         if trusted_private_ipv4 "$address"; then
             PRIVATE_IP="$address"
@@ -91,16 +101,26 @@ if [[ -z "$PRIVATE_IP" ]]; then
     done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
 fi
 
+if [[ -z "$PRIVATE_IP" ]] && ip -4 address show dev tailscale0 >/dev/null 2>&1; then
+    PRIVATE_IP="$(ip -4 -o address show dev tailscale0 scope global | awk 'NR==1 {sub(/\/.*/, "", $4); print $4}')"
+    PRIVATE_INTERFACE=tailscale0
+fi
+
 trusted_private_ipv4 "$PRIVATE_IP" || \
-    error "No RFC1918 control-plane address was found. Configure the local network or provide --private-ip."
+    error "No RFC1918 or Tailscale control-plane address was found. Configure the private network or provide --private-ip."
 
 if [[ -z "$PRIVATE_INTERFACE" ]]; then
     PRIVATE_INTERFACE="$(ip -4 -o address show | awk -v ip="$PRIVATE_IP" \
         '{split($4, parts, "/")} parts[1] == ip {print $2; exit}')"
 fi
 [[ -n "$PRIVATE_INTERFACE" ]] || error "Could not determine the interface for $PRIVATE_IP"
-[[ ! "$PRIVATE_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
-    error "$PRIVATE_IP belongs to virtual interface $PRIVATE_INTERFACE, not the real local node network"
+[[ "$PRIVATE_INTERFACE" == "tailscale0" ]] || [[ ! "$PRIVATE_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
+    error "$PRIVATE_IP belongs to unsupported virtual interface $PRIVATE_INTERFACE"
+if [[ "$PRIVATE_INTERFACE" == "tailscale0" ]]; then
+    tailscale_ipv4 "$PRIVATE_IP" || error "tailscale0 must use an address from 100.64.0.0/10"
+    command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed"
+    tailscale status >/dev/null 2>&1 || error "Tailscale is not connected"
+fi
 ip -4 -o address show dev "$PRIVATE_INTERFACE" | awk '{print $4}' | grep -Fq "$PRIVATE_IP/" || \
     error "$PRIVATE_IP is not assigned to interface $PRIVATE_INTERFACE"
 

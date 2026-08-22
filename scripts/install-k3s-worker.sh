@@ -45,10 +45,10 @@ Options:
   --server-url URL          K3s server URL; https:// and :6443 are added if omitted
   --token-stdin             Read the K3s join token as one line from standard input
   --node-name NAME          Unique Kubernetes node name (default: short hostname)
-  --node-ip IP              This worker's RFC1918 local IPv4 address
+  --node-ip IP              This worker's RFC1918 or Tailscale IPv4 address
   --labels CSV              Initial Kubernetes node labels (key=value,key=value)
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
-  --node-network-cidr CIDR  RFC1918 network shared by cluster nodes
+  --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
   --control-plane-ip IP     Exact private control-plane source allowed to SSH here
   --k3s-version VERSION     Install the exact server version, for example v1.36.3+k3s1
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
@@ -61,11 +61,10 @@ Run one of these commands on the control-plane node to obtain a join token:
   sudo cat /var/lib/rancher/k3s/server/node-token
   sudo k3s token create --ttl 1h --description worker-join
 
-Workers are local-only. The installer asks for and validates the worker's real
-RFC1918 local IP, rejects public/global interfaces and a public K3s server URL,
-and configures UFW so SSH is accepted only from the exact local control-plane
-address. No overlay network is installed or assumed. Outbound traffic remains
-enabled for updates, image pulls, and workloads.
+Workers are private-only. The installer asks for and validates the worker's
+RFC1918 provider/LAN IP or existing Tailscale IP, rejects public interfaces and
+a public K3s URL, and configures UFW so SSH is accepted only from the exact
+control-plane address. Outbound traffic remains enabled for updates and images.
 EOF
 }
 
@@ -136,7 +135,16 @@ trusted_private_ipv4() {
     a=$((10#$a)); b=$((10#$b))
     (( a == 10 )) ||
         (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 ))
+        (( a == 192 && b == 168 )) ||
+        (( a == 100 && b >= 64 && b <= 127 ))
+}
+
+tailscale_ipv4() {
+    local ip="$1" a b _
+    valid_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    (( a == 100 && b >= 64 && b <= 127 ))
 }
 
 trusted_private_cidr() {
@@ -152,7 +160,7 @@ trusted_private_cidr() {
     if (( a == 10 )); then (( prefix >= 8 ))
     elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
     elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
-    else return 1
+    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
     fi
 }
 
@@ -199,7 +207,8 @@ reject_public_ip_interfaces() {
 
     while read -r interface address; do
         address="${address%/*}"
-        error "Interface $interface has globally scoped IPv6 address $address. Workers in this topology use RFC1918 IPv4 only."
+        [[ "${address,,}" =~ ^f[cd] ]] || \
+            error "Interface $interface has public IPv6 address $address. This machine cannot be enrolled as a worker."
     done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
 }
 
@@ -225,20 +234,20 @@ if [[ "$TOKEN_STDIN" == "true" ]]; then
 fi
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    [[ -n "$SERVER_URL" ]] || prompt SERVER_URL "Control-plane local IPv4 address or K3s URL"
+    [[ -n "$SERVER_URL" ]] || prompt SERVER_URL "Control-plane private IPv4 address or K3s URL"
     SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
     SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
-        error "Use the control plane's RFC1918 local IPv4 address, not a public address or hostname."
-    [[ -n "$CONTROL_PLANE_IP" ]] || prompt CONTROL_PLANE_IP "Control-plane local IPv4 allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
+        error "Use the control plane's RFC1918 or Tailscale IPv4 address, not a public address or hostname."
+    [[ -n "$CONTROL_PLANE_IP" ]] || prompt CONTROL_PLANE_IP "Control-plane private IPv4 allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
     if [[ -z "$JOIN_TOKEN" ]]; then
         read -rsp "K3s join token (input hidden): " JOIN_TOKEN
         printf '\n'
     fi
     [[ -n "$NODE_NAME" ]] || prompt NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
-    [[ -n "$NODE_IP" ]] || prompt NODE_IP "This worker's local IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
+    [[ -n "$NODE_IP" ]] || prompt NODE_IP "This worker's private IPv4 address (RFC1918 or Tailscale)" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
     [[ -n "$NODE_LABELS" ]] || prompt NODE_LABELS "Initial labels, comma-separated (optional)"
     [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
-    [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "Trusted RFC1918 node CIDR (e.g. 10.0.0.0/24)"
+    [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "RFC1918 node CIDR or Tailscale 100.64.0.0/10"
     [[ -n "$K3S_VERSION" ]] || prompt K3S_VERSION "Exact K3s version (blank to use the current stable release)"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
         prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
@@ -253,20 +262,25 @@ HARDENING_SSH_PORT="${HARDENING_SSH_PORT:-22}"
 [[ -n "$SERVER_URL" ]] || error "A control-plane URL is required."
 SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
 SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
-    error "The K3s URL must use the control plane's RFC1918 local IPv4 address: $SERVER_URL"
+    error "The K3s URL must use the control plane's RFC1918 or Tailscale IPv4 address: $SERVER_URL"
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-$SERVER_PRIVATE_IP}"
-trusted_private_ipv4 "$CONTROL_PLANE_IP" || error "Control-plane SSH source must be RFC1918: $CONTROL_PLANE_IP"
+trusted_private_ipv4 "$CONTROL_PLANE_IP" || error "Control-plane SSH source must be RFC1918 or Tailscale: $CONTROL_PLANE_IP"
 [[ -n "$JOIN_TOKEN" ]] || error "A K3s join token is required; use --token-stdin or run interactively."
 NODE_NAME="${NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 valid_node_name "$NODE_NAME" || error "Invalid node name '$NODE_NAME'. Use lower-case DNS characters and a unique name."
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "A trusted node network CIDR is required for the worker firewall."
-trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be an RFC1918 IPv4 CIDR: $NODE_NETWORK_CIDR"
+trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be RFC1918 or Tailscale 100.64.0.0/10: $NODE_NETWORK_CIDR"
 NODE_IP="${NODE_IP:-$(detect_node_ip "$SERVER_PRIVATE_IP")}"
 NODE_INTERFACE="$(detect_node_interface "$SERVER_PRIVATE_IP")"
-trusted_private_ipv4 "$NODE_IP" || error "Worker node IP must be RFC1918: ${NODE_IP:-unavailable}"
+trusted_private_ipv4 "$NODE_IP" || error "Worker node IP must be RFC1918 or Tailscale: ${NODE_IP:-unavailable}"
 [[ -n "$NODE_INTERFACE" ]] || error "Could not determine the private interface used to reach $SERVER_PRIVATE_IP"
-[[ ! "$NODE_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
-    error "The route to the control plane uses virtual interface $NODE_INTERFACE, not the worker's real local network."
+[[ "$NODE_INTERFACE" == "tailscale0" ]] || [[ ! "$NODE_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
+    error "The route to the control plane uses unsupported virtual interface $NODE_INTERFACE."
+if [[ "$NODE_INTERFACE" == "tailscale0" ]]; then
+    tailscale_ipv4 "$NODE_IP" || error "tailscale0 must use an address from 100.64.0.0/10"
+    command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed"
+    tailscale status >/dev/null 2>&1 || error "Tailscale is not connected"
+fi
 ROUTE_NODE_IP="$(detect_node_ip "$SERVER_PRIVATE_IP")"
 [[ "$NODE_IP" == "$ROUTE_NODE_IP" ]] || \
     error "Entered worker IP $NODE_IP is not the local route source to $SERVER_PRIVATE_IP (detected: ${ROUTE_NODE_IP:-none})."
