@@ -354,7 +354,9 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 2Gi
+      # Keep ample headroom above the 1500 MB TSDB retention limit because
+      # WAL and memory-mapped head chunks are not covered by that limit.
+      storage: 4Gi
 
 ---
 apiVersion: v1
