@@ -16,9 +16,9 @@ data:
     worker:
       exposure: local-only
       controls: [ufw, default-deny-inbound, private-address-enforcement]
+      address-family: rfc1918-ipv4-only
       ssh-source: control-plane-private-ip-only
-      tailscale-ssh-server: forbidden
-      tailscale-netfilter-mode: nodivert
+      overlay-network-dependency: none
       k3s-peer-source: trusted-private-node-cidr-only
       longhorn-peer-source: trusted-private-node-cidr-only
       public-ip-addresses: forbidden

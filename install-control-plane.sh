@@ -89,6 +89,21 @@ normalize_server_exposure() {
     esac
 }
 
+is_rfc1918_ipv4() {
+    local ip="$1" octet a b
+    local -a octets
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r -a octets <<< "$ip"
+    for octet in "${octets[@]}"; do
+        (( 10#$octet <= 255 )) || return 1
+    done
+    a=$((10#${octets[0]}))
+    b=$((10#${octets[1]}))
+    (( a == 10 )) ||
+        (( a == 172 && b >= 16 && b <= 31 )) ||
+        (( a == 192 && b == 168 ))
+}
+
 ask_server_exposure() {
     local default_exposure raw_answer normalized
     default_exposure="$(normalize_server_exposure "$1")" || error "Invalid SERVER_EXPOSURE value: $1"
@@ -193,13 +208,25 @@ fi
 ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
 ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
 if [[ "$AUTO_APPROVE" == "true" ]]; then
-    [[ -n "${K3S_WORKER_HOSTS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+    [[ -n "${K3S_WORKER_IPS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
 else
     ask_with_default "Add or reconcile K3s worker nodes over SSH?" "N" && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
 fi
+if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        error "K3S_PRIVATE_ADDRESS is required with workers and must be this control plane's RFC1918 local IPv4 address."
+    fi
+    read -rp "$(echo -e "${YELLOW}Control-plane local RFC1918 IPv4 address:${NC} ")" K3S_PRIVATE_ADDRESS
+    [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane local IPv4 address is required when adding workers."
+    export K3S_PRIVATE_ADDRESS
+fi
+if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
+    is_rfc1918_ipv4 "$K3S_PRIVATE_ADDRESS" || \
+        error "K3S_PRIVATE_ADDRESS must be this control plane's RFC1918 local IPv4 address."
+fi
 if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
     if [[ "$AUTO_APPROVE" == "true" ]]; then
-        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_HOSTS so worker UFW rules can be configured safely."
+        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_IPS so worker UFW rules can be configured safely."
     fi
     read -rp "$(echo -e "${YELLOW}Trusted private node CIDR (for example 10.0.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
     [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted node CIDR is required when adding workers."
@@ -380,8 +407,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         [[ -x "$WORKER_INSTALLER_SCRIPT" ]] || error "Worker installer not found or not executable at $WORKER_INSTALLER_SCRIPT"
         worker_manager_args=()
-        [[ -z "${K3S_WORKER_HOSTS:-}" ]] || worker_manager_args+=(--hosts "$K3S_WORKER_HOSTS")
-        [[ -z "${K3S_SERVER_URL:-}" ]] || worker_manager_args+=(--server-url "$K3S_SERVER_URL")
+        worker_ip_list="${K3S_WORKER_IPS:-}"
+        [[ -z "$worker_ip_list" ]] || worker_manager_args+=(--worker-ips "$worker_ip_list")
+        worker_server_url="${K3S_SERVER_URL:-https://${K3S_PRIVATE_ADDRESS}:6443}"
+        worker_manager_args+=(--server-url "$worker_server_url")
         [[ -z "${K3S_WORKER_SSH_USER:-}" ]] || worker_manager_args+=(--ssh-user "$K3S_WORKER_SSH_USER")
         [[ -z "${K3S_WORKER_SSH_PORT:-}" ]] || worker_manager_args+=(--ssh-port "$K3S_WORKER_SSH_PORT")
         [[ -z "${K3S_WORKER_IDENTITY_FILE:-}" ]] || worker_manager_args+=(--identity-file "$K3S_WORKER_IDENTITY_FILE")

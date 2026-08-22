@@ -21,9 +21,9 @@ The assistant asks where it is running:
   1. Control plane - enroll one or more remote workers over SSH
   2. Worker machine - join this machine using the control-plane URL and token
 
-Workers are always local/private. Both paths reject public worker addresses and
-configure UFW so SSH is accepted only from the control plane; public worker
-exposure is not a supported mode.
+Workers are always local/private. Both paths explicitly ask for RFC1918 local
+IPs, reject public/global worker interfaces, and configure UFW so SSH is
+accepted only from the control plane; public worker exposure is unsupported.
 
 Explicit mode selection:
   ./install-worker.sh --control-plane [control-plane options]

@@ -100,8 +100,7 @@ trusted_private_ipv4() {
 
   (( a == 10 )) ||
     (( a == 172 && b >= 16 && b <= 31 )) ||
-    (( a == 192 && b == 168 )) ||
-    (( a == 100 && b >= 64 && b <= 127 ))
+    (( a == 192 && b == 168 ))
 }
 
 trusted_private_cidr() {
@@ -124,7 +123,7 @@ trusted_private_cidr() {
   elif (( a == 192 && b == 168 )); then
     (( prefix >= 16 ))
   else
-    (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
+    return 1
   fi
 }
 
@@ -160,14 +159,6 @@ detect_control_plane_cluster_interface() {
     return
   fi
 
-  if ip -4 address show dev tailscale0 >/dev/null 2>&1; then
-    address="$(ip -4 -o address show dev tailscale0 scope global | awk 'NR == 1 {sub(/\/.*/, "", $4); print $4}')"
-    if [[ -n "$address" ]] && cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$address"; then
-      printf 'tailscale0\n'
-      return
-    fi
-  fi
-
   default_route="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
   default_source="$(awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' <<< "$default_route")"
   if [[ -n "$default_source" ]] && cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$default_source"; then
@@ -193,30 +184,13 @@ reject_public_worker_addresses() {
   while read -r interface address; do
     address="${address%/*}"
     trusted_private_ipv4 "$address" || \
-      err "Worker interface $interface has public IPv4 address $address. Workers must use only RFC1918 or Tailscale (100.64.0.0/10) addresses."
+      err "Worker interface $interface has non-RFC1918 IPv4 address $address. Workers must use only real local IPv4 addresses."
   done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
 
   while read -r interface address; do
     address="${address%/*}"
-    [[ "${address,,}" =~ ^f[cd] ]] || \
-      err "Worker interface $interface has public IPv6 address $address. Workers may use only IPv6 ULA addresses."
+    err "Worker interface $interface has globally scoped IPv6 address $address. Workers in this topology use RFC1918 IPv4 only."
   done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
-}
-
-reject_tailscale_ssh_server() {
-  if command -v tailscale >/dev/null 2>&1 && \
-      sudo tailscale debug prefs 2>/dev/null | grep -Eq '"RunSSH"[[:space:]]*:[[:space:]]*true'; then
-    err "Tailscale SSH is enabled and can bypass the host sshd/UFW source policy. Disable it with: sudo tailscale set --ssh=false"
-  fi
-}
-
-configure_worker_tailscale_firewall_mode() {
-  if command -v tailscale >/dev/null 2>&1 && sudo tailscale status >/dev/null 2>&1; then
-    # Tailscale's default ts-input hook accepts tailnet traffic before UFW.
-    # nodivert keeps Tailscale's chains available but makes the host firewall
-    # authoritative for traffic arriving on tailscale0.
-    sudo tailscale set --netfilter-mode=nodivert >/dev/null
-  fi
 }
 
 apt_update() {
@@ -553,6 +527,8 @@ configure_ufw() {
     cluster_interface="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null | \
       awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
     [[ -n "$cluster_interface" ]] || err "Unable to determine the private interface used to reach $CONTROL_PLANE_IP"
+    [[ ! "$cluster_interface" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
+      err "Route to the control plane uses virtual interface $cluster_interface, not the worker's real local network"
   elif [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
     cluster_interface="$(detect_control_plane_cluster_interface || true)"
     [[ -n "$cluster_interface" ]] || \
@@ -560,7 +536,7 @@ configure_ufw() {
   fi
 
   if [[ -n "$K3S_NODE_NETWORK_CIDR" ]] && ! trusted_private_cidr "$K3S_NODE_NETWORK_CIDR"; then
-    err "K3S_NODE_NETWORK_CIDR must be an RFC1918 or Tailscale IPv4 CIDR: $K3S_NODE_NETWORK_CIDR"
+    err "K3S_NODE_NETWORK_CIDR must be an RFC1918 IPv4 CIDR: $K3S_NODE_NETWORK_CIDR"
   fi
 
   if [[ "$NODE_ROLE" == "control-plane" ]]; then
@@ -644,12 +620,8 @@ configure_ufw() {
       sudo ufw allow in on "$cluster_interface" from "$K3S_NODE_NETWORK_CIDR" to any port 10000:31000 proto tcp comment 'Longhorn engines and replicas' >/dev/null
     fi
   else
-    # A single-node cluster does not need a public Kubernetes API. Keep it
-    # reachable over Tailscale when available; worker enrollment adds an
-    # explicit private node-network rule through add-k3s-workers.sh.
-    if ip link show tailscale0 >/dev/null 2>&1; then
-      sudo ufw allow in on tailscale0 to any port 6443 proto tcp comment 'K3s API via Tailscale' >/dev/null
-    fi
+    # A single-node cluster does not need a public Kubernetes API. Worker
+    # enrollment adds an explicit local-network rule through add-k3s-workers.sh.
     warn "K3S_NODE_NETWORK_CIDR is unset; the K3s API and peer ports are not exposed publicly."
   fi
 
@@ -867,13 +839,11 @@ if [[ "$NODE_ROLE" == "worker" ]]; then
   [[ "$SERVER_EXPOSURE" == "local" ]] || err "Internet-facing workers are forbidden; use a local/private worker"
   [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || err "K3S_NODE_NETWORK_CIDR is required when configuring a worker firewall"
   trusted_private_cidr "$K3S_NODE_NETWORK_CIDR" || \
-    err "K3S_NODE_NETWORK_CIDR must be an RFC1918 or Tailscale IPv4 CIDR"
+    err "K3S_NODE_NETWORK_CIDR must be an RFC1918 IPv4 CIDR"
   [[ -n "$CONTROL_PLANE_IP" ]] || err "CONTROL_PLANE_IP is required so worker SSH can be restricted to the control plane"
   trusted_private_ipv4 "$CONTROL_PLANE_IP" || \
-    err "CONTROL_PLANE_IP must be an RFC1918 or Tailscale IPv4 address"
+    err "CONTROL_PLANE_IP must be an RFC1918 IPv4 address"
   reject_public_worker_addresses
-  reject_tailscale_ssh_server
-  configure_worker_tailscale_firewall_mode
 fi
 
 configure_ufw

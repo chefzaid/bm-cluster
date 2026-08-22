@@ -9,7 +9,7 @@ K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
-WORKER_HOSTS=""
+WORKER_IPS="${K3S_WORKER_IPS:-}"
 SERVER_URL=""
 SSH_USER="${USER:-}"
 SSH_PORT="22"
@@ -33,31 +33,32 @@ Add one or more Debian/Ubuntu machines to this K3s cluster as workers.
 Interactive usage (run on the K3s control-plane node):
   ./install-worker.sh --control-plane
 
-Non-interactive host selection:
+Non-interactive worker selection:
   ./install-worker.sh --control-plane \
-    --hosts ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
+    --worker-ips 10.0.0.12,10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
     --identity-file ~/.ssh/id_ed25519
 
 Options:
-  --hosts CSV               Worker SSH hosts; user@host overrides --ssh-user
-  --server-url URL          K3s control-plane URL (default: this node's private IP)
+  --worker-ips CSV          Explicit RFC1918 local IPv4 addresses of workers
+  --server-url URL          K3s URL using this control plane's RFC1918 local IP
   --ssh-user USER           Common SSH user (default: current user)
   --ssh-port PORT           Common SSH port (default: 22)
   --identity-file PATH      SSH private key (default: SSH agent/config)
-  --node-network-cidr CIDR  Trusted private network shared by cluster nodes
+  --node-network-cidr CIDR  RFC1918 network shared by cluster nodes
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-worker-hardening   Deprecated no-op; the local-worker firewall is always enforced
-  --non-interactive         Fail instead of prompting; implied by --hosts
+  --non-interactive         Fail instead of prompting; implied by --worker-ips
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
-Workers must be reachable through an RFC1918 or Tailscale address. They cannot
-have a public IP interface. UFW allows worker SSH only from the exact control-
-plane source address while retaining the required private K3s peer traffic.
+The assistant explicitly asks for each worker's real RFC1918 local IP. Workers
+cannot have public/global interfaces, and no overlay network is installed or
+assumed. UFW allows worker SSH only from the exact control-plane source address
+while retaining the required private K3s peer traffic.
 The join token is never placed in command-line arguments or copied to disk.
 
 Token commands, if this script is not run on the control plane:
@@ -68,8 +69,8 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --hosts)            shift; [[ $# -gt 0 ]] || error "Missing value for --hosts"; WORKER_HOSTS="$1"; NON_INTERACTIVE=true ;;
-        --hosts=*)          WORKER_HOSTS="${1#*=}"; NON_INTERACTIVE=true ;;
+        --worker-ips)       shift; [[ $# -gt 0 ]] || error "Missing worker IP list"; WORKER_IPS="$1"; NON_INTERACTIVE=true ;;
+        --worker-ips=*)     WORKER_IPS="${1#*=}"; NON_INTERACTIVE=true ;;
         --server-url)       shift; [[ $# -gt 0 ]] || error "Missing value for --server-url"; SERVER_URL="$1" ;;
         --server-url=*)     SERVER_URL="${1#*=}" ;;
         --ssh-user)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-user"; SSH_USER="$1" ;;
@@ -118,13 +119,15 @@ prompt() {
 }
 
 detect_private_ip() {
-    local candidate
-    while read -r candidate; do
+    local interface candidate
+    while read -r interface candidate; do
+        [[ "$interface" =~ ^(lo|docker|br-|cni|flannel|veth) ]] && continue
+        candidate="${candidate%/*}"
         if trusted_private_ipv4 "$candidate"; then
             printf '%s' "$candidate"
             return 0
         fi
-    done < <(hostname -I 2>/dev/null | tr ' ' '\n')
+    done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
     return 1
 }
 
@@ -145,8 +148,7 @@ trusted_private_ipv4() {
     a=$((10#$a)); b=$((10#$b))
     (( a == 10 )) ||
         (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 )) ||
-        (( a == 100 && b >= 64 && b <= 127 ))
+        (( a == 192 && b == 168 ))
 }
 
 trusted_private_cidr() {
@@ -162,7 +164,7 @@ trusted_private_cidr() {
     if (( a == 10 )); then (( prefix >= 8 ))
     elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
     elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
-    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
+    else return 1
     fi
 }
 
@@ -226,7 +228,7 @@ fi
 trap 'JOIN_TOKEN=""; unset JOIN_TOKEN K3S_JOIN_TOKEN 2>/dev/null || true' EXIT
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    prompt SERVER_URL "Control-plane URL" "$SERVER_URL"
+    prompt SERVER_URL "K3s URL using this control plane's local IPv4 address" "$SERVER_URL"
     prompt SSH_USER "Default worker SSH user" "$SSH_USER"
     prompt SSH_PORT "Worker SSH port" "$SSH_PORT"
     prompt IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
@@ -245,13 +247,13 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
         [[ "$worker_count" =~ ^[1-9][0-9]*$ ]] || warn "Enter a positive whole number."
     done
 else
-    [[ -n "$WORKER_HOSTS" ]] || error "--hosts is required in non-interactive mode."
+    [[ -n "$WORKER_IPS" ]] || error "--worker-ips is required in non-interactive mode."
 fi
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required for worker UFW."
-trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be an RFC1918 or Tailscale IPv4 CIDR: $NODE_NETWORK_CIDR"
+trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be an RFC1918 IPv4 CIDR: $NODE_NETWORK_CIDR"
 SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
-    error "The worker K3s URL must use the control plane's RFC1918 or Tailscale IPv4 address: $SERVER_URL"
+    error "The worker K3s URL must use the control plane's RFC1918 local IPv4 address: $SERVER_URL"
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || \
     error "Control-plane URL address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
 [[ -f "$SECURITY_HARDENER" ]] || error "Security policy script not found: $SECURITY_HARDENER"
@@ -259,6 +261,8 @@ cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || \
 CONTROL_PLANE_CLUSTER_INTERFACE="$(interface_owning_ip "$SERVER_PRIVATE_IP")"
 [[ -n "$CONTROL_PLANE_CLUSTER_INTERFACE" ]] || \
     error "Control-plane address $SERVER_PRIVATE_IP is not assigned to a local interface. Run this mode on the control-plane node."
+[[ ! "$CONTROL_PLANE_CLUSTER_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
+    error "Control-plane address $SERVER_PRIVATE_IP belongs to virtual interface $CONTROL_PLANE_CLUSTER_INTERFACE, not the real local node network."
 
 info "Reconciling K3s private networking on $SERVER_PRIVATE_IP via $CONTROL_PLANE_CLUSTER_INTERFACE..."
 "$K3S_NETWORK_CONFIGURATOR" \
@@ -300,7 +304,7 @@ build_target() {
 }
 
 check_target() {
-    local target="$1"
+    local target="$1" expected_worker_ip="$2"
     local connection_info client_ip client_port worker_ip worker_port
     [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ || "$target" =~ ^[A-Za-z0-9._:-]+$ ]] || \
         error "Invalid SSH target: $target"
@@ -310,9 +314,11 @@ check_target() {
     connection_info="$(ssh "${ssh_options[@]}" "$target" 'printf "%s" "$SSH_CONNECTION"')"
     read -r client_ip client_port worker_ip worker_port <<< "$connection_info"
     trusted_private_ipv4 "$client_ip" || \
-        error "SSH to $target does not originate from a private control-plane address (observed: ${client_ip:-unknown})."
+        error "SSH to $target does not originate from an RFC1918 control-plane address (observed: ${client_ip:-unknown})."
     trusted_private_ipv4 "$worker_ip" || \
-        error "SSH to $target reached a public worker address (${worker_ip:-unknown}); workers must be LAN/Tailscale-only."
+        error "SSH to $target reached a non-RFC1918 worker address (${worker_ip:-unknown})."
+    [[ "$worker_ip" == "$expected_worker_ip" ]] || \
+        error "SSH to $target reached $worker_ip instead of the entered worker local IP $expected_worker_ip."
     cidr_contains_ip "$NODE_NETWORK_CIDR" "$client_ip" || \
         error "Control-plane source $client_ip is outside trusted node CIDR $NODE_NETWORK_CIDR."
     cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || \
@@ -390,15 +396,17 @@ install_worker() {
 }
 
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
-    IFS=',' read -r -a hosts <<< "$WORKER_HOSTS"
+    IFS=',' read -r -a hosts <<< "$WORKER_IPS"
     [[ ${#hosts[@]} -gt 0 ]] || error "No worker hosts were provided."
     for host in "${hosts[@]}"; do
         host="${host#"${host%%[![:space:]]*}"}"
         host="${host%"${host##*[![:space:]]}"}"
-        [[ -n "$host" ]] || error "--hosts contains an empty item."
+        [[ -n "$host" ]] || error "--worker-ips contains an empty item."
+        trusted_private_ipv4 "$host" || error "Worker IP must be an RFC1918 IPv4 literal: $host"
+        cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "Worker IP $host is outside $NODE_NETWORK_CIDR"
         target="$(build_target "$host")"
         info "Checking SSH access to $target..."
-        check_target "$target"
+        check_target "$target" "$host"
         node_name="$(remote_hostname "$target")"
         [[ -n "$node_name" ]] || error "Could not determine the hostname of $target."
         install_worker "$target" "$node_name" "$TARGET_WORKER_IP" "$COMMON_LABELS" "$COMMON_TAINTS" "$TARGET_CONTROL_PLANE_IP"
@@ -407,24 +415,21 @@ else
     for ((index=1; index<=worker_count; index++)); do
         printf '\nWorker %d of %d\n' "$index" "$worker_count"
         worker_host=""
-        prompt worker_host "SSH hostname or IP"
-        [[ -n "$worker_host" ]] || error "A worker hostname or IP is required."
+        prompt worker_host "Worker local IPv4 address"
+        trusted_private_ipv4 "$worker_host" || error "Worker IP must be an RFC1918 IPv4 literal: $worker_host"
+        cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
         target="$(build_target "$worker_host")"
         info "Checking SSH access to $target..."
-        check_target "$target"
+        check_target "$target" "$worker_host"
 
         detected_name="$(remote_hostname "$target")"
         worker_name=""
-        worker_ip=""
         worker_labels=""
         worker_taints=""
         prompt worker_name "Unique Kubernetes node name" "$detected_name"
-        prompt worker_ip "Advertised private node IP" "$TARGET_WORKER_IP"
-        trusted_private_ipv4 "$worker_ip" || error "Worker node IP must be RFC1918 or Tailscale: $worker_ip"
-        cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || error "Worker node IP $worker_ip is outside $NODE_NETWORK_CIDR"
         prompt worker_labels "Node labels, comma-separated (optional)" "$COMMON_LABELS"
         prompt worker_taints "Node taints, comma-separated (optional)" "$COMMON_TAINTS"
-        install_worker "$target" "$worker_name" "$worker_ip" "$worker_labels" "$worker_taints" "$TARGET_CONTROL_PLANE_IP"
+        install_worker "$target" "$worker_name" "$worker_host" "$worker_labels" "$worker_taints" "$TARGET_CONTROL_PLANE_IP"
     done
 fi
 

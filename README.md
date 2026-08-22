@@ -92,19 +92,19 @@ provided.
 Worker enrollment is built into `install-control-plane.sh`; no separate setup
 step is required during the initial installation. Answer **yes** to “Add or
 reconcile K3s worker nodes over SSH.” It accepts any number of workers and asks
-for the SSH settings and each worker's address, unique node name, optional
-private IP, labels, and taints. The control plane remains the only server, so
+for the SSH settings and each worker's explicit local IPv4 address, unique node
+name, labels, and taints. The control plane remains the only server, so
 adding workers increases workload capacity but does not make the Kubernetes
 control plane highly available.
 
 Worker requirements:
 
-- Debian or Ubuntu, a unique hostname, and only RFC1918, Tailscale
-  (`100.64.0.0/10`), or IPv6 ULA addresses; public IP interfaces are rejected
+- Debian or Ubuntu, a unique hostname, and an explicitly entered RFC1918 IPv4
+  address (`10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`)
+- No public IPv4 or globally scoped IPv6 interface; enrollment aborts before
+  making changes when one is detected
 - No router port-forward, public DNS record, public load balancer, or direct
   internet ingress to a worker
-- Tailscale SSH must be disabled on workers (`sudo tailscale set --ssh=false`);
-  use the regular host SSH service over the Tailscale address so UFW remains authoritative
 - SSH key authentication from the control plane as root or a user with
   passwordless `sudo`; after enrollment, UFW accepts the worker SSH port only
   from the exact private control-plane source address
@@ -116,11 +116,12 @@ Worker requirements:
   and 10000-31000), restricted to the same private network and interface
 - Enough CPU, memory, and disk for the workloads assigned to the node
 
-The live control plane's private overlay address is `100.69.22.24`. Home/LAN
-workers must join the same Tailscale network before enrollment; use
-`https://100.69.22.24:6443` as `K3S_SERVER_URL` and `100.64.0.0/10` as
-`K3S_NODE_NETWORK_CIDR`. Do not use the control plane's public address for
-worker enrollment.
+The control plane must also have an RFC1918 address on a network that can route
+to every worker. The installer asks for that address, the trusted network CIDR,
+and each worker's local IP. For example, use `192.168.1.10` for the control
+plane, `192.168.1.11` and `192.168.1.12` for workers, and
+`192.168.1.0/24` for the node CIDR. The scripts do not install or assume an
+overlay VPN; routing between those real local addresses must already exist.
 
 To add workers later, run the unified worker assistant from either the control
 plane or the new worker:
@@ -142,27 +143,27 @@ sudo k3s token create --ttl 1h --description worker-join
 ```
 
 Workers are always local/private; there is no internet-facing worker mode. Both
-paths validate the private addresses before changing the machine, apply a
-default-deny inbound UFW policy before K3s enrollment, allow SSH only from the
-control plane, set Tailscale to `nodivert` so its packet-filter hook cannot
-bypass UFW, and retain only the private-interface K3s peer rules. Fail2ban and CrowdSec
-are removed from workers because public SSH is impossible; Lynis is never
-installed persistently there. Outbound traffic remains allowed for operating
-system updates, image pulls, and workloads. Token input is hidden and is never
-placed in command-line arguments or copied to disk.
+paths validate the explicitly supplied RFC1918 addresses before changing the
+machine, apply a default-deny inbound UFW policy before K3s enrollment, allow
+SSH only from the control plane, and retain only the private-interface K3s peer
+rules. Fail2ban and CrowdSec are removed from workers because public SSH is
+impossible; Lynis is never installed persistently there. Outbound traffic
+remains allowed for operating system updates, image pulls, and workloads. Token
+input is hidden and is never placed in command-line arguments or copied to disk.
 
 For repeatable enrollment through the control-plane installer:
 
 ```bash
-K3S_WORKER_HOSTS=ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
+K3S_WORKER_IPS=10.0.0.12,10.0.0.13 \
 K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
+K3S_PRIVATE_ADDRESS=10.0.0.10 \
 K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 ./install-control-plane.sh --yes
 ```
 
 Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
 `K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`. The K3s
-server URL must use a private/Tailscale control-plane address.
+server URL and every worker address must be RFC1918 IPv4 literals.
 `K3S_PRIVATE_ADDRESS`, `K3S_PRIVATE_INTERFACE`, and `K3S_PUBLIC_ADDRESS` can
 override control-plane network detection. The installer persists the private
 node IP, public ExternalIP, API certificate SAN, and Flannel interface in a K3s
@@ -178,7 +179,7 @@ does not relocate or change existing volumes.
 | Node | Exposure | Enforced host controls |
 |---|---|---|
 | Control plane | Local or internet-facing | UFW and Lynis; internet mode also enables Fail2ban, CrowdSec, and SSH hardening while retaining password authentication |
-| Worker | Local/private only | UFW default-deny inbound, no public IP interface, SSH only from the exact control-plane IP, and K3s peer ports only from the trusted node CIDR |
+| Worker | Local/private only | UFW default-deny inbound, RFC1918 IPv4 only, SSH only from the exact control-plane IP, and K3s peer ports only from the trusted node CIDR |
 
 The internet-facing control-plane policy keeps password SSH available as
 requested, disables root SSH, limits authentication attempts and connection
