@@ -9,7 +9,7 @@ Odoo.
 
 - K3s, NGINX Ingress, Longhorn, and the Descheduler addon
 - Vault and External Secrets Operator
-- PostgreSQL, MongoDB, Redis, Kafka, and Zookeeper
+- PostgreSQL, MongoDB, Redis, and Kafka in KRaft mode
 - Keycloak, GitLab, Jenkins, ArgoCD, Nexus, and SonarQube
 - Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
@@ -30,6 +30,10 @@ annotation-enabled application metrics; Grafana includes a provisioned cluster
 dashboard and loads application-owned dashboards from labeled ConfigMaps.
 Fluent Bit ships Kubernetes container logs with namespace, pod, container, and
 label metadata to Elasticsearch for Kibana discovery.
+
+PostgreSQL 18 is shared by the compatible applications, including Keycloak,
+Odoo, and SonarQube. GitLab keeps its bundled PostgreSQL 17 because GitLab 19
+does not support PostgreSQL 18.
 
 Databases, caches, queues, and search backends remain internal Kubernetes
 services and are not published through DNS.
@@ -94,7 +98,8 @@ capacity but does not make the Kubernetes control plane highly available.
 Worker requirements:
 
 - Debian or Ubuntu, a unique hostname, and network access to the control plane
-- SSH key authentication as root or a user with passwordless `sudo`
+- SSH key authentication as root or a user with passwordless `sudo`; selected
+  host hardening requires the non-root option because it disables root SSH login
 - TCP 6443 from workers to the server, UDP 8472 between nodes, and TCP 10250
   from the server to workers, restricted to the private node network
 - Enough CPU, memory, and disk for the workloads assigned to the node
@@ -107,8 +112,11 @@ Run the dedicated enrollment assistant on the control-plane node at any time:
 
 It reads the local token without printing it, copies the worker installer over
 SSH, installs the K3s agent and Longhorn prerequisites, and waits for the node to
-become Ready. These are the commands it displays if a token must be obtained
-manually; the second creates an optional short-lived token:
+become Ready. It also asks once whether to harden every worker. When selected,
+the remote installer applies SSH hardening, worker-specific UFW rules,
+Fail2ban, CrowdSec, log retention, and a Lynis audit. These are the commands it
+displays if a token must be obtained manually; the second creates an optional
+short-lived token:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
@@ -116,7 +124,8 @@ sudo k3s token create --ttl 1h --description worker-join
 ```
 
 To join from the worker itself instead, copy or clone this repository there and
-run the interactive worker installer. The token prompt is hidden:
+run the interactive worker installer. The token prompt is hidden, and this path
+asks whether the local worker should be hardened:
 
 ```bash
 ./scripts/install-k3s-worker.sh
@@ -136,7 +145,12 @@ Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
 DaemonSet workloads, including node metrics and log collection, automatically
 run on eligible workers. The installer sets Longhorn's default replica count for
 new volumes to the number of Ready nodes, capped at three; it does not relocate
-or change existing volumes.
+or change existing volumes. Controller-driven enrollment passes an explicit
+hardening choice to the worker installer, so the suite runs on each worker only
+once. Non-interactive use can select `--harden-workers` or
+`--skip-worker-hardening` and defaults to hardening when neither is provided;
+standalone worker enrollment uses
+`--harden-security` or `--skip-security-hardening`.
 
 ## Initial credentials
 

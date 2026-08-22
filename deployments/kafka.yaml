@@ -2,34 +2,35 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: zookeeper
+  name: kafka-controller
   namespace: infra
 spec:
-  ports:
-  - port: 2181
-    targetPort: 2181
-  selector:
-    app: zookeeper
   clusterIP: None
+  ports:
+  - name: controller
+    port: 9093
+    targetPort: 9093
+  selector:
+    app: kafka-controller
 
 ---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: zookeeper
+  name: kafka-controller
   namespace: infra
   labels:
-    app: zookeeper
+    app: kafka-controller
 spec:
-  serviceName: zookeeper
+  serviceName: kafka-controller
   replicas: 1
   selector:
     matchLabels:
-      app: zookeeper
+      app: kafka-controller
   template:
     metadata:
       labels:
-        app: zookeeper
+        app: kafka-controller
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -40,57 +41,76 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - name: zookeeper
-        image: docker.io/confluentinc/cp-zookeeper@sha256:90631f224b4397ecfb4e824e43d93e0e42656841c6d55ef635c49df3975260ae
+      - name: kafka-controller
+        image: docker.io/confluentinc/cp-kafka@sha256:0ad069035863aa1b090f4d9af47bfd2c08dc32864f3575d7d8579e3155c2586d
+        # CP 8.3's wrapper rejects an advertised controller listener even
+        # though Kafka 4.3 requires it. Render the standard templates directly
+        # and retain the vendor's ensure/launch phases.
+        command: ["/bin/bash", "-ec"]
+        args:
+        - >-
+          . /etc/confluent/docker/bash-config;
+          ub path /etc/kafka/ writable;
+          ub render-template "/etc/confluent/docker/${COMPONENT}.properties.template" > "/etc/${COMPONENT}/${COMPONENT}.properties";
+          ub render-template /etc/confluent/docker/log4j2.yaml.template > "/etc/${COMPONENT}/log4j2.yaml";
+          ub render-template /etc/confluent/docker/tools-log4j2.yaml.template > "/etc/${COMPONENT}/tools-log4j2.yaml";
+          /etc/confluent/docker/ensure;
+          exec /etc/confluent/docker/launch
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
         ports:
-        - containerPort: 2181
+        - name: controller
+          containerPort: 9093
         env:
-        - name: ZOOKEEPER_CLIENT_PORT
-          value: "2181"
-        - name: ZOOKEEPER_TICK_TIME
-          value: "2000"
-        - name: ZOOKEEPER_SERVER_ID
-          value: "1"
+        - name: CLUSTER_ID
+          value: "8ipNY9RxQtWkattTais5yQ"
+        - name: KAFKA_PROCESS_ROLES
+          value: "controller"
+        - name: KAFKA_NODE_ID
+          value: "3000"
+        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+          value: "3000@kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+        - name: KAFKA_CONTROLLER_LISTENER_NAMES
+          value: "CONTROLLER"
+        - name: KAFKA_LISTENERS
+          value: "CONTROLLER://0.0.0.0:9093"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "CONTROLLER://kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "CONTROLLER:PLAINTEXT"
+        - name: KAFKA_LOG_DIRS
+          value: "/var/lib/kafka/data/controller"
         volumeMounts:
-        - name: zookeeper-data
-          mountPath: /var/lib/zookeeper/data
-        - name: zookeeper-log
-          mountPath: /var/lib/zookeeper/log
+        - name: controller-data
+          mountPath: /var/lib/kafka/data
+        startupProbe:
+          tcpSocket:
+            port: 9093
+          periodSeconds: 5
+          failureThreshold: 60
         livenessProbe:
           tcpSocket:
-            port: 2181
-          initialDelaySeconds: 30
+            port: 9093
           periodSeconds: 10
         readinessProbe:
           tcpSocket:
-            port: 2181
-          initialDelaySeconds: 10
+            port: 9093
           periodSeconds: 5
         resources:
           requests:
-            cpu: 50m
-            memory: 256Mi
+            cpu: 100m
+            memory: 512Mi
           limits:
             cpu: 500m
             memory: 1Gi
   volumeClaimTemplates:
   - metadata:
-      name: zookeeper-data
+      name: controller-data
     spec:
       storageClassName: longhorn
-      accessModes: [ "ReadWriteOnce" ]
-      resources:
-        requests:
-          storage: 1Gi
-  - metadata:
-      name: zookeeper-log
-    spec:
-      storageClassName: longhorn
-      accessModes: [ "ReadWriteOnce" ]
+      accessModes: ["ReadWriteOnce"]
       resources:
         requests:
           storage: 1Gi
@@ -102,12 +122,13 @@ metadata:
   name: kafka
   namespace: infra
 spec:
+  clusterIP: None
   ports:
-  - port: 9092
+  - name: broker
+    port: 9092
     targetPort: 9092
   selector:
     app: kafka
-  clusterIP: None
 
 ---
 apiVersion: apps/v1
@@ -138,22 +159,29 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kafka
-        image: docker.io/confluentinc/cp-kafka@sha256:187dac6627e7906c350f5f8c982f80ce735ff1a0e571a20de6000a309a12ce63
+        image: docker.io/confluentinc/cp-kafka@sha256:0ad069035863aa1b090f4d9af47bfd2c08dc32864f3575d7d8579e3155c2586d
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
         ports:
-        - containerPort: 9092
+        - name: broker
+          containerPort: 9092
         env:
-        - name: KAFKA_BROKER_ID
+        - name: CLUSTER_ID
+          value: "8ipNY9RxQtWkattTais5yQ"
+        - name: KAFKA_PROCESS_ROLES
+          value: "broker"
+        - name: KAFKA_NODE_ID
           value: "1"
-        - name: KAFKA_ZOOKEEPER_CONNECT
-          value: "zookeeper.infra.svc.cluster.local:2181"
+        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+          value: "3000@kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+        - name: KAFKA_CONTROLLER_LISTENER_NAMES
+          value: "CONTROLLER"
         - name: KAFKA_ADVERTISED_LISTENERS
           value: "PLAINTEXT://kafka.infra.svc.cluster.local:9092"
         - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
-          value: "PLAINTEXT:PLAINTEXT"
+          value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
         - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
           value: "1"
         - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
@@ -165,15 +193,18 @@ spec:
         volumeMounts:
         - name: kafka-data
           mountPath: /var/lib/kafka/data
+        startupProbe:
+          tcpSocket:
+            port: 9092
+          periodSeconds: 5
+          failureThreshold: 60
         livenessProbe:
           tcpSocket:
             port: 9092
-          initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           tcpSocket:
             port: 9092
-          initialDelaySeconds: 10
           periodSeconds: 5
         resources:
           requests:
@@ -187,7 +218,7 @@ spec:
       name: kafka-data
     spec:
       storageClassName: longhorn
-      accessModes: [ "ReadWriteOnce" ]
+      accessModes: ["ReadWriteOnce"]
       resources:
         requests:
           storage: 1Gi

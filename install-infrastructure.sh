@@ -21,7 +21,7 @@ K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-4.15.1}"
-LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-1.12.0}"
+LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-1.12.1}"
 VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-0.34.1}"
 EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-2.9.0}"
 ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-10.3.3}"
@@ -369,6 +369,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || worker_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
         [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
         [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
+        if [[ "$APPLY_HOST_SECURITY" == "true" ]]; then
+            worker_manager_args+=(--harden-workers)
+        else
+            worker_manager_args+=(--skip-worker-hardening)
+        fi
         step "Adding K3s worker nodes..."
         bash "$WORKER_MANAGER_SCRIPT" "${worker_manager_args[@]}"
     fi
@@ -415,6 +420,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --create-namespace \
             --version "$LONGHORN_CHART_VERSION" \
             --set "defaultSettings.defaultReplicaCount=$longhorn_replicas" \
+            --set "persistence.defaultClassReplicaCount=$longhorn_replicas" \
+            --set defaultSettings.defaultDataLocality=best-effort \
+            --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1 \
             --set "defaultSettings.storageMinimalAvailablePercentage=20" \
             --set "defaultSettings.storageOverProvisioningPercentage=110" \
             --wait --timeout 300s
@@ -494,7 +502,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=condition=ready pod -l app=postgres  -n infra --timeout=180s
         kubectl wait --for=condition=ready pod -l app=redis     -n infra --timeout=120s
         kubectl wait --for=condition=ready pod -l app=mongodb   -n infra --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=zookeeper -n infra --timeout=180s
+        kubectl wait --for=condition=ready pod -l app=kafka-controller -n infra --timeout=180s
         kubectl wait --for=condition=ready pod -l app=kafka     -n infra --timeout=180s
     fi
 

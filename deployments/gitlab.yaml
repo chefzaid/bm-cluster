@@ -50,6 +50,7 @@ metadata:
     app: gitlab
 spec:
   replicas: 1
+  progressDeadlineSeconds: 1800
   strategy:
     type: Recreate
   selector:
@@ -65,13 +66,13 @@ spec:
           type: RuntimeDefault
       containers:
       - name: gitlab
-        image: gitlab/gitlab-ce@sha256:23e1afcbb1b0a16bbbd646c412d23dd41f3301da7ae87ea44ecff10cd8c980e8
+        image: docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f
         env:
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
             external_url 'https://gitlab.swirlit.dev'
-            nginx['listen_port'] = 80
-            nginx['listen_https'] = false
+            gitlab_rails['nginx']['listen_port'] = 80
+            gitlab_rails['nginx']['listen_https'] = false
             letsencrypt['enable'] = false
             gitlab_rails['gitlab_shell_ssh_port'] = 22
         ports:
@@ -90,7 +91,7 @@ spec:
           httpGet:
             path: /users/sign_in
             port: 80
-          initialDelaySeconds: 240
+          initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
           failureThreshold: 10

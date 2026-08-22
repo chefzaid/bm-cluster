@@ -11,6 +11,7 @@
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     deploy_odoo: "{{ install_odoo | default(true) }}"
     ingress_nginx_chart_version: "4.15.1"
+    longhorn_chart_version: "1.12.1"
     vault_chart_version: "0.34.1"
     external_secrets_chart_version: "2.9.0"
     argocd_chart_version: "10.3.3"
@@ -66,8 +67,34 @@
         helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
         helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
         helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
+        helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
+        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
         helm repo update >/dev/null 2>&1
       changed_when: false
+
+    - name: Count Ready Kubernetes nodes for Longhorn replicas
+      shell: kubectl get nodes --no-headers | awk '$2 ~ /^Ready/ {count++} END {print count+0}'
+      register: ready_node_count
+      changed_when: false
+
+    - name: Install or upgrade Longhorn
+      command: >
+        helm upgrade --install longhorn longhorn/longhorn
+        --namespace longhorn-system
+        --create-namespace
+        --version {{ longhorn_chart_version }}
+        --set defaultSettings.defaultReplicaCount={{ [[ready_node_count.stdout | int, 1] | max, 3] | min }}
+        --set persistence.defaultClassReplicaCount={{ [[ready_node_count.stdout | int, 1] | max, 3] | min }}
+        --set defaultSettings.defaultDataLocality=best-effort
+        --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1
+        --set defaultSettings.storageMinimalAvailablePercentage=20
+        --set defaultSettings.storageOverProvisioningPercentage=110
+        --wait --timeout 1200s
+
+    - name: Make Longhorn the default storage class
+      shell: |
+        kubectl patch storageclass longhorn -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+        kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
 
     - name: Install or upgrade NGINX Ingress
       command: >
@@ -153,7 +180,7 @@
 
     - name: Wait for data stores
       command: kubectl wait --for=condition=ready pod -l app={{ item }} -n {{ infra_namespace }} --timeout=180s
-      loop: [postgres, redis, mongodb, zookeeper, kafka]
+      loop: [postgres, redis, mongodb, kafka-controller, kafka]
       ignore_errors: yes
 
     - name: Deploy platform services
