@@ -94,8 +94,9 @@ prompt() {
 prefix_to_netmask() {
     local prefix="$1" mask
 
-    [[ "$prefix" =~ ^[0-9]+$ ]] && (( prefix >= 1 && prefix <= 32 )) || \
+    if [[ ! "$prefix" =~ ^[0-9]+$ ]] || (( prefix < 1 || prefix > 32 )); then
         error "Invalid IPv4 prefix: $prefix"
+    fi
     mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
     printf '%u.%u.%u.%u\n' \
         "$(( (mask >> 24) & 255 ))" \
@@ -298,15 +299,17 @@ configure_node() {
         [[ -n "$NETWORK_CIDR" ]] || prompt NETWORK_CIDR "OVHcloud vRack RFC1918 network CIDR" "10.50.0.0/24"
         [[ -n "$PRIVATE_IP" ]] || prompt PRIVATE_IP "Unique private IPv4 for this server"
     fi
-    trusted_private_ipv4 "$PRIVATE_IP" && ! tailscale_ipv4 "$PRIVATE_IP" || \
+    if ! trusted_private_ipv4 "$PRIVATE_IP" || tailscale_ipv4 "$PRIVATE_IP"; then
         error "vRack node IP must be an RFC1918 IPv4 address."
+    fi
     trusted_private_cidr "$NETWORK_CIDR" || error "vRack network must be a valid RFC1918 CIDR."
     [[ "$NETWORK_CIDR" != "100.64.0.0/10" ]] || error "100.64.0.0/10 is reserved for Tailscale, not vRack."
     cidr_contains_ip "$NETWORK_CIDR" "$PRIVATE_IP" || error "$PRIVATE_IP is outside $NETWORK_CIDR."
     prefix="${NETWORK_CIDR#*/}"
     if [[ -n "$VLAN_ID" && "$VLAN_ID" != "0" ]]; then
-        [[ "$VLAN_ID" =~ ^[0-9]+$ ]] && (( VLAN_ID >= 1 && VLAN_ID <= 4094 )) || \
+        if [[ ! "$VLAN_ID" =~ ^[0-9]+$ ]] || (( VLAN_ID < 1 || VLAN_ID > 4094 )); then
             error "VLAN ID must be 1-4094."
+        fi
     else
         VLAN_ID=""
     fi

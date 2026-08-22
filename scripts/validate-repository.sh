@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -7,8 +8,14 @@ PLATFORM_CONFIG="$REPOSITORY_ROOT/config/platform.env"
 LIVE_VALIDATION=false
 FAILURES=0
 CHECKS=0
-TEMP_DIR="$(mktemp -d)"
-trap 'rm -rf -- "$TEMP_DIR"' EXIT
+TEMP_DIR="$(mktemp -d /tmp/bm-cluster-validation.XXXXXX)"
+
+cleanup() {
+    if [[ "$TEMP_DIR" == /tmp/bm-cluster-validation.* && -d "$TEMP_DIR" ]]; then
+        rm -r -- "$TEMP_DIR"
+    fi
+}
+trap cleanup EXIT
 
 info() { printf '[CHECK] %s\n' "$*"; }
 pass() { CHECKS=$((CHECKS + 1)); printf '[PASS]  %s\n' "$*"; }
@@ -56,15 +63,29 @@ compare_sets() {
 
 info "Checking shell syntax"
 shell_failed=false
-while IFS= read -r script; do
+mapfile -d '' -t shell_scripts < <(
+    find "$REPOSITORY_ROOT" -path "$REPOSITORY_ROOT/.git" -prune -o -type f -name '*.sh' -print0 |
+        LC_ALL=C sort -z
+)
+for script in "${shell_scripts[@]}"; do
     if ! bash -n "$script"; then
         shell_failed=true
     fi
-done < <(find "$REPOSITORY_ROOT" -path "$REPOSITORY_ROOT/.git" -prune -o -type f -name '*.sh' -print | LC_ALL=C sort)
+done
 if [[ "$shell_failed" == "true" ]]; then
     fail "all shell scripts parse"
 else
     pass "all shell scripts parse"
+fi
+
+if command -v shellcheck >/dev/null 2>&1; then
+    if shellcheck --rcfile "$REPOSITORY_ROOT/.shellcheckrc" -x "${shell_scripts[@]}"; then
+        pass "all shell scripts pass ShellCheck"
+    else
+        fail "all shell scripts pass ShellCheck"
+    fi
+else
+    info "ShellCheck is unavailable; skipping shell static analysis"
 fi
 
 # shellcheck source=lib/network.sh
@@ -236,16 +257,86 @@ fi
 
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
     yaml_failed=false
-    while IFS= read -r manifest; do
-        python3 -c 'import sys, yaml; list(yaml.safe_load_all(open(sys.argv[1], encoding="utf-8")))' "$manifest" || yaml_failed=true
-    done < <(find "$REPOSITORY_ROOT/deployments" -maxdepth 1 -type f -name '*.yaml' -print | LC_ALL=C sort)
+    while IFS= read -r yaml_file; do
+        python3 -c 'import sys, yaml; list(yaml.safe_load_all(open(sys.argv[1], encoding="utf-8")))' "$yaml_file" || yaml_failed=true
+    done < <(
+        find "$REPOSITORY_ROOT" -path "$REPOSITORY_ROOT/.git" -prune -o -type f \
+            \( -name '*.yaml' -o -name '*.yml' \) -print | LC_ALL=C sort
+    )
     if [[ "$yaml_failed" == "true" ]]; then
-        fail "all Kubernetes manifests are valid YAML"
+        fail "all repository YAML documents parse"
     else
-        pass "all Kubernetes manifests are valid YAML"
+        pass "all repository YAML documents parse"
+    fi
+
+    if python3 - "$REPOSITORY_ROOT/deployments" > "$TEMP_DIR/workload-policy" <<'PY'
+from pathlib import Path
+import sys
+
+import yaml
+
+deployments = Path(sys.argv[1])
+workload_kinds = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
+failures = []
+
+for manifest in sorted(deployments.glob("*.yaml")):
+    for document_index, resource in enumerate(yaml.safe_load_all(manifest.read_text(encoding="utf-8")), 1):
+        if not isinstance(resource, dict) or resource.get("kind") not in workload_kinds:
+            continue
+
+        kind = resource["kind"]
+        metadata = resource.get("metadata") or {}
+        name = metadata.get("name", f"document-{document_index}")
+        identity = f"{manifest.name}:{kind}/{name}"
+        spec = resource.get("spec") or {}
+        if kind == "CronJob":
+            pod_spec = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
+        else:
+            pod_spec = ((spec.get("template") or {}).get("spec") or {})
+
+        automount = pod_spec.get("automountServiceAccountToken")
+        if not isinstance(automount, bool):
+            failures.append(f"{identity}: automountServiceAccountToken must be an explicit boolean")
+
+        for container_type in ("initContainers", "containers"):
+            for container in pod_spec.get(container_type) or []:
+                container_name = container.get("name", "<unnamed>")
+                resources = container.get("resources") or {}
+                for budget_type in ("requests", "limits"):
+                    budget = resources.get(budget_type) or {}
+                    missing = [resource_name for resource_name in ("cpu", "memory") if not budget.get(resource_name)]
+                    if missing:
+                        failures.append(
+                            f"{identity}:{container_type}/{container_name}: "
+                            f"missing {budget_type} for {', '.join(missing)}"
+                        )
+
+if failures:
+    print("\n".join(failures))
+    raise SystemExit(1)
+PY
+    then
+        pass "workloads declare service-account token intent and resource budgets"
+    else
+        cat "$TEMP_DIR/workload-policy" >&2
+        fail "workloads declare service-account token intent and resource budgets"
     fi
 else
     info "PyYAML is unavailable; YAML parsing is covered by Ansible and optional live validation"
+fi
+
+workflow_action_failed=false
+while IFS= read -r action; do
+    if [[ "$action" == ./* || "$action" =~ ^docker://.+@sha256:[0-9a-f]{64}$ || "$action" =~ @[0-9a-f]{40}$ ]]; then
+        continue
+    fi
+    printf 'Unpinned GitHub Action reference: %s\n' "$action" >&2
+    workflow_action_failed=true
+done < <(sed -nE 's/^[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' "$REPOSITORY_ROOT"/.github/workflows/*.{yaml,yml} 2>/dev/null || true)
+if [[ "$workflow_action_failed" == "true" ]]; then
+    fail "third-party GitHub Actions are pinned immutably"
+else
+    pass "third-party GitHub Actions are pinned immutably"
 fi
 
 if command -v ansible-playbook >/dev/null 2>&1; then

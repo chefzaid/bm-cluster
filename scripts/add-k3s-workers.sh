@@ -2,6 +2,7 @@
 set -euo pipefail
 # A caller may have exported shell tracing; never trace token handling.
 set +x
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
@@ -410,8 +411,7 @@ provision_vrack_target() {
     check_bootstrap_target "$bootstrap_target"
     if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
         [[ -n "$ovh_server" ]] || error "The OVHcloud Dedicated Server service name is required for API attachment."
-        detected_mac="$(OVH_API_ENDPOINT="$OVH_API_ENDPOINT" \
-            OVH_APPLICATION_KEY="$OVH_APPLICATION_KEY" \
+        detected_mac="$(OVH_APPLICATION_KEY="$OVH_APPLICATION_KEY" \
             OVH_APPLICATION_SECRET="$OVH_APPLICATION_SECRET" \
             OVH_CONSUMER_KEY="$OVH_CONSUMER_KEY" \
             "$OVH_VRACK_CONFIGURATOR" --attach-server "$ovh_server" \
@@ -466,8 +466,6 @@ provision_vrack_target() {
         error "Private SSH did not become reachable at $private_target; bootstrap SSH remains available at $bootstrap_target and UFW was not changed."
     info "Private SSH is proven through $configured_interface; worker UFW may now close public ingress."
     VRACK_TARGET="$private_target"
-    VRACK_WORKER_IP="$worker_ip"
-    VRACK_NODE_INTERFACE="$configured_interface"
 }
 
 provision_tailscale_target() {
@@ -534,14 +532,14 @@ provision_tailscale_target() {
 
 check_target() {
     local target="$1" expected_worker_ip="$2"
-    local connection_info client_ip client_port worker_ip worker_port
+    local connection_info client_ip worker_ip
     [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ || "$target" =~ ^[A-Za-z0-9._:-]+$ ]] || \
         error "Invalid SSH target: $target"
     ssh "${ssh_options[@]}" "$target" \
         'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
         error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
     connection_info="$(ssh "${ssh_options[@]}" "$target" 'printf "%s" "$SSH_CONNECTION"')"
-    read -r client_ip client_port worker_ip worker_port <<< "$connection_info"
+    read -r client_ip _ worker_ip _ <<< "$connection_info"
     trusted_private_ipv4 "$client_ip" || \
         error "SSH to $target does not originate from an RFC1918/Tailscale control-plane address (observed: ${client_ip:-unknown})."
     trusted_private_ipv4 "$worker_ip" || \
@@ -654,7 +652,9 @@ if [[ "$NON_INTERACTIVE" == "true" ]]; then
             host="$TAILSCALE_WORKER_IP"
             node_name="$TAILSCALE_NODE_NAME"
         else
-            trusted_private_ipv4 "$host" && ! tailscale_ipv4 "$host" || error "vRack worker IP must be an RFC1918 IPv4 literal: $host"
+            if ! trusted_private_ipv4 "$host" || tailscale_ipv4 "$host"; then
+                error "vRack worker IP must be an RFC1918 IPv4 literal: $host"
+            fi
             cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "Worker IP $host is outside $NODE_NETWORK_CIDR"
             target="$(build_target "$host")"
             node_name=""
@@ -719,7 +719,9 @@ else
             private_interface_mac=""
             vlan_id=""
             prompt worker_host "Unique worker vRack RFC1918 address"
-            trusted_private_ipv4 "$worker_host" && ! tailscale_ipv4 "$worker_host" || error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
+            if ! trusted_private_ipv4 "$worker_host" || tailscale_ipv4 "$worker_host"; then
+                error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
+            fi
             cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
             printf 'Interfaces reported by %s:\n' "$bootstrap_target"
             ssh "${ssh_options[@]}" "$bootstrap_target" 'ip -br link show'

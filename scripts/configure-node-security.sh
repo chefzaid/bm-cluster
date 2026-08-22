@@ -179,7 +179,7 @@ make_ufw_authoritative_for_tailscale() {
 
 validate_worker_private_ssh_before_firewall() {
   local route route_interface route_source default_interface
-  local ssh_client_ip ssh_client_port ssh_server_ip ssh_server_port ssh_interface
+  local ssh_client_ip ssh_server_ip ssh_server_port ssh_interface
 
   [[ "$NODE_ROLE" == "worker" ]] || return 0
   route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
@@ -199,7 +199,7 @@ validate_worker_private_ssh_before_firewall() {
   fi
   [[ -n "${SSH_CONNECTION:-}" ]] || \
     err "Refusing to configure worker UFW without a proven private SSH session. Run install-worker.sh from the control plane over the selected private transport."
-  read -r ssh_client_ip ssh_client_port ssh_server_ip ssh_server_port <<< "$SSH_CONNECTION"
+  read -r ssh_client_ip _ ssh_server_ip ssh_server_port <<< "$SSH_CONNECTION"
   [[ "$ssh_client_ip" == "$CONTROL_PLANE_IP" ]] || \
     err "Refusing to configure worker UFW: current SSH client $ssh_client_ip is not control plane $CONTROL_PLANE_IP"
   [[ "$ssh_server_ip" == "$route_source" ]] || \

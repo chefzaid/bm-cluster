@@ -108,6 +108,7 @@ spec:
       labels:
         app: elasticsearch
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         seccompProfile:
@@ -122,6 +123,13 @@ spec:
           capabilities:
             drop: ["ALL"]
             add: ["CHOWN"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
         volumeMounts:
         - name: es-data
           mountPath: /data
@@ -206,6 +214,7 @@ spec:
       labels:
         app: logstash
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         seccompProfile:
@@ -243,12 +252,26 @@ spec:
         - name: config-volume
           mountPath: /usr/share/logstash/config/app-logs-template.json
           subPath: app-logs-template.json
+        startupProbe:
+          httpGet:
+            path: /
+            port: 9600
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
         readinessProbe:
           httpGet:
             path: /
             port: 9600
-          initialDelaySeconds: 60
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          tcpSocket:
+            port: 9600
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
       volumes:
       - name: config-volume
         configMap:
@@ -284,6 +307,7 @@ spec:
       labels:
         app: kibana
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         seccompProfile:
@@ -314,9 +338,23 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+        startupProbe:
+          httpGet:
+            path: /api/status
+            port: 5601
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
         readinessProbe:
           httpGet:
             path: /api/status
             port: 5601
-          initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          tcpSocket:
+            port: 5601
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6

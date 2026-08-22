@@ -197,6 +197,27 @@ spec:
           name: http
         - containerPort: 50000
           name: agent
+        startupProbe:
+          httpGet:
+            path: /login
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          httpGet:
+            path: /login
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /login
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         - name: jenkins-home
           mountPath: /var/jenkins_home

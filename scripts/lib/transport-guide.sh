@@ -148,8 +148,7 @@ EOF
 
     if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
         [[ -n "$OVH_APPLICATION_KEY" && -n "$OVH_APPLICATION_SECRET" && -n "$OVH_CONSUMER_KEY" && -n "$OVH_VRACK_SERVICE_NAME" ]] || return 1
-        while ! OVH_API_ENDPOINT="$OVH_API_ENDPOINT" \
-            OVH_APPLICATION_KEY="$OVH_APPLICATION_KEY" \
+        while ! OVH_APPLICATION_KEY="$OVH_APPLICATION_KEY" \
             OVH_APPLICATION_SECRET="$OVH_APPLICATION_SECRET" \
             OVH_CONSUMER_KEY="$OVH_CONSUMER_KEY" \
             "$configurator" --verify-account --vrack "$OVH_VRACK_SERVICE_NAME" \

@@ -4,6 +4,8 @@
 # Installs the K3s control plane and deploys infrastructure components
 # ==============================================================================
 set -euo pipefail
+set +x
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_CONFIG="$SCRIPT_DIR/config/platform.env"
@@ -55,6 +57,10 @@ OVH_APPLICATION_SECRET="${OVH_APPLICATION_SECRET:-}"
 OVH_CONSUMER_KEY="${OVH_CONSUMER_KEY:-}"
 OVH_VRACK_SERVICE_NAME="${OVH_VRACK_SERVICE_NAME:-}"
 OVH_CONTROL_PLANE_SERVICE_NAME="${OVH_CONTROL_PLANE_SERVICE_NAME:-}"
+INSTALLER_TEMP_DIR=""
+nodesource_installer=""
+k3s_installer=""
+helm_installer=""
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -199,8 +205,28 @@ cleanup_private_credentials() {
     OVH_APPLICATION_SECRET=""
     OVH_CONSUMER_KEY=""
     unset TAILSCALE_API_TOKEN OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY 2>/dev/null || true
+    if [[ -n "$INSTALLER_TEMP_DIR" && "$INSTALLER_TEMP_DIR" == /tmp/bm-cluster-installers.* && -d "$INSTALLER_TEMP_DIR" ]]; then
+        rm -r -- "$INSTALLER_TEMP_DIR"
+    fi
 }
 trap cleanup_private_credentials EXIT HUP INT TERM
+
+download_installer() {
+    local url="$1" filename="$2" destination_variable="$3" destination
+    [[ "$url" == https://* ]] || error "Installer URL must use HTTPS: $url"
+    [[ "$filename" =~ ^[A-Za-z0-9._-]+$ ]] || error "Invalid installer filename: $filename"
+    if [[ -z "$INSTALLER_TEMP_DIR" ]]; then
+        INSTALLER_TEMP_DIR="$(mktemp -d /tmp/bm-cluster-installers.XXXXXX)"
+        chmod 700 "$INSTALLER_TEMP_DIR"
+    fi
+    destination="$INSTALLER_TEMP_DIR/$filename"
+    curl --fail --location --silent --show-error \
+        --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+        --connect-timeout 15 --max-time 180 \
+        --output "$destination" "$url"
+    chmod 700 "$destination"
+    printf -v "$destination_variable" '%s' "$destination"
+}
 
 ensure_tls_secret() {
     local namespace="$1"
@@ -341,8 +367,9 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
             [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane vRack/private IPv4 address is required."
             export K3S_PRIVATE_ADDRESS
         fi
-        trusted_private_ipv4 "$K3S_PRIVATE_ADDRESS" && ! tailscale_ipv4 "$K3S_PRIVATE_ADDRESS" || \
+        if ! trusted_private_ipv4 "$K3S_PRIVATE_ADDRESS" || tailscale_ipv4 "$K3S_PRIVATE_ADDRESS"; then
             error "vRack transport requires this control plane's RFC1918 IPv4 address."
+        fi
         if [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
                 error "K3S_NODE_NETWORK_CIDR is required with vRack workers."
@@ -436,7 +463,8 @@ if [[ "$INSTALL_PREREQS" == "true" ]]; then
 
     if ! command -v node &>/dev/null || [[ "$(node -v)" != v24* ]]; then
         info "Installing Node.js 24..."
-        curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - > /dev/null 2>&1
+        download_installer https://deb.nodesource.com/setup_24.x nodesource-24.sh nodesource_installer
+        sudo -E bash "$nodesource_installer" > /dev/null 2>&1
         sudo apt-get install -y -qq nodejs > /dev/null
     fi
 
@@ -470,7 +498,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$INSTALL_K3S" == "true" ]]; then
         info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
-        curl -sfL https://get.k3s.io | sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh -s - \
+        download_installer https://get.k3s.io k3s-install.sh k3s_installer
+        sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh "$k3s_installer" \
             --disable traefik \
             --secrets-encryption \
             --write-kubeconfig-mode 600
@@ -478,7 +507,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
         umask 077
-        mkdir -p -m 700 ~/.kube
+        mkdir -p ~/.kube
+        chmod 700 ~/.kube
         sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
         sudo chown "$USER":"$USER" ~/.kube/config
         chmod 600 ~/.kube/config
@@ -498,24 +528,25 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 fi
 
 if command -v k3s >/dev/null 2>&1; then
-    [[ -x "$K3S_APPARMOR_SCRIPT" ]] || chmod +x "$K3S_APPARMOR_SCRIPT"
+    [[ -x "$K3S_APPARMOR_SCRIPT" ]] || error "K3s AppArmor configurator is not executable: $K3S_APPARMOR_SCRIPT"
     step "Configuring the enforced K3s AppArmor runtime profile..."
     "$K3S_APPARMOR_SCRIPT"
 
-    [[ -x "$K3S_BACKUP_SCRIPT" ]] || chmod +x "$K3S_BACKUP_SCRIPT"
+    [[ -x "$K3S_BACKUP_SCRIPT" ]] || error "K3s backup configurator is not executable: $K3S_BACKUP_SCRIPT"
     step "Configuring daily consistent K3s recovery archives..."
     "$K3S_BACKUP_SCRIPT"
 fi
 
 if [[ "$INSTALL_LONGHORN" == "true" ]]; then
-    [[ -x "$LONGHORN_HOST_SCRIPT" ]] || chmod +x "$LONGHORN_HOST_SCRIPT"
+    [[ -x "$LONGHORN_HOST_SCRIPT" ]] || error "Longhorn host configurator is not executable: $LONGHORN_HOST_SCRIPT"
     step "Configuring Longhorn host storage prerequisites..."
     "$LONGHORN_HOST_SCRIPT"
 fi
 
 if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
     info "Installing Helm 3..."
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash > /dev/null 2>&1
+    download_installer https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 helm-install.sh helm_installer
+    bash "$helm_installer" > /dev/null 2>&1
 fi
 
 if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then
@@ -571,7 +602,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     step "Creating infra namespace..."
-    kubectl create namespace infra 2>/dev/null || true
+    kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f - >/dev/null
     kubectl apply -f "$DEPLOY_DIR/security-baseline.yaml"
 
     step "Publishing host security policy record..."
@@ -630,7 +661,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
-        [[ -x "$CLOUDFLARE_SCRIPT" ]] || chmod +x "$CLOUDFLARE_SCRIPT"
+        [[ -x "$CLOUDFLARE_SCRIPT" ]] || error "Cloudflare configurator is not executable: $CLOUDFLARE_SCRIPT"
         step "Configuring Cloudflare DNS and Origin TLS..."
         "$CLOUDFLARE_SCRIPT"
     fi
@@ -663,7 +694,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout="$VAULT_WAIT_TIMEOUT"
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout="$VAULT_WAIT_TIMEOUT"
 
-        [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || chmod +x "$VAULT_BOOTSTRAP_SCRIPT"
+        [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || error "Vault configurator is not executable: $VAULT_BOOTSTRAP_SCRIPT"
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
 
@@ -692,7 +723,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         done
 
         kubectl rollout status deployment/nexus -n infra --timeout="$NEXUS_WAIT_TIMEOUT"
-        [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || chmod +x "$NEXUS_REGISTRY_SCRIPT"
+        [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || error "Nexus registry configurator is not executable: $NEXUS_REGISTRY_SCRIPT"
         step "Configuring the private Nexus image registry and service accounts..."
         "$NEXUS_REGISTRY_SCRIPT"
         for registry_secret in jenkins-builds/jenkins-registry-auth devapp/devapp-registry-auth; do

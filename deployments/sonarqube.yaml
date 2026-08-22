@@ -53,6 +53,7 @@ spec:
       labels:
         app: sonarqube
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         seccompProfile:
@@ -63,6 +64,13 @@ spec:
         command: ["sysctl", "-w", "vm.max_map_count=262144"]
         securityContext:
           privileged: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
       - name: init-chown
         image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
         command: ["sh", "-c", "chown -R 1000:1000 /opt/sonarqube/data /opt/sonarqube/extensions /opt/sonarqube/logs"]
@@ -72,6 +80,13 @@ spec:
           capabilities:
             drop: ["ALL"]
             add: ["CHOWN"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
         volumeMounts:
         - name: sonarqube-data
           mountPath: /opt/sonarqube/data
@@ -129,6 +144,13 @@ spec:
           WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'sonarqube') \gexec
           ALTER DATABASE sonarqube OWNER TO sonar;
           SQL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
       containers:
       - name: sonarqube
         image: sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70

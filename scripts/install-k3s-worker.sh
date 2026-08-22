@@ -2,6 +2,7 @@
 set -euo pipefail
 # A caller may have exported shell tracing; never trace token handling.
 set +x
+umask 077
 
 SERVER_URL=""
 JOIN_TOKEN=""
@@ -21,6 +22,7 @@ TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
+INSTALLER_TEMP_DIR=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
 if [[ -r "$PLATFORM_CONFIG" ]]; then
@@ -53,6 +55,8 @@ OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
 VRACK_INTERFACE="${K3S_PRIVATE_INTERFACE:-}"
 VRACK_INTERFACE_MAC="${K3S_PRIVATE_INTERFACE_MAC:-}"
 VRACK_VLAN_ID="${K3S_VRACK_VLAN_ID:-}"
+# Used by the sourced transport guide, which intentionally mutates caller state.
+# shellcheck disable=SC2034
 OVH_VRACK_AUTOMATE_ACCOUNT=false
 OVH_API_ENDPOINT="${OVH_API_ENDPOINT:-ovh-eu}"
 OVH_APPLICATION_KEY="${OVH_APPLICATION_KEY:-}"
@@ -68,6 +72,9 @@ cleanup_private_credentials() {
     JOIN_TOKEN=""
     TAILSCALE_API_TOKEN=""
     unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
+    if [[ -n "$INSTALLER_TEMP_DIR" && "$INSTALLER_TEMP_DIR" == /tmp/bm-cluster-worker-installers.* && -d "$INSTALLER_TEMP_DIR" ]]; then
+        rm -r -- "$INSTALLER_TEMP_DIR"
+    fi
 }
 trap cleanup_private_credentials EXIT HUP INT TERM
 
@@ -408,7 +415,6 @@ else
     info "Enforcing the local-only firewall before K3s enrollment..."
 fi
 K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-CONTROL_PLANE_IP="$CONTROL_PLANE_IP" \
     "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
     --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
 
@@ -453,7 +459,15 @@ if ! "${SUDO[@]}" test -f /etc/rancher/k3s/registries.yaml; then
 elif ! "${SUDO[@]}" grep -Fq "$REGISTRY_HOST" /etc/rancher/k3s/registries.yaml; then
     error "/etc/rancher/k3s/registries.yaml exists without the internal Nexus mirror; merge $REGISTRY_HOST before enrolling this worker."
 fi
-curl -sfL https://get.k3s.io | "${SUDO[@]}" "${install_environment[@]}" sh -s - "${agent_args[@]}"
+INSTALLER_TEMP_DIR="$(mktemp -d /tmp/bm-cluster-worker-installers.XXXXXX)"
+chmod 700 "$INSTALLER_TEMP_DIR"
+k3s_installer="$INSTALLER_TEMP_DIR/k3s-install.sh"
+curl --fail --location --silent --show-error \
+    --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+    --connect-timeout 15 --max-time 180 \
+    --output "$k3s_installer" https://get.k3s.io
+chmod 700 "$k3s_installer"
+"${SUDO[@]}" "${install_environment[@]}" sh "$k3s_installer" "${agent_args[@]}"
 JOIN_TOKEN=""
 unset JOIN_TOKEN
 
@@ -461,7 +475,6 @@ unset JOIN_TOKEN
 
 info "Applying the mandatory local-only worker security policy..."
 K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-CONTROL_PLANE_IP="$CONTROL_PLANE_IP" \
     "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
     --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
 

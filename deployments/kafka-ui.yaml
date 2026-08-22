@@ -32,6 +32,7 @@ spec:
       labels:
         app: kafka-ui
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 100

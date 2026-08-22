@@ -32,6 +32,7 @@ spec:
       labels:
         app: redis
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 999

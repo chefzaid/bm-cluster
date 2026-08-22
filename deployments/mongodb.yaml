@@ -58,6 +58,7 @@ spec:
       labels:
         app: mongodb
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 999

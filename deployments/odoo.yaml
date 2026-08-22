@@ -53,6 +53,7 @@ spec:
       labels:
         app: odoo
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 100
@@ -109,6 +110,13 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_DB_PASSWORD
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo-generated
@@ -226,6 +234,13 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_ADMIN_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo-generated

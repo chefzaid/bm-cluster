@@ -356,7 +356,10 @@ ensure_tailscale_installed() {
     command -v apt-get >/dev/null 2>&1 || error "Automatic Tailscale installation currently supports Debian/Ubuntu."
     installer="$TEMP_DIR/install-tailscale.sh"
     info "Installing Tailscale from its official Linux installer."
-    curl -fsSL --proto '=https' --tlsv1.2 https://tailscale.com/install.sh -o "$installer"
+    curl --fail --location --silent --show-error \
+        --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+        --connect-timeout 15 --max-time 180 \
+        https://tailscale.com/install.sh -o "$installer"
     chmod 700 "$installer"
     "${SUDO[@]}" sh "$installer"
 }

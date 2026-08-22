@@ -79,7 +79,6 @@ Requirements:
 For a new cluster, run the guided installer on the future control-plane host:
 
 ```bash
-chmod +x install-control-plane.sh install-worker.sh scripts/*.sh
 ./install-control-plane.sh
 ```
 
@@ -352,6 +351,10 @@ Ansible, YAML, immutable image references, and hostname inventories:
 ./scripts/validate-repository.sh --live # server-side dry-run; no mutation
 ```
 
+The same checks run on every pull request and push to `main`. EditorConfig and
+Git attributes keep text formatting portable, while Dependabot proposes updates
+to the workflow's immutable action pins.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -389,4 +392,4 @@ Ansible, YAML, immutable image references, and hostname inventories:
 
 ## License
 
-GPL 3.0
+GNU General Public License v3.0. See `LICENSE`.

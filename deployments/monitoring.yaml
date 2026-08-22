@@ -150,6 +150,7 @@ spec:
         app: kube-state-metrics
     spec:
       serviceAccountName: kube-state-metrics
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -223,6 +224,7 @@ spec:
       labels:
         app: node-exporter
     spec:
+      automountServiceAccountToken: false
       hostNetwork: true
       hostPID: true
       securityContext:
@@ -247,6 +249,18 @@ spec:
           ports:
             - name: metrics
               containerPort: 9100
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 3
           resources:
             requests:
               cpu: 20m
@@ -414,6 +428,7 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -774,6 +789,7 @@ spec:
         app: grafana
     spec:
       serviceAccountName: grafana
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         fsGroup: 472
