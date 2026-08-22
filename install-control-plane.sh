@@ -32,6 +32,7 @@ K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
 TAILSCALE_SCRIPT="$SCRIPT_DIR/scripts/configure-tailscale.sh"
+OVH_VRACK_SCRIPT="$SCRIPT_DIR/scripts/configure-ovh-vrack.sh"
 AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 K3S_NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
@@ -40,6 +41,13 @@ TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-$DEFAULT_TAILSCALE_TAILNET}"
 TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-$DEFAULT_TAILSCALE_MESH_NAME}"
 TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-$DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS}"
+OVH_VRACK_AUTOMATE_ACCOUNT="${OVH_VRACK_AUTOMATE_ACCOUNT:-}"
+OVH_API_ENDPOINT="${OVH_API_ENDPOINT:-ovh-eu}"
+OVH_APPLICATION_KEY="${OVH_APPLICATION_KEY:-}"
+OVH_APPLICATION_SECRET="${OVH_APPLICATION_SECRET:-}"
+OVH_CONSUMER_KEY="${OVH_CONSUMER_KEY:-}"
+OVH_VRACK_SERVICE_NAME="${OVH_VRACK_SERVICE_NAME:-}"
+OVH_CONTROL_PLANE_SERVICE_NAME="${OVH_CONTROL_PLANE_SERVICE_NAME:-}"
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -161,8 +169,8 @@ select_node_transport() {
 
     printf '%s\n' \
         "Select the private node transport:" \
-        "  1) OVH vRack / private LAN (recommended when all nodes are on OVH)" \
-        "  2) Tailscale (automated cross-provider overlay)" >&2
+        "  1) OVHcloud vRack (OVHcloud-only)" \
+        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)" >&2
     while true; do
         read -rp "Select 1 or 2 [$([[ "$default_transport" == "vrack" ]] && printf 1 || printf 2)]: " raw_answer
         raw_answer="${raw_answer:-$default_transport}"
@@ -180,7 +188,10 @@ select_node_transport() {
 
 cleanup_private_credentials() {
     TAILSCALE_API_TOKEN=""
-    unset TAILSCALE_API_TOKEN 2>/dev/null || true
+    OVH_APPLICATION_KEY=""
+    OVH_APPLICATION_SECRET=""
+    OVH_CONSUMER_KEY=""
+    unset TAILSCALE_API_TOKEN OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY 2>/dev/null || true
 }
 trap cleanup_private_credentials EXIT HUP INT TERM
 
@@ -311,6 +322,56 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         TAILSCALE_CONFIG_PREPARED=true
         export TAILSCALE_TAILNET TAILSCALE_MESH_NAME TAILSCALE_NODE_HOSTNAME TAILSCALE_AUTH_KEY_EXPIRY_SECONDS TAILSCALE_CONFIG_PREPARED
     else
+        [[ -x "$OVH_VRACK_SCRIPT" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_SCRIPT"
+        if [[ -z "$OVH_VRACK_AUTOMATE_ACCOUNT" ]]; then
+            if [[ "$AUTO_APPROVE" == "true" ]]; then
+                if [[ -n "$OVH_APPLICATION_KEY$OVH_APPLICATION_SECRET$OVH_CONSUMER_KEY$OVH_VRACK_SERVICE_NAME$OVH_CONTROL_PLANE_SERVICE_NAME" ]]; then
+                    OVH_VRACK_AUTOMATE_ACCOUNT=true
+                else
+                    OVH_VRACK_AUTOMATE_ACCOUNT=false
+                fi
+            elif ask_with_default "Use the OVHcloud API to attach Dedicated Server interfaces to an existing vRack?" "Y"; then
+                OVH_VRACK_AUTOMATE_ACCOUNT=true
+            else
+                OVH_VRACK_AUTOMATE_ACCOUNT=false
+            fi
+        fi
+        [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" =~ ^(true|false)$ ]] || error "OVH_VRACK_AUTOMATE_ACCOUNT must be true or false."
+        if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
+            if [[ "$AUTO_APPROVE" != "true" ]]; then
+                info "Use OVHcloud API application credentials with vRack read/attach/task permissions; inputs are not persisted."
+                read -rp "$(echo -e "${YELLOW}OVHcloud API region endpoint [${OVH_API_ENDPOINT}]:${NC} ")" ovh_answer
+                OVH_API_ENDPOINT="${ovh_answer:-$OVH_API_ENDPOINT}"
+                read -rp "$(echo -e "${YELLOW}Existing vRack service name (pn-...) [${OVH_VRACK_SERVICE_NAME}]:${NC} ")" ovh_answer
+                OVH_VRACK_SERVICE_NAME="${ovh_answer:-$OVH_VRACK_SERVICE_NAME}"
+                read -rp "$(echo -e "${YELLOW}This control plane's OVHcloud Dedicated Server service name [${OVH_CONTROL_PLANE_SERVICE_NAME}]:${NC} ")" ovh_answer
+                OVH_CONTROL_PLANE_SERVICE_NAME="${ovh_answer:-$OVH_CONTROL_PLANE_SERVICE_NAME}"
+                if [[ -z "$OVH_APPLICATION_KEY" ]]; then
+                    read -rp "$(echo -e "${YELLOW}OVHcloud API application key:${NC} ")" OVH_APPLICATION_KEY
+                fi
+                if [[ -z "$OVH_APPLICATION_SECRET" ]]; then
+                    read -rsp "OVHcloud API application secret (input hidden): " OVH_APPLICATION_SECRET
+                    printf '\n'
+                fi
+                if [[ -z "$OVH_CONSUMER_KEY" ]]; then
+                    read -rsp "OVHcloud API consumer key (input hidden): " OVH_CONSUMER_KEY
+                    printf '\n'
+                fi
+            fi
+            [[ -n "$OVH_VRACK_SERVICE_NAME" && -n "$OVH_CONTROL_PLANE_SERVICE_NAME" ]] || \
+                error "OVH_VRACK_SERVICE_NAME and OVH_CONTROL_PLANE_SERVICE_NAME are required for API attachment."
+            export OVH_API_ENDPOINT OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY OVH_VRACK_SERVICE_NAME
+            step "Attaching the control-plane private interface to OVHcloud vRack $OVH_VRACK_SERVICE_NAME..."
+            detected_vrack_mac="$("$OVH_VRACK_SCRIPT" --attach-server "$OVH_CONTROL_PLANE_SERVICE_NAME" \
+                --vrack "$OVH_VRACK_SERVICE_NAME" --ovh-endpoint "$OVH_API_ENDPOINT" --non-interactive)"
+            if [[ "${detected_vrack_mac,,}" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ && -z "${K3S_PRIVATE_INTERFACE_MAC:-}" ]]; then
+                K3S_PRIVATE_INTERFACE_MAC="$detected_vrack_mac"
+            fi
+        else
+            warn "OVHcloud account attachment is manual: the existing vRack and every server must be attached in Control Panel before host configuration."
+        fi
+        OVH_VRACK_CONFIG_PREPARED=true
+        export OVH_VRACK_AUTOMATE_ACCOUNT OVH_VRACK_CONFIG_PREPARED
         if [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
                 error "K3S_PRIVATE_ADDRESS is required with vRack workers."
@@ -329,6 +390,26 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
             [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted vRack/private node CIDR is required."
             export K3S_NODE_NETWORK_CIDR
         fi
+        existing_vrack_interface="$(interface_owning_ip "$K3S_PRIVATE_ADDRESS")"
+        if [[ -z "$existing_vrack_interface" && "$AUTO_APPROVE" != "true" ]]; then
+            ip -br link show
+            read -rp "$(echo -e "${YELLOW}Control-plane OVHcloud private/vRack NIC name:${NC} ")" K3S_PRIVATE_INTERFACE
+            read -rp "$(echo -e "${YELLOW}Expected private NIC MAC (recommended) [${K3S_PRIVATE_INTERFACE_MAC:-}]:${NC} ")" ovh_answer
+            K3S_PRIVATE_INTERFACE_MAC="${ovh_answer:-${K3S_PRIVATE_INTERFACE_MAC:-}}"
+            read -rp "$(echo -e "${YELLOW}Optional vRack VLAN ID (blank for untagged VLAN 0):${NC} ")" K3S_VRACK_VLAN_ID
+        fi
+        vrack_node_args=(
+            --configure-node
+            --private-ip "$K3S_PRIVATE_ADDRESS"
+            --network-cidr "$K3S_NODE_NETWORK_CIDR"
+        )
+        [[ -z "${K3S_PRIVATE_INTERFACE:-}" ]] || vrack_node_args+=(--interface "$K3S_PRIVATE_INTERFACE")
+        [[ -z "${K3S_PRIVATE_INTERFACE_MAC:-}" ]] || vrack_node_args+=(--interface-mac "$K3S_PRIVATE_INTERFACE_MAC")
+        [[ -z "${K3S_VRACK_VLAN_ID:-}" ]] || vrack_node_args+=(--vlan-id "$K3S_VRACK_VLAN_ID")
+        [[ "$AUTO_APPROVE" != "true" ]] || vrack_node_args+=(--non-interactive)
+        step "Configuring and validating the control-plane OVHcloud vRack interface before any firewall changes..."
+        K3S_PRIVATE_INTERFACE="$("$OVH_VRACK_SCRIPT" "${vrack_node_args[@]}")"
+        export K3S_PRIVATE_INTERFACE K3S_PRIVATE_INTERFACE_MAC K3S_VRACK_VLAN_ID
     fi
 fi
 ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false

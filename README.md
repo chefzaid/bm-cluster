@@ -94,10 +94,11 @@ provided.
 ## Adding worker nodes
 
 Worker enrollment is built into `install-control-plane.sh`. Answer **yes** to
-adding workers, choose **OVH vRack/private LAN** or **Tailscale**, then enter any
-number of workers. Use one transport consistently for the control plane and all
-workers in an enrollment run. Adding workers increases workload capacity; it
-does not make the single K3s control plane highly available.
+adding workers, choose **OVHcloud-only vRack** or **Tailscale for
+hybrid/non-OVHcloud providers**, then enter any number of workers. Use one
+transport consistently for the control plane and all workers in an enrollment
+run. Adding workers increases workload capacity; it does not make the single
+K3s control plane highly available.
 
 Worker requirements:
 
@@ -106,25 +107,52 @@ Worker requirements:
   passwordless `sudo`
 - No public DNS, port-forward, load balancer, or application ingress targeting a
   worker
-- vRack workers must have only RFC1918/ULA addressing and controlled outbound
-  egress; Tailscale workers may retain a provider interface for outbound traffic
-  and initial SSH bootstrap, but receive no inbound UFW rule on that interface
+- Workers may retain a provider interface for initial bootstrap and controlled
+  outbound traffic, but it receives no inbound UFW rule after private SSH is proven
 
 ### Private node network
 
-#### OVH vRack — recommended for the current cluster
+#### OVHcloud vRack — OVHcloud-only
 
-Use vRack when all nodes are on OVH because it keeps cluster and Longhorn
-traffic on the provider network. Before running the installer, use OVH's
-[dedicated-server vRack guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server)
-to create the vRack, attach every server, assign unique RFC1918 addresses to the
-private NICs, and verify bidirectional SSH/ping. Keep the control plane's public
-NIC intact. Verify access and an IPMI/KVM recovery path before removing worker
-public addressing, and provide workers controlled NAT/egress for updates and
-image pulls. The installer asks for the control-plane IP, node CIDR, and each
-worker vRack IP and validates them before changing K3s or UFW.
+Use vRack only when every participating server is an eligible OVHcloud service.
+It keeps K3s and Longhorn traffic on OVHcloud's private L2 network. Before the
+installer, complete the parts OVHcloud does not expose as safe unattended host
+automation:
 
-#### Tailscale — cross-provider alternative
+1. Order and activate a vRack in `Network` → `vRack private network`, accept its
+   contract, and confirm every server is vRack-compatible. Record a working
+   [IPMI/KVM](https://help.ovhcloud.com/csm/en-dedicated-servers-ipmi?id=kb_article_view&sysparm_article=KB0043448)
+   or [rescue-mode](https://help.ovhcloud.com/csm/en-dedicated-servers-rescue-mode?id=kb_article_view&sysparm_article=KB0043430)
+   path. Commercial checkout/contract acceptance and recovery access remain
+   manual so automation cannot accept terms or remove the last recovery route.
+2. Choose one unused RFC1918 subnet. Record each server's OVHcloud Dedicated
+   Server service name and the private-interface MAC shown under `Network
+   interfaces`. Physical NIC identity must be confirmed manually when the API
+   does not return a MAC.
+3. For automated account attachment, create a dedicated least-privilege
+   AK/AS/CK credential set, using the shortest practical consumer-key validity,
+   with OVHcloud's [API credential guide](https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps).
+   Grant `GET /vrack`, `GET /vrack/*`, and
+   `POST /vrack/*/dedicatedServerInterface`. Optionally grant
+   `GET /dedicated/server/*/networking` so the installer can discover a single
+   private NIC MAC. Revoke the credentials afterward.
+
+The installer then signs OVHcloud API requests without persisting credentials,
+attaches eligible server interfaces to the existing vRack, matches the private
+MAC to the Linux NIC where possible, writes a dedicated Netplan/ifupdown file,
+and leaves the public/default-route configuration untouched. For each worker it
+first verifies bootstrap SSH survived, then proves SSH over the assigned vRack
+address from the control plane. Only that private SSH session may apply UFW.
+Failure at any earlier step leaves UFW unchanged and reports the still-usable
+bootstrap endpoint. See OVHcloud's current
+[Dedicated Server vRack guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server).
+
+Use control-plane mode for new nodes: `./install-worker.sh --control-plane`.
+Direct `--worker` mode will configure the private transport, but deliberately
+refuses UFW unless its current SSH session already originates from the exact
+private control-plane IP and terminates on the worker's private address.
+
+#### Tailscale — hybrid cloud or non-OVHcloud providers
 
 Use Tailscale when nodes span providers, regions, or unrelated private
 networks. The only account preparation is:
@@ -193,7 +221,12 @@ Workers have no internet-facing mode. UFW is default-deny inbound and permits
 SSH only from the exact control-plane address plus required K3s/Longhorn peer
 ports on the chosen private interface. Fail2ban, CrowdSec, and persistent Lynis
 are absent from workers. Secret input is hidden and is never stored in the
-repository or placed in command-line arguments.
+repository or placed in command-line arguments. Worker UFW refuses to run unless
+the active SSH session itself comes from the exact private control-plane IP to
+the worker's vRack/Tailscale address, preventing a public-bootstrap lockout.
+Both host input and forwarded Docker/Kubernetes traffic are denied on every
+non-cluster interface for IPv4 and IPv6; outbound updates and their stateful
+replies remain allowed.
 
 For non-interactive vRack enrollment:
 
@@ -208,6 +241,11 @@ K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 
 Optional settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
 `K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`.
+OVHcloud vRack API automation uses transient `OVH_API_ENDPOINT`,
+`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`, and
+`OVH_VRACK_SERVICE_NAME`; set `OVH_VRACK_AUTOMATE_ACCOUNT=false` when interfaces
+were attached manually. Preconfigured non-interactive workers still use
+`K3S_WORKER_IPS`.
 Non-interactive Tailscale enrollment uses `K3S_NODE_TRANSPORT=tailscale`,
 `K3S_WORKER_HOSTS`, `TAILSCALE_TAILNET`, `TAILSCALE_MESH_NAME`, and a transient
 `TAILSCALE_API_TOKEN`; common SSH defaults remain available through the worker
@@ -230,7 +268,9 @@ one-hour window, starts with a 24-hour ban, and exponentially extends repeat
 bans up to 30 days; CrowdSec also detects slow brute-force and user-enumeration
 patterns and applies seven-day decisions. UFW exposes HTTP/HTTPS only to
 Cloudflare proxy networks, keeps the Kubernetes API on the private interface,
-and retains approximately three months of authentication logs for review.
+and retains approximately three months of authentication logs for review. The
+hardener detects the active SSH port, prepares its allow rule before enabling
+UFW, and worker enrollment confirms a fresh private SSH connection afterward.
 
 Lynis is installed only on the control plane. To audit the complete cluster,
 run the control-plane audit assistant as the same user and SSH identity used to
@@ -353,6 +393,7 @@ Ansible, YAML, immutable image references, and hostname inventories:
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
 | `scripts/configure-tailscale.sh` | Provider-neutral tailnet policy, fleet inventory, role tags, one-use keys, and node reconciliation |
+| `scripts/configure-ovh-vrack.sh` | OVHcloud vRack API attachment and safe private-interface reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |

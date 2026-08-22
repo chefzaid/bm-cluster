@@ -87,15 +87,24 @@ else
 fi
 
 tailscale_firewall_line="$(grep -n '^configure_tailscale_firewall_integration$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
+private_ssh_line="$(grep -n '^validate_worker_private_ssh_before_firewall$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 ufw_apply_line="$(grep -n '^configure_ufw$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
+tailscale_handoff_line="$(grep -n '^make_ufw_authoritative_for_tailscale$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 tailscale_worker_setup_line="$(grep -n '^if \[\[ "$NODE_TRANSPORT" == "tailscale" \]\]; then$' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
+vrack_worker_setup_line="$(grep -n 'Configuring OVHcloud vRack before any UFW changes' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | cut -d: -f1 || true)"
 worker_firewall_line="$(grep -n '"\$SECURITY_HARDENER" --apply' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
-if [[ -n "$tailscale_firewall_line" && -n "$ufw_apply_line" &&
-      -n "$tailscale_worker_setup_line" && -n "$worker_firewall_line" ]] &&
-   (( tailscale_firewall_line < ufw_apply_line && tailscale_worker_setup_line < worker_firewall_line )); then
-    pass "Tailscale worker setup and preflight precede UFW enforcement"
+control_tailscale_setup_line="$(grep -n 'Reconciling the tailnet policy and control-plane role' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
+control_vrack_setup_line="$(grep -n 'Configuring and validating the control-plane OVHcloud vRack interface before any firewall changes' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
+control_firewall_line="$(grep -n 'Applying the .* control-plane host security policy' "$REPOSITORY_ROOT/install-control-plane.sh" | cut -d: -f1 || true)"
+if [[ -n "$tailscale_firewall_line" && -n "$private_ssh_line" && -n "$ufw_apply_line" && -n "$tailscale_handoff_line" &&
+      -n "$tailscale_worker_setup_line" && -n "$vrack_worker_setup_line" && -n "$worker_firewall_line" &&
+      -n "$control_tailscale_setup_line" && -n "$control_vrack_setup_line" && -n "$control_firewall_line" ]] &&
+   (( tailscale_firewall_line < private_ssh_line && private_ssh_line < ufw_apply_line && ufw_apply_line < tailscale_handoff_line &&
+      tailscale_worker_setup_line < worker_firewall_line && vrack_worker_setup_line < worker_firewall_line &&
+      control_tailscale_setup_line < control_firewall_line && control_vrack_setup_line < control_firewall_line )); then
+    pass "private transport setup and SSH preflight precede worker UFW enforcement"
 else
-    fail "Tailscale worker setup and preflight precede UFW enforcement"
+    fail "private transport setup and SSH preflight precede worker UFW enforcement"
 fi
 
 info "Checking shared platform contract"
@@ -144,6 +153,14 @@ if [[ "${DEFAULT_TAILSCALE_MESH_NAME:-}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] &
     pass "Tailscale contract is mesh-scoped and provider-neutral"
 else
     fail "Tailscale contract is mesh-scoped and provider-neutral"
+fi
+
+if [[ -x "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh" ]] &&
+   grep -Fq 'OVHcloud-only' "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh" &&
+   grep -Fq 'hybrid cloud or non-OVHcloud providers' "$REPOSITORY_ROOT/install-control-plane.sh"; then
+    pass "private transport choices are explicitly provider-scoped"
+else
+    fail "private transport choices are explicitly provider-scoped"
 fi
 
 if grep -Eq 'CHART_VERSION="\$\{[^}]+:-[0-9]|K3S_INSTALL_VERSION="\$\{[^}]+:-v[0-9]' "$REPOSITORY_ROOT/install-control-plane.sh" ||

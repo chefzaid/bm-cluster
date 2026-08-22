@@ -137,7 +137,7 @@ command -v ssh >/dev/null 2>&1 || error "ssh is required."
 command -v scp >/dev/null 2>&1 || error "scp is required."
 
 printf '%s\n' \
-    "Tailscale cross-provider server mesh" \
+    "Tailscale hybrid/non-OVHcloud server mesh" \
     "Each existing IP/DNS name below is used only to bootstrap over SSH." \
     "The servers communicate through their assigned Tailscale addresses afterward."
 prompt TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILNET"

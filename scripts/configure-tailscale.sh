@@ -57,7 +57,7 @@ Interactive node setup:
   scripts/configure-tailscale.sh --role control-plane
   scripts/configure-tailscale.sh --role worker
 
-Interactive cross-provider fleet setup (asks for every server endpoint):
+Interactive hybrid/non-OVHcloud fleet setup (asks for every server endpoint):
   scripts/configure-tailscale.sh --fleet
 
 The prompt requires a personal Tailscale API access token beginning with

@@ -24,6 +24,7 @@ K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
+OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
 WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
@@ -43,6 +44,13 @@ TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cl
 TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-${DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-3600}}"
 TAILSCALE_CONFIG_PREPARED="${TAILSCALE_CONFIG_PREPARED:-false}"
+OVH_VRACK_AUTOMATE_ACCOUNT="${OVH_VRACK_AUTOMATE_ACCOUNT:-}"
+OVH_VRACK_CONFIG_PREPARED="${OVH_VRACK_CONFIG_PREPARED:-false}"
+OVH_API_ENDPOINT="${OVH_API_ENDPOINT:-ovh-eu}"
+OVH_APPLICATION_KEY="${OVH_APPLICATION_KEY:-}"
+OVH_APPLICATION_SECRET="${OVH_APPLICATION_SECRET:-}"
+OVH_CONSUMER_KEY="${OVH_CONSUMER_KEY:-}"
+OVH_VRACK_SERVICE_NAME="${OVH_VRACK_SERVICE_NAME:-}"
 JOIN_TOKEN=""
 LOCAL_SUDO=()
 
@@ -65,8 +73,8 @@ Non-interactive worker selection:
     --identity-file ~/.ssh/id_ed25519
 
 Options:
-  --transport MODE          Private transport: vrack or tailscale
-  --worker-ips CSV          vRack/private RFC1918 addresses of workers
+  --transport MODE          OVHcloud-only vrack, or hybrid/non-OVH tailscale
+  --worker-ips CSV          Preconfigured OVHcloud vRack worker addresses
   --worker-hosts CSV        Tailscale bootstrap SSH hosts/IPs (one or more)
   --server-url URL          K3s URL using this control plane's private IPv4
   --ssh-user USER           Default SSH user (each server can override it)
@@ -89,7 +97,9 @@ Options:
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
-vRack mode asks for final RFC1918 worker IPs. Tailscale mode asks for temporary
+OVHcloud vRack mode can attach server interfaces through the OVHcloud API,
+configure each private NIC over bootstrap SSH, prove private SSH, and only then
+apply UFW. Tailscale mode asks for temporary
 SSH bootstrap hosts, installs and tags Tailscale automatically, then switches
 all enrollment traffic to tailscale0. Public bootstrap interfaces receive no
 inbound UFW allowance after enrollment. SSH is allowed only from the exact
@@ -151,6 +161,7 @@ done
 [[ -f "$K3S_APPARMOR_INSTALLER" ]] || error "AppArmor installer not found: $K3S_APPARMOR_INSTALLER"
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
 [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
+[[ -x "$OVH_VRACK_CONFIGURATOR" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_CONFIGURATOR"
 command -v ssh >/dev/null 2>&1 || error "ssh is required."
 command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
@@ -177,8 +188,8 @@ select_transport() {
     [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
     printf '%s\n' \
         "Select the private node transport:" \
-        "  1) OVH vRack / private LAN" \
-        "  2) Tailscale (automated cross-provider overlay)"
+        "  1) OVHcloud vRack (OVHcloud-only)" \
+        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)"
     while true; do
         read -rp "Select 1 or 2 [1]: " answer
         case "${answer:-1}" in
@@ -234,6 +245,42 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
             --api-token-stdin)"
     NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
 else
+    if [[ "$OVH_VRACK_CONFIG_PREPARED" != "true" ]]; then
+        if [[ -z "$OVH_VRACK_AUTOMATE_ACCOUNT" ]]; then
+            if [[ "$NON_INTERACTIVE" == "true" ]]; then
+                if [[ -n "$OVH_APPLICATION_KEY$OVH_APPLICATION_SECRET$OVH_CONSUMER_KEY$OVH_VRACK_SERVICE_NAME" ]]; then
+                    OVH_VRACK_AUTOMATE_ACCOUNT=true
+                else
+                    OVH_VRACK_AUTOMATE_ACCOUNT=false
+                fi
+            else
+                read -rp "Use the OVHcloud API to attach worker interfaces to an existing vRack? [Y/n]: " ovh_answer
+                [[ "${ovh_answer:-Y}" =~ ^[Yy]$ ]] && OVH_VRACK_AUTOMATE_ACCOUNT=true || OVH_VRACK_AUTOMATE_ACCOUNT=false
+            fi
+        fi
+        if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" && "$NON_INTERACTIVE" != "true" ]]; then
+            prompt OVH_API_ENDPOINT "OVHcloud API region endpoint (ovh-eu, ovh-ca, or ovh-us)" "$OVH_API_ENDPOINT"
+            prompt OVH_VRACK_SERVICE_NAME "Existing OVHcloud vRack service name (pn-...)" "$OVH_VRACK_SERVICE_NAME"
+            [[ -n "$OVH_APPLICATION_KEY" ]] || prompt OVH_APPLICATION_KEY "OVHcloud API application key"
+            if [[ -z "$OVH_APPLICATION_SECRET" ]]; then
+                read -rsp "OVHcloud API application secret (input hidden): " OVH_APPLICATION_SECRET
+                printf '\n'
+            fi
+            if [[ -z "$OVH_CONSUMER_KEY" ]]; then
+                read -rsp "OVHcloud API consumer key (input hidden): " OVH_CONSUMER_KEY
+                printf '\n'
+            fi
+        fi
+    fi
+    OVH_VRACK_AUTOMATE_ACCOUNT="${OVH_VRACK_AUTOMATE_ACCOUNT:-false}"
+    [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" =~ ^(true|false)$ ]] || error "OVH_VRACK_AUTOMATE_ACCOUNT must be true or false."
+    if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
+        [[ -n "$OVH_APPLICATION_KEY" && -n "$OVH_APPLICATION_SECRET" && -n "$OVH_CONSUMER_KEY" && -n "$OVH_VRACK_SERVICE_NAME" ]] || \
+            error "OVHcloud API credentials and OVH_VRACK_SERVICE_NAME are required for automated vRack attachment."
+        info "OVHcloud vRack account attachment automation is enabled."
+    else
+        warn "OVHcloud API attachment is disabled; every server must already belong to the same vRack."
+    fi
     default_ip="$(detect_private_ip || true)"
 fi
 if [[ -z "$SERVER_URL" && -n "$default_ip" ]]; then
@@ -264,7 +311,10 @@ fi
 cleanup_credentials() {
     JOIN_TOKEN=""
     TAILSCALE_API_TOKEN=""
-    unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
+    OVH_APPLICATION_KEY=""
+    OVH_APPLICATION_SECRET=""
+    OVH_CONSUMER_KEY=""
+    unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY 2>/dev/null || true
 }
 trap cleanup_credentials EXIT HUP INT TERM
 
@@ -375,6 +425,75 @@ check_bootstrap_target() {
     ssh "${ssh_options[@]}" "$target" \
         'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
         error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
+}
+
+provision_vrack_target() {
+    local bootstrap_target="$1" worker_ip="$2" private_interface="$3" interface_mac="$4" vlan_id="$5" ovh_server="$6"
+    local remote_dir quoted_dir remote_script quoted_script configured_interface detected_mac="" private_target reachable=false
+    local remote_command argument quoted_argument
+
+    info "Checking public/bootstrap SSH before OVHcloud vRack configuration on $bootstrap_target..."
+    check_bootstrap_target "$bootstrap_target"
+    if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
+        [[ -n "$ovh_server" ]] || error "The OVHcloud Dedicated Server service name is required for API attachment."
+        detected_mac="$(OVH_API_ENDPOINT="$OVH_API_ENDPOINT" \
+            OVH_APPLICATION_KEY="$OVH_APPLICATION_KEY" \
+            OVH_APPLICATION_SECRET="$OVH_APPLICATION_SECRET" \
+            OVH_CONSUMER_KEY="$OVH_CONSUMER_KEY" \
+            "$OVH_VRACK_CONFIGURATOR" --attach-server "$ovh_server" \
+                --vrack "$OVH_VRACK_SERVICE_NAME" --ovh-endpoint "$OVH_API_ENDPOINT" --non-interactive)"
+        if [[ -z "$interface_mac" && "${detected_mac,,}" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]]; then
+            interface_mac="$detected_mac"
+        fi
+    fi
+
+    remote_dir="$(ssh "${ssh_options[@]}" "$bootstrap_target" 'mktemp -d /tmp/bm-cluster-vrack.XXXXXX')"
+    [[ "$remote_dir" == /tmp/bm-cluster-vrack.* ]] || error "Could not create a safe vRack configuration directory on $bootstrap_target."
+    printf -v quoted_dir '%q' "$remote_dir"
+    ssh "${ssh_options[@]}" "$bootstrap_target" "mkdir -m 700 $quoted_dir/lib"
+    scp "${scp_options[@]}" "$OVH_VRACK_CONFIGURATOR" "$bootstrap_target:$remote_dir/"
+    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$bootstrap_target:$remote_dir/lib/"
+    remote_script="$remote_dir/configure-ovh-vrack.sh"
+    printf -v quoted_script '%q' "$remote_script"
+    remote_args=(
+        --configure-node
+        --private-ip "$worker_ip"
+        --network-cidr "$NODE_NETWORK_CIDR"
+        --non-interactive
+    )
+    [[ -z "$private_interface" ]] || remote_args+=(--interface "$private_interface")
+    [[ -z "$interface_mac" ]] || remote_args+=(--interface-mac "$interface_mac")
+    [[ -z "$vlan_id" ]] || remote_args+=(--vlan-id "$vlan_id")
+    remote_command="chmod 700 $quoted_script && $quoted_script"
+    for argument in "${remote_args[@]}"; do
+        printf -v quoted_argument '%q' "$argument"
+        remote_command+=" $quoted_argument"
+    done
+    info "Configuring $worker_ip on the OVHcloud private NIC before UFW changes..."
+    if ! configured_interface="$(ssh "${ssh_options[@]}" "$bootstrap_target" "$remote_command")"; then
+        ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
+        error "vRack NIC configuration failed on $bootstrap_target; its public firewall was not changed."
+    fi
+    configured_interface="$(awk 'NF {value=$0} END {print value}' <<< "$configured_interface")"
+    ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
+
+    # Prove the original bootstrap path survived before attempting the private path.
+    check_bootstrap_target "$bootstrap_target"
+    cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || error "$worker_ip is outside $NODE_NETWORK_CIDR."
+    private_target="$(build_target "$worker_ip")"
+    for _ in {1..15}; do
+        if ssh "${ssh_options[@]}" "$private_target" true >/dev/null 2>&1; then
+            reachable=true
+            break
+        fi
+        sleep 2
+    done
+    [[ "$reachable" == "true" ]] || \
+        error "Private SSH did not become reachable at $private_target; bootstrap SSH remains available at $bootstrap_target and UFW was not changed."
+    info "Private SSH is proven through $configured_interface; worker UFW may now close public ingress."
+    VRACK_TARGET="$private_target"
+    VRACK_WORKER_IP="$worker_ip"
+    VRACK_NODE_INTERFACE="$configured_interface"
 }
 
 provision_tailscale_target() {
@@ -494,7 +613,7 @@ install_worker() {
     ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/apparmor"
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
-    scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$OVH_VRACK_CONFIGURATOR" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
     info "Copying the worker host-security policy to $target..."
@@ -505,7 +624,7 @@ install_worker() {
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
-    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") && $quoted_installer"
+    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") && $quoted_installer"
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"
@@ -517,6 +636,9 @@ install_worker() {
         error "Worker installation failed on $target."
     fi
     ssh "${ssh_options[@]}" "$target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
+
+    info "Confirming a fresh private SSH connection after worker UFW was enabled..."
+    check_target "$target" "$node_ip"
 
     info "Waiting for Kubernetes node '$node_name' to become Ready..."
     node_registered=false
@@ -598,11 +720,42 @@ else
             worker_host="$TAILSCALE_WORKER_IP"
             detected_name="$TAILSCALE_NODE_NAME"
         else
-            prompt worker_host "Worker vRack/private RFC1918 IPv4 address"
+            worker_ssh_user="$DEFAULT_WORKER_SSH_USER"
+            worker_ssh_port="$DEFAULT_WORKER_SSH_PORT"
+            worker_identity_file="$DEFAULT_WORKER_IDENTITY_FILE"
+            prompt bootstrap_host "Existing OVHcloud server IP or DNS name reachable over SSH (bootstrap only)"
+            [[ -n "$bootstrap_host" ]] || error "A worker bootstrap SSH host is required."
+            prompt worker_ssh_user "SSH user for this server" "$worker_ssh_user"
+            prompt worker_ssh_port "SSH port for this server" "$worker_ssh_port"
+            prompt worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
+            [[ "$worker_identity_file" != "-" ]] || worker_identity_file=""
+            SSH_USER="$worker_ssh_user"
+            SSH_PORT="$worker_ssh_port"
+            IDENTITY_FILE="$worker_identity_file"
+            configure_ssh_options
+            bootstrap_target="$(build_target "$bootstrap_host")"
+            check_bootstrap_target "$bootstrap_target"
+            detected_name="$(remote_hostname "$bootstrap_target")"
+            ovh_server=""
+            if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
+                prompt ovh_server "OVHcloud Dedicated Server service name for this worker"
+            fi
+            worker_host=""
+            private_interface=""
+            private_interface_mac=""
+            vlan_id=""
+            prompt worker_host "Unique worker vRack RFC1918 address"
             trusted_private_ipv4 "$worker_host" && ! tailscale_ipv4 "$worker_host" || error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
             cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
-            target="$(build_target "$worker_host")"
-            detected_name=""
+            printf 'Interfaces reported by %s:\n' "$bootstrap_target"
+            ssh "${ssh_options[@]}" "$bootstrap_target" 'ip -br link show'
+            prompt private_interface "OVHcloud private NIC name (blank to match API-reported MAC)"
+            prompt private_interface_mac "Expected OVHcloud private NIC MAC (recommended if API attachment is disabled)"
+            [[ -n "$private_interface" || -n "$private_interface_mac" || "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]] || \
+                error "Provide the OVHcloud private NIC name or MAC."
+            prompt vlan_id "Optional vRack VLAN ID (blank for untagged VLAN 0)"
+            provision_vrack_target "$bootstrap_target" "$worker_host" "$private_interface" "$private_interface_mac" "$vlan_id" "$ovh_server"
+            target="$VRACK_TARGET"
         fi
         info "Checking SSH access to $target..."
         check_target "$target" "$worker_host"

@@ -21,11 +21,14 @@ The assistant asks where it is running:
   1. Control plane - enroll one or more remote workers over SSH
   2. Worker machine - join this machine using the control-plane URL and token
 
-Both paths ask you to choose OVH vRack/private LAN or Tailscale. vRack uses
-explicit RFC1918 addresses. Tailscale prompts for a personal tskey-api access
-token, reconciles role-based tailnet policy, provisions tagged nodes, and uses
-100.64.0.0/10 only for cluster traffic. Workers accept no public ingress; UFW
-allows SSH only from the exact control-plane address on the chosen transport.
+Both paths ask you to choose OVHcloud-only vRack or Tailscale for hybrid cloud
+and non-OVHcloud providers. vRack uses explicit RFC1918 addresses and configures
+the OVHcloud private NIC before UFW. Tailscale prompts for a personal tskey-api
+access token, reconciles role-based tailnet policy, provisions tagged nodes, and
+uses 100.64.0.0/10 only for cluster traffic. Workers accept no public ingress;
+UFW allows SSH only from the exact control-plane address on the chosen transport.
+Control-plane mode is preferred because it proves a fresh private SSH connection
+before applying UFW and confirms the worker afterward.
 
 Explicit mode selection:
   ./install-worker.sh --control-plane [control-plane options]

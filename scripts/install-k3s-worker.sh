@@ -41,6 +41,10 @@ source "$NETWORK_LIBRARY"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
+OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
+VRACK_INTERFACE="${K3S_PRIVATE_INTERFACE:-}"
+VRACK_INTERFACE_MAC="${K3S_PRIVATE_INTERFACE_MAC:-}"
+VRACK_VLAN_ID="${K3S_VRACK_VLAN_ID:-}"
 
 info()  { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*" >&2; }
@@ -73,7 +77,10 @@ Options:
   --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
   --control-plane-ip IP     Exact private control-plane source allowed to SSH here
   --k3s-version VERSION     Install the control plane's exact K3s version
-  --transport MODE          Private transport: vrack or tailscale
+  --transport MODE          OVHcloud-only vrack, or hybrid/non-OVH tailscale
+  --vrack-interface NAME    OVHcloud physical private NIC (if not configured)
+  --vrack-interface-mac MAC Expected OVHcloud private NIC MAC
+  --vrack-vlan-id ID        Optional vRack VLAN ID (1-4094)
   --tailscale-api-token-stdin
                             Read a tskey-api access token from stdin and automate Tailscale
   --tailscale-tailnet NAME  Tailnet name; "-" uses the token's tailnet
@@ -92,10 +99,11 @@ Run one of these commands on the control-plane node to obtain a join token:
   sudo cat /var/lib/rancher/k3s/server/node-token
   sudo k3s token create --ttl 1h --description worker-join
 
-Workers never accept public ingress. vRack workers reject public interfaces;
-Tailscale workers may retain a provider interface for outbound/bootstrap use,
-but UFW exposes SSH and cluster ports only on tailscale0 to the control plane
-and tagged cluster peers. Outbound traffic remains enabled for updates/images.
+Workers never accept public ingress. Both transports may retain a provider
+interface for bootstrap and outbound updates, but UFW adds no inbound rule to
+it. Final hardening is refused unless this installer is running through private
+SSH from the exact control-plane address to the worker's vRack/Tailscale IP.
+Prefer running install-worker.sh --control-plane so that path is proven first.
 EOF
 }
 
@@ -120,6 +128,12 @@ while [[ $# -gt 0 ]]; do
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
         --transport)        shift; [[ $# -gt 0 ]] || error "Missing value for --transport"; NODE_TRANSPORT="$1" ;;
         --transport=*)      NODE_TRANSPORT="${1#*=}" ;;
+        --vrack-interface) shift; [[ $# -gt 0 ]] || error "Missing value for --vrack-interface"; VRACK_INTERFACE="$1" ;;
+        --vrack-interface=*) VRACK_INTERFACE="${1#*=}" ;;
+        --vrack-interface-mac) shift; [[ $# -gt 0 ]] || error "Missing value for --vrack-interface-mac"; VRACK_INTERFACE_MAC="$1" ;;
+        --vrack-interface-mac=*) VRACK_INTERFACE_MAC="${1#*=}" ;;
+        --vrack-vlan-id) shift; [[ $# -gt 0 ]] || error "Missing value for --vrack-vlan-id"; VRACK_VLAN_ID="$1" ;;
+        --vrack-vlan-id=*) VRACK_VLAN_ID="${1#*=}" ;;
         --tailscale-api-token-stdin) TAILSCALE_API_TOKEN_STDIN=true ;;
         --tailscale-tailnet) shift; [[ $# -gt 0 ]] || error "Missing value for --tailscale-tailnet"; TAILSCALE_TAILNET="$1" ;;
         --tailscale-tailnet=*) TAILSCALE_TAILNET="${1#*=}" ;;
@@ -169,21 +183,6 @@ detect_node_interface() {
     ip -4 route get "$1" 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}'
 }
 
-reject_public_ip_interfaces() {
-    local interface address
-    while read -r interface address; do
-        address="${address%/*}"
-        trusted_private_ipv4 "$address" || \
-            error "Interface $interface has public IPv4 address $address. This machine cannot be enrolled as a worker."
-    done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
-
-    while read -r interface address; do
-        address="${address%/*}"
-        [[ "${address,,}" =~ ^f[cd] ]] || \
-            error "Interface $interface has public IPv6 address $address. This machine cannot be enrolled as a worker."
-    done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
-}
-
 valid_node_name() {
     [[ ${#1} -le 253 && "$1" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]
 }
@@ -204,8 +203,8 @@ select_transport() {
     [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
     printf '%s\n' \
         "Select the private node transport:" \
-        "  1) OVH vRack / private LAN" \
-        "  2) Tailscale (automated cross-provider overlay)"
+        "  1) OVHcloud vRack (OVHcloud-only)" \
+        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)"
     while true; do
         read -rp "Select 1 or 2: " answer
         case "$answer" in
@@ -262,7 +261,13 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
         printf '\n'
     fi
     [[ -n "$NODE_NAME" ]] || prompt NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
-    [[ -n "$NODE_IP" ]] || prompt NODE_IP "This worker's private IPv4 address (RFC1918 or Tailscale)" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
+    if [[ -z "$NODE_IP" ]]; then
+        if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
+            prompt NODE_IP "This worker's unique OVHcloud vRack RFC1918 address"
+        else
+            prompt NODE_IP "This worker's Tailscale IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
+        fi
+    fi
     [[ -n "$NODE_LABELS" ]] || prompt NODE_LABELS "Initial labels, comma-separated (optional)"
     [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
     [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "RFC1918 node CIDR or Tailscale 100.64.0.0/10"
@@ -289,8 +294,29 @@ valid_node_name "$NODE_NAME" || error "Invalid node name '$NODE_NAME'. Use lower
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "A trusted node network CIDR is required for the worker firewall."
 trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be RFC1918 or Tailscale 100.64.0.0/10: $NODE_NETWORK_CIDR"
 NODE_IP="${NODE_IP:-$(detect_node_ip "$SERVER_PRIVATE_IP")}"
-NODE_INTERFACE="$(detect_node_interface "$SERVER_PRIVATE_IP")"
 trusted_private_ipv4 "$NODE_IP" || error "Worker node IP must be RFC1918 or Tailscale: ${NODE_IP:-unavailable}"
+if [[ "$NODE_TRANSPORT" == "vrack" && -z "$(interface_owning_ip "$NODE_IP")" ]]; then
+    [[ -x "$OVH_VRACK_CONFIGURATOR" ]] || \
+        error "OVHcloud vRack interface is not configured and the configurator is unavailable: $OVH_VRACK_CONFIGURATOR"
+    if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        ip -br link show
+        [[ -n "$VRACK_INTERFACE" ]] || prompt VRACK_INTERFACE "OVHcloud physical private/vRack NIC name"
+        [[ -n "$VRACK_INTERFACE_MAC" ]] || prompt VRACK_INTERFACE_MAC "Expected OVHcloud private NIC MAC (recommended)"
+        [[ -n "$VRACK_VLAN_ID" ]] || prompt VRACK_VLAN_ID "Optional vRack VLAN ID (blank for untagged VLAN 0)"
+    fi
+    vrack_args=(
+        --configure-node
+        --private-ip "$NODE_IP"
+        --network-cidr "$NODE_NETWORK_CIDR"
+        --non-interactive
+    )
+    [[ -z "$VRACK_INTERFACE" ]] || vrack_args+=(--interface "$VRACK_INTERFACE")
+    [[ -z "$VRACK_INTERFACE_MAC" ]] || vrack_args+=(--interface-mac "$VRACK_INTERFACE_MAC")
+    [[ -z "$VRACK_VLAN_ID" ]] || vrack_args+=(--vlan-id "$VRACK_VLAN_ID")
+    info "Configuring OVHcloud vRack before any UFW changes..."
+    "$OVH_VRACK_CONFIGURATOR" "${vrack_args[@]}" >/dev/null
+fi
+NODE_INTERFACE="$(detect_node_interface "$SERVER_PRIVATE_IP")"
 [[ -n "$NODE_INTERFACE" ]] || error "Could not determine the private interface used to reach $SERVER_PRIVATE_IP"
 [[ "$NODE_INTERFACE" == "tailscale0" ]] || [[ ! "$NODE_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
     error "The route to the control plane uses unsupported virtual interface $NODE_INTERFACE."
@@ -308,7 +334,8 @@ cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || error "K3s server 
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$CONTROL_PLANE_IP" || error "Control-plane SSH source $CONTROL_PLANE_IP is outside $NODE_NETWORK_CIDR"
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$NODE_IP" || error "Worker node IP $NODE_IP is outside $NODE_NETWORK_CIDR"
 if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
-    reject_public_ip_interfaces
+    [[ "$NODE_INTERFACE" != "$(ip -4 route show default | awk 'NR == 1 {for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')" ]] || \
+        error "Refusing to use the public default-route interface as OVHcloud vRack."
 fi
 [[ -z "$K3S_VERSION" || "$K3S_VERSION" != *[[:space:]]* ]] || error "The K3s version cannot contain whitespace."
 [[ "$HARDENING_SSH_PORT" =~ ^[0-9]+$ && "$HARDENING_SSH_PORT" -ge 1 && "$HARDENING_SSH_PORT" -le 65535 ]] || \

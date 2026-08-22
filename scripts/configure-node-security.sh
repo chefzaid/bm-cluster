@@ -15,7 +15,7 @@ SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 NODE_ROLE="${NODE_ROLE:-control-plane}"
 K3S_NODE_NETWORK_CIDR="${K3S_NODE_NETWORK_CIDR:-}"
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
-HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-22}"
+HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-}"
 CLOUDFLARE_PROXY_ONLY="${CLOUDFLARE_PROXY_ONLY:-}"
 SSH_ALLOWED_USERS="${SSH_ALLOWED_USERS:-${SUDO_USER:-$USER}}"
 APT_UPDATED=false
@@ -68,6 +68,14 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+if [[ -z "$HARDENED_SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then
+  read -r _ _ _ HARDENED_SSH_PORT <<< "$SSH_CONNECTION"
+fi
+if [[ -z "$HARDENED_SSH_PORT" ]] && command -v sshd >/dev/null 2>&1; then
+  HARDENED_SSH_PORT="$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')"
+fi
+HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-22}"
+
 info() { echo -e "\033[0;32m[INFO]\033[0m  $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
 err()  { echo -e "\033[0;31m[ERROR]\033[0m $*"; exit 1; }
@@ -116,22 +124,6 @@ detect_control_plane_cluster_interface() {
   return 1
 }
 
-reject_public_worker_addresses() {
-  local interface address
-
-  while read -r interface address; do
-    address="${address%/*}"
-    trusted_private_ipv4 "$address" || \
-      err "Worker interface $interface has public IPv4 address $address. Workers must use only RFC1918 or Tailscale addresses."
-  done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
-
-  while read -r interface address; do
-    address="${address%/*}"
-    [[ "${address,,}" =~ ^f[cd] ]] || \
-      err "Worker interface $interface has public IPv6 address $address. Workers may use only IPv6 ULA addresses."
-  done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
-}
-
 tailscale_transport_selected() {
   local cidr_address=""
 
@@ -173,10 +165,51 @@ configure_tailscale_firewall_integration() {
     info "Tailscale preflight passed on $local_tailscale_ip; worker UFW can now close public ingress."
   fi
 
-  # Tailscale's default early netfilter hook accepts tailnet traffic before
-  # UFW. nodivert leaves packet admission to the exact UFW rules below.
+}
+
+make_ufw_authoritative_for_tailscale() {
+  tailscale_transport_selected || return 0
+
+  # Keep Tailscale's existing admission path active while UFW is rebuilt. Only
+  # hand authority to UFW after its exact tailscale0 rules are enabled, avoiding
+  # a window where neither layer admits the current private SSH connection.
   sudo tailscale set --ssh=false --netfilter-mode=nodivert >/dev/null || \
     err "Unable to make UFW authoritative for Tailscale traffic"
+}
+
+validate_worker_private_ssh_before_firewall() {
+  local route route_interface route_source default_interface
+  local ssh_client_ip ssh_client_port ssh_server_ip ssh_server_port ssh_interface
+
+  [[ "$NODE_ROLE" == "worker" ]] || return 0
+  route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
+    err "Refusing to configure worker UFW: the private control-plane address is not routable"
+  route_interface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<< "$route")"
+  route_source="$(awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' <<< "$route")"
+  trusted_private_ipv4 "$route_source" || \
+    err "Refusing to configure worker UFW: route to the control plane uses non-private source ${route_source:-none}"
+  cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$route_source" || \
+    err "Refusing to configure worker UFW: route source $route_source is outside $K3S_NODE_NETWORK_CIDR"
+  [[ -n "$route_interface" ]] || err "Refusing to configure worker UFW: private route has no interface"
+
+  if ! tailscale_transport_selected; then
+    default_interface="$(ip -4 route show default | awk 'NR == 1 {for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
+    [[ "$route_interface" != "$default_interface" ]] || \
+      err "Refusing to configure worker UFW: OVHcloud vRack traffic uses public default interface $route_interface"
+  fi
+  [[ -n "${SSH_CONNECTION:-}" ]] || \
+    err "Refusing to configure worker UFW without a proven private SSH session. Run install-worker.sh from the control plane over the selected private transport."
+  read -r ssh_client_ip ssh_client_port ssh_server_ip ssh_server_port <<< "$SSH_CONNECTION"
+  [[ "$ssh_client_ip" == "$CONTROL_PLANE_IP" ]] || \
+    err "Refusing to configure worker UFW: current SSH client $ssh_client_ip is not control plane $CONTROL_PLANE_IP"
+  [[ "$ssh_server_ip" == "$route_source" ]] || \
+    err "Refusing to configure worker UFW: current SSH endpoint $ssh_server_ip is not private worker address $route_source"
+  ssh_interface="$(interface_owning_ip "$ssh_server_ip")"
+  [[ "$ssh_interface" == "$route_interface" ]] || \
+    err "Refusing to configure worker UFW: current SSH endpoint is not on private interface $route_interface"
+  [[ "$ssh_server_port" == "$HARDENED_SSH_PORT" ]] || \
+    err "Refusing to configure worker UFW: current SSH port $ssh_server_port differs from configured port $HARDENED_SSH_PORT"
+  info "Private SSH preflight passed from $CONTROL_PLANE_IP to $route_source on $route_interface; UFW may now close public ingress."
 }
 
 apt_update() {
@@ -501,11 +534,87 @@ prometheus:
 EOF
 }
 
+configure_worker_forwarding_guard() {
+  local interfaces=("$@")
+  local interface
+
+  if [[ "$NODE_ROLE" != "worker" || ${#interfaces[@]} -eq 0 ]]; then
+    if sudo systemctl cat bm-cluster-worker-ingress-guard.service >/dev/null 2>&1; then
+      sudo systemctl disable --now bm-cluster-worker-ingress-guard.service >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+  for interface in "${interfaces[@]}"; do
+    [[ ${#interface} -le 15 && "$interface" =~ ^[A-Za-z0-9_.:-]+$ ]] || \
+      err "Unsafe worker interface name: $interface"
+  done
+  ensure_packages nftables util-linux
+  sudo install -d -o root -g root -m 0755 /etc/nftables.d
+  {
+    printf '%s\n' \
+      '# Managed by scripts/configure-node-security.sh' \
+      'table inet bm_cluster_worker_guard {' \
+      '  chain input_guard {' \
+      '    type filter hook input priority -150; policy accept;' \
+      '    ct state established,related accept'
+    for interface in "${interfaces[@]}"; do
+      printf '    iifname "%s" udp sport 67 udp dport 68 accept\n' "$interface"
+      printf '    iifname "%s" udp sport 547 udp dport 546 accept\n' "$interface"
+      printf '    iifname "%s" meta l4proto ipv6-icmp accept\n' "$interface"
+      printf '    iifname "%s" drop\n' "$interface"
+    done
+    printf '%s\n' \
+      '  }' \
+      '  chain forward_guard {' \
+      '    type filter hook forward priority -150; policy accept;' \
+      '    ct state established,related accept'
+    for interface in "${interfaces[@]}"; do
+      printf '    iifname "%s" drop\n' "$interface"
+    done
+    printf '%s\n' '  }' '}'
+  } | write_root_file /etc/nftables.d/bm-cluster-worker-ingress.nft 0600
+
+  write_root_file /usr/local/sbin/bm-cluster-worker-ingress-guard 0755 <<'EOF'
+#!/bin/sh
+set -eu
+table_name=bm_cluster_worker_guard
+if /usr/sbin/nft list table inet "$table_name" >/dev/null 2>&1; then
+    /usr/sbin/nft delete table inet "$table_name"
+fi
+if [ "${1:-start}" = stop ]; then
+    exit 0
+fi
+exec /usr/sbin/nft -f /etc/nftables.d/bm-cluster-worker-ingress.nft
+EOF
+
+  write_root_file /etc/systemd/system/bm-cluster-worker-ingress-guard.service <<'EOF'
+[Unit]
+Description=Block public input and forwarded ingress on bm-cluster workers
+After=network-pre.target nftables.service ufw.service
+Before=docker.service k3s-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bm-cluster-worker-ingress-guard start
+ExecStop=/usr/local/sbin/bm-cluster-worker-ingress-guard stop
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo unshare --net /usr/sbin/nft -c -f /etc/nftables.d/bm-cluster-worker-ingress.nft || \
+    err "Refusing to replace the worker ingress guard because its nftables policy is invalid"
+  sudo systemctl daemon-reload
+  sudo systemctl enable bm-cluster-worker-ingress-guard.service >/dev/null
+  sudo systemctl restart bm-cluster-worker-ingress-guard.service
+}
+
 configure_ufw() {
   local cloudflare_response=""
   local cloudflare_cidrs=()
   local cluster_interface=""
-  local cidr
+  local cidr interface
+  local untrusted_interfaces=()
 
   ensure_packages ufw
 
@@ -553,6 +662,11 @@ configure_ufw() {
 
   info "Configuring UFW baseline..."
   sudo sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+  if sudo grep -q '^IPV6=' /etc/default/ufw; then
+    sudo sed -i 's/^IPV6=.*/IPV6=yes/' /etc/default/ufw
+  else
+    printf 'IPV6=yes\n' | sudo tee -a /etc/default/ufw >/dev/null
+  fi
   sudo ufw --force reset >/dev/null
   sudo ufw default deny incoming >/dev/null
   sudo ufw default allow outgoing >/dev/null
@@ -576,6 +690,23 @@ configure_ufw() {
   else
     info "Restricting worker SSH to control plane $CONTROL_PLANE_IP on $cluster_interface..."
     sudo ufw allow in on "$cluster_interface" from "$CONTROL_PLANE_IP" to any port "$HARDENED_SSH_PORT" proto tcp comment 'SSH from control plane only' >/dev/null
+
+    # Kubernetes NodePort and Docker-published traffic may traverse FORWARD
+    # instead of INPUT. Deny both paths on every provider/non-cluster interface
+    # while preserving stateful replies for worker-initiated outbound traffic.
+    mapfile -t untrusted_interfaces < <(
+      {
+        ip -4 -o address show scope global
+        ip -6 -o address show scope global
+      } | awk '{print $2}' | LC_ALL=C sort -u
+    )
+    for interface in "${untrusted_interfaces[@]}"; do
+      [[ "$interface" == "$cluster_interface" ]] && continue
+      [[ "$interface" =~ ^(lo|docker|br-|cni|flannel|veth|tailscale|kube-ipvs) ]] && continue
+      info "Blocking host and forwarded ingress on worker interface $interface..."
+      sudo ufw deny in on "$interface" comment 'No worker provider ingress' >/dev/null
+      sudo ufw route deny in on "$interface" comment 'No worker forwarded ingress' >/dev/null
+    done
   fi
   if [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
     if [[ "$NODE_ROLE" == "control-plane" ]]; then
@@ -619,6 +750,7 @@ configure_ufw() {
   fi
 
   sudo ufw --force enable >/dev/null
+  configure_worker_forwarding_guard "${untrusted_interfaces[@]}"
 }
 
 configure_sshd() {
@@ -835,12 +967,17 @@ if [[ "$NODE_ROLE" == "worker" ]]; then
     # any UFW reset and refuses to continue until tailscale0 is ready.
     info "Tailscale worker transport selected; validating the overlay before closing public ingress."
   else
-    reject_public_worker_addresses
+    # OVHcloud vRack is configured and private SSH is proven before UFW. A
+    # provider NIC may remain for bootstrap/outbound traffic, but receives no
+    # inbound allowance in configure_ufw.
+    info "OVHcloud vRack worker selected; validating private SSH before closing public ingress."
   fi
 fi
 
 configure_tailscale_firewall_integration
+validate_worker_private_ssh_before_firewall
 configure_ufw
+make_ufw_authoritative_for_tailscale
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
   configure_sshd
   disable_unused_rpcbind
