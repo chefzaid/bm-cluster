@@ -79,7 +79,7 @@ else
 fi
 
 if command -v shellcheck >/dev/null 2>&1; then
-    if shellcheck --rcfile "$REPOSITORY_ROOT/.shellcheckrc" -x "${shell_scripts[@]}"; then
+    if (cd "$REPOSITORY_ROOT" && shellcheck -x "${shell_scripts[@]}"); then
         pass "all shell scripts pass ShellCheck"
     else
         fail "all shell scripts pass ShellCheck"
