@@ -298,6 +298,8 @@ if [[ "$NODE_INTERFACE" == "tailscale0" ]]; then
     tailscale_ipv4 "$NODE_IP" || error "tailscale0 must use an address from 100.64.0.0/10"
     command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed"
     tailscale status >/dev/null 2>&1 || error "Tailscale is not connected"
+elif [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    error "Refusing to configure worker UFW: Tailscale must be connected and route to the control plane through tailscale0 first."
 fi
 ROUTE_NODE_IP="$(detect_node_ip "$SERVER_PRIVATE_IP")"
 [[ "$NODE_IP" == "$ROUTE_NODE_IP" ]] || \
@@ -344,7 +346,11 @@ else
     warn "K3s AppArmor installer was not found next to this script; the runtime default will be used unchanged."
 fi
 
-info "Enforcing the local-only firewall before K3s enrollment..."
+if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    info "Tailscale is ready on $NODE_IP; enforcing local-only UFW now."
+else
+    info "Enforcing the local-only firewall before K3s enrollment..."
+fi
 K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
 CONTROL_PLANE_IP="$CONTROL_PLANE_IP" \
     "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \

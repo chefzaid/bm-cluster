@@ -86,6 +86,18 @@ else
     fail "shared network validation behavior"
 fi
 
+tailscale_firewall_line="$(grep -n '^configure_tailscale_firewall_integration$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
+ufw_apply_line="$(grep -n '^configure_ufw$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
+tailscale_worker_setup_line="$(grep -n '^if \[\[ "$NODE_TRANSPORT" == "tailscale" \]\]; then$' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
+worker_firewall_line="$(grep -n '"\$SECURITY_HARDENER" --apply' "$REPOSITORY_ROOT/scripts/install-k3s-worker.sh" | head -n 1 | cut -d: -f1 || true)"
+if [[ -n "$tailscale_firewall_line" && -n "$ufw_apply_line" &&
+      -n "$tailscale_worker_setup_line" && -n "$worker_firewall_line" ]] &&
+   (( tailscale_firewall_line < ufw_apply_line && tailscale_worker_setup_line < worker_firewall_line )); then
+    pass "Tailscale worker setup and preflight precede UFW enforcement"
+else
+    fail "Tailscale worker setup and preflight precede UFW enforcement"
+fi
+
 info "Checking shared platform contract"
 contract_failed=false
 while IFS= read -r line; do

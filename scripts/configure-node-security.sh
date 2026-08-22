@@ -132,8 +132,8 @@ reject_public_worker_addresses() {
   done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
 }
 
-configure_tailscale_firewall_integration() {
-  local use_tailscale=false cidr_address=""
+tailscale_transport_selected() {
+  local cidr_address=""
 
   if [[ -n "$K3S_NODE_NETWORK_CIDR" ]]; then
     cidr_address="${K3S_NODE_NETWORK_CIDR%/*}"
@@ -141,14 +141,38 @@ configure_tailscale_firewall_integration() {
   if tailscale_ipv4 "${CONTROL_PLANE_IP:-}" || \
       tailscale_ipv4 "${K3S_PRIVATE_ADDRESS:-}" || \
       tailscale_ipv4 "$cidr_address"; then
-    use_tailscale=true
+    return 0
   fi
-  [[ "$use_tailscale" == "true" ]] || return 0
+  return 1
+}
+
+configure_tailscale_firewall_integration() {
+  local local_tailscale_ip route route_interface route_source
+
+  tailscale_transport_selected || return 0
 
   command -v tailscale >/dev/null 2>&1 || \
-    err "A Tailscale node network was selected but Tailscale is not installed"
+    err "Refusing to configure UFW: install Tailscale before selecting a Tailscale node network"
   sudo tailscale status >/dev/null 2>&1 || \
-    err "A Tailscale node network was selected but this node is not connected"
+    err "Refusing to configure UFW: connect this node to Tailscale first"
+  local_tailscale_ip="$(sudo tailscale ip -4 2>/dev/null | head -n 1)"
+  tailscale_ipv4 "$local_tailscale_ip" || \
+    err "Refusing to configure UFW: Tailscale has not assigned this node an IPv4 address"
+
+  if [[ "$NODE_ROLE" == "worker" ]]; then
+    tailscale_ipv4 "$CONTROL_PLANE_IP" || \
+      err "Refusing to configure worker UFW: the control-plane address must be a Tailscale IPv4"
+    route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
+      err "Refusing to configure worker UFW: the Tailscale control plane is not routable"
+    route_interface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<< "$route")"
+    route_source="$(awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}' <<< "$route")"
+    [[ "$route_interface" == "tailscale0" ]] || \
+      err "Refusing to configure worker UFW: route to $CONTROL_PLANE_IP uses ${route_interface:-no interface}, not tailscale0"
+    [[ "$route_source" == "$local_tailscale_ip" ]] || \
+      err "Refusing to configure worker UFW: route source ${route_source:-none} does not match Tailscale IP $local_tailscale_ip"
+    info "Tailscale preflight passed on $local_tailscale_ip; worker UFW can now close public ingress."
+  fi
+
   # Tailscale's default early netfilter hook accepts tailnet traffic before
   # UFW. nodivert leaves packet admission to the exact UFW rules below.
   sudo tailscale set --ssh=false --netfilter-mode=nodivert >/dev/null || \
@@ -806,10 +830,10 @@ if [[ "$NODE_ROLE" == "worker" ]]; then
   trusted_private_ipv4 "$CONTROL_PLANE_IP" || \
     err "CONTROL_PLANE_IP must be an RFC1918 or Tailscale IPv4 address"
   if [[ "$K3S_NODE_NETWORK_CIDR" == "100.64.0.0/10" ]]; then
-    # Cross-provider workers may need a provider address for outbound updates
-    # and initial bootstrap. UFW below exposes nothing on that interface: SSH
-    # and all K3s/Longhorn ports are bound to tailscale0 and its exact sources.
-    info "Tailscale worker transport selected; public interfaces receive no inbound UFW allowances."
+    # Cross-provider workers may need a provider address for initial bootstrap
+    # and outbound updates. configure_tailscale_firewall_integration runs before
+    # any UFW reset and refuses to continue until tailscale0 is ready.
+    info "Tailscale worker transport selected; validating the overlay before closing public ingress."
   else
     reject_public_worker_addresses
   fi

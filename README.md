@@ -156,6 +156,10 @@ user, port, private key, desired Tailscale hostname, and Kubernetes settings
 independently. Providers do not need to match. The existing address is only a
 temporary bootstrap route; Tailscale assigns the persistent overlay IP used by
 K3s after enrollment. No list of public peer IPs is placed in tailnet policy.
+Tailscale installation, authentication, address assignment, and `tailscale0`
+routing are verified before worker UFW is changed. The firewall hardener refuses
+to close public ingress if that preflight is incomplete, preventing SSH lockout
+during cross-provider bootstrap.
 
 To provision only the provider-neutral Tailscale mesh (without installing K3s
 workers), run:
