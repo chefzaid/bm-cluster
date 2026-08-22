@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# install-infrastructure.sh
-# Installs prerequisites and deploys infra components
+# install-control-plane.sh
+# Installs the K3s control plane and deploys infrastructure components
 # ==============================================================================
 set -euo pipefail
 
@@ -163,7 +163,7 @@ ensure_tls_secret() {
 [[ $EUID -eq 0 ]] && error "Do not run as root. The script uses sudo when needed."
 
 info "============================================="
-info " Infrastructure Installer"
+info " Control Plane Installer"
 info "============================================="
 echo ""
 echo "This script will:"

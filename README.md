@@ -71,11 +71,11 @@ Requirements:
 - A sudo-capable non-root user
 - A domain registered for public deployments
 
-Run the interactive installer:
+Run the interactive control-plane installer:
 
 ```bash
-chmod +x install-infrastructure.sh install-worker.sh scripts/*.sh
-./install-infrastructure.sh
+chmod +x install-control-plane.sh install-worker.sh scripts/*.sh
+./install-control-plane.sh
 ```
 
 The installer asks which feature groups to deploy. For an internet-exposed
@@ -83,13 +83,13 @@ installation, its optional Cloudflare step prompts for a **Cloudflare User API
 Token** and does not persist it. The script is the source of truth for all edge
 configuration; no manual Cloudflare procedure is required.
 
-Use `./install-infrastructure.sh --yes` for default feature choices. Secret
+Use `./install-control-plane.sh --yes` for default feature choices. Secret
 prompts still require input unless their documented environment variable is
 provided.
 
 ## Adding worker nodes
 
-Worker enrollment is built into `install-infrastructure.sh`; no separate setup
+Worker enrollment is built into `install-control-plane.sh`; no separate setup
 step is required during the initial installation. Answer **yes** to “Add or
 reconcile K3s worker nodes over SSH.” It accepts any number of workers and asks
 for the SSH settings and each worker's address, unique node name, optional
@@ -130,13 +130,13 @@ SSH hardening, worker-specific UFW rules, Fail2ban, CrowdSec, log retention, and
 a Lynis audit. Token input is hidden and is never placed in command-line
 arguments or copied to disk.
 
-For repeatable enrollment through the main installer:
+For repeatable enrollment through the control-plane installer:
 
 ```bash
 K3S_WORKER_HOSTS=ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
 K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
 K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
-./install-infrastructure.sh --yes
+./install-control-plane.sh --yes
 ```
 
 Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
@@ -144,7 +144,7 @@ Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
 DaemonSet workloads, including node metrics and log collection, automatically
 run on eligible workers. The installer sets Longhorn's default replica count for
 new volumes to the number of Ready nodes, capped at three; it does not relocate
-or change existing volumes. Controller-driven enrollment passes an explicit
+or change existing volumes. Control-plane-driven enrollment passes an explicit
 hardening choice to the worker installer, so the suite runs on each worker only
 once. Non-interactive use can select `--harden-workers` or
 `--skip-worker-hardening` and defaults to hardening when neither is provided;
@@ -221,7 +221,7 @@ above, not by the Ansible inventory.
 
 | Path | Purpose |
 |---|---|
-| `install-infrastructure.sh` | Interactive bare-metal installer |
+| `install-control-plane.sh` | Install or reconcile the K3s control plane and platform services |
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
