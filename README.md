@@ -52,11 +52,12 @@ show their purpose and live Kubernetes status without exposing them publicly.
 ## Service dashboard
 
 Open `https://dashboard.swirlit.dev` for the complete categorized service
-catalog. Cloudflare Access protects the dashboard, DBGate, Grafana, Kafka UI,
-Kibana, Longhorn, Portainer, and Vault with an email one-time PIN and a 24-hour
-session. Machine- and application-facing hostnames retain their native
-authentication so CLIs, webhooks, CI agents, scanners, and application users
-continue to work.
+catalog; the zone apex redirects there. Cloudflare Access protects the
+dashboard, Argo CD, DBGate, Grafana, Jenkins, Kafka UI, Kibana, Longhorn, Nexus,
+Portainer, SonarQube, and Vault with an email one-time PIN and a 24-hour session.
+Cluster automation uses internal Kubernetes service names, so these public
+administration hostnames can remain protected without blocking builds,
+deployments, package downloads, or scans.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `deployments/homepage.yaml`. Both

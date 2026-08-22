@@ -20,6 +20,7 @@ ENABLE_WAF="${CLOUDFLARE_ENABLE_WAF:-true}"
 ENABLE_RATE_LIMIT="${CLOUDFLARE_ENABLE_RATE_LIMIT:-true}"
 ENABLE_CACHE_RULES="${CLOUDFLARE_ENABLE_CACHE_RULES:-true}"
 ENABLE_ACCESS="${CLOUDFLARE_ENABLE_ACCESS:-true}"
+PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
 ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
 ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-}"
@@ -47,17 +48,21 @@ DEFAULT_HOST_LABELS=(
     vault
 )
 
-# Only browser-focused BM Cluster administration interfaces belong here. Apps
-# with CI, webhook, Git, package, scanner, or general API clients intentionally
-# remain outside Access so those machine workflows keep working.
+# Browser-facing administration interfaces belong here. Cluster automation uses
+# Kubernetes service DNS and therefore does not need to bypass Access on these
+# public hostnames.
 DEFAULT_ACCESS_HOST_LABELS=(
+    argocd
     dashboard
     dbgate
     grafana
+    jenkins
     kafka
     kibana
     longhorn
+    nexus
     portainer
+    sonarqube
     vault
 )
 
@@ -103,6 +108,7 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_RATE_LIMIT     Default: true
   CLOUDFLARE_ENABLE_CACHE_RULES    Default: true
   CLOUDFLARE_ENABLE_ACCESS         Default: true
+  CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
   CLOUDFLARE_ACCESS_SESSION_DURATION  Default: 24h
   CLOUDFLARE_ACCESS_HOST_LABELS    Space-separated admin labels replacing defaults
@@ -164,6 +170,7 @@ ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
 [[ "$ENABLE_RATE_LIMIT" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_RATE_LIMIT must be true or false."
 [[ "$ENABLE_CACHE_RULES" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_CACHE_RULES must be true or false."
 [[ "$ENABLE_ACCESS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_ACCESS must be true or false."
+[[ "$PUBLISH_APEX" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_APEX must be true or false."
 [[ "$HSTS_MAX_AGE" =~ ^[0-9]+$ ]] || error "CLOUDFLARE_HSTS_MAX_AGE must be seconds as a whole number."
 [[ "$ACCESS_SESSION_DURATION" =~ ^[1-9][0-9]*(m|h)$ ]] || \
     error "CLOUDFLARE_ACCESS_SESSION_DURATION must be a positive duration such as 30m or 24h."
@@ -333,11 +340,11 @@ reconcile_ruleset_rule() {
 
 configure_edge_rules() {
     local host_set=""
-    local label host_literal waf_expression cache_expression
+    local fqdn host_literal waf_expression cache_expression
     local rule_file
 
-    for label in "${HOST_LABELS[@]}"; do
-        printf -v host_literal '"%s.%s"' "$label" "$ZONE_NAME"
+    for fqdn in "${DNS_HOSTS[@]}"; do
+        printf -v host_literal '"%s"' "$fqdn"
         host_set+="${host_set:+ }$host_literal"
     done
 
@@ -396,12 +403,16 @@ configure_edge_rules() {
 
 access_app_name() {
     case "$1" in
+        argocd) echo "Argo CD" ;;
         dbgate) echo "DBGate" ;;
         grafana) echo "Grafana" ;;
+        jenkins) echo "Jenkins" ;;
         kafka) echo "Kafka UI" ;;
         kibana) echo "Kibana" ;;
         longhorn) echo "Longhorn" ;;
+        nexus) echo "Nexus" ;;
         portainer) echo "Portainer" ;;
+        sonarqube) echo "SonarQube" ;;
         vault) echo "Vault" ;;
         *) echo "$1" ;;
     esac
@@ -748,16 +759,23 @@ else
 fi
 (( ${#HOST_LABELS[@]} > 0 )) || error "At least one public hostname is required."
 
-step "Reconciling proxied DNS records"
+DNS_HOSTS=()
+if [[ "$PUBLISH_APEX" == "true" ]]; then
+    DNS_HOSTS+=("$ZONE_NAME")
+fi
 for label in "${HOST_LABELS[@]}"; do
     [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || error "Invalid hostname label: $label"
-    fqdn="$label.$ZONE_NAME"
+    DNS_HOSTS+=("$label.$ZONE_NAME")
+done
+
+step "Reconciling proxied DNS records"
+for fqdn in "${DNS_HOSTS[@]}"; do
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$fqdn&per_page=100")"
     require_success "$record_response" "DNS lookup for $fqdn"
     address_record_count="$(jq '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")] | length' <<< "$record_response")"
     ((address_record_count <= 1)) || error "$fqdn has multiple A/AAAA/CNAME records; reconcile the conflict before rerunning."
 
-    desired_record_file="$WORK_DIR/dns-$label.json"
+    desired_record_file="$WORK_DIR/dns-${fqdn//./-}.json"
     jq -n --arg name "$fqdn" --arg content "$ORIGIN_IP" \
         '{type:"A",name:$name,content:$content,ttl:1,proxied:true,comment:"Managed by bm-cluster/scripts/configure-cloudflare.sh"}' \
         > "$desired_record_file"
@@ -895,8 +913,7 @@ fi
 lock_origin_firewall
 
 step "Verifying Cloudflare and Kubernetes state"
-for label in "${HOST_LABELS[@]}"; do
-    fqdn="$label.$ZONE_NAME"
+for fqdn in "${DNS_HOSTS[@]}"; do
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?type=A&name=$fqdn&per_page=100")"
     require_success "$record_response" "Final DNS verification for $fqdn"
     jq -e --arg content "$ORIGIN_IP" \
@@ -936,7 +953,7 @@ info "Cloudflare configuration is complete."
 echo ""
 echo "  Zone:          $ZONE_NAME ($ZONE_STATUS)"
 echo "  Origin:        $ORIGIN_IP"
-echo "  DNS records:   ${#HOST_LABELS[@]} proxied A records"
+echo "  DNS records:   ${#DNS_HOSTS[@]} proxied A records"
 echo "  TLS mode:      Full (strict)"
 echo "  Minimum TLS:   $MIN_TLS_VERSION"
 echo "  TLS 1.3:       enabled (0-RTT disabled)"
