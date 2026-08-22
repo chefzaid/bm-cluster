@@ -8,6 +8,7 @@ WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
+K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 WORKER_HOSTS=""
 SERVER_URL=""
 SSH_USER="${USER:-}"
@@ -17,7 +18,6 @@ NODE_NETWORK_CIDR=""
 COMMON_LABELS=""
 COMMON_TAINTS=""
 K3S_VERSION=""
-WORKER_EXPOSURE="${K3S_WORKER_EXPOSURE:-}"
 NON_INTERACTIVE=false
 JOIN_TOKEN=""
 LOCAL_SUDO=()
@@ -37,7 +37,6 @@ Non-interactive host selection:
   ./install-worker.sh --control-plane \
     --hosts ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
-    --worker-exposure local \
     --identity-file ~/.ssh/id_ed25519
 
 Options:
@@ -50,16 +49,15 @@ Options:
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
-  --worker-exposure MODE    Worker exposure: internet or local (default: local)
-  --harden-workers          Compatibility alias for --worker-exposure internet
-  --skip-worker-hardening   Compatibility alias for --worker-exposure local; UFW is still applied
+  --worker-exposure local   Deprecated compatibility option; any other value is rejected
+  --skip-worker-hardening   Deprecated no-op; the local-worker firewall is always enforced
   --non-interactive         Fail instead of prompting; implied by --hosts
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
-Internet-facing worker hardening requires a non-root SSH account with
-passwordless sudo because that policy disables direct root login. Local workers
-may be enrolled as root, but still receive the UFW baseline.
+Workers must be reachable through an RFC1918 or Tailscale address. They cannot
+have a public IP interface. UFW allows worker SSH only from the exact control-
+plane source address while retaining the required private K3s peer traffic.
 The join token is never placed in command-line arguments or copied to disk.
 
 Token commands, if this script is not run on the control plane:
@@ -88,10 +86,10 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         COMMON_TAINTS="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
-        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; WORKER_EXPOSURE="$1" ;;
-        --worker-exposure=*) WORKER_EXPOSURE="${1#*=}" ;;
-        --harden-workers)   WORKER_EXPOSURE=internet ;;
-        --skip-worker-hardening) WORKER_EXPOSURE=local ;;
+        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
+        --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
+        --harden-workers)   error "Internet-facing workers are forbidden; worker hardening is always local-only" ;;
+        --skip-worker-hardening) : ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
         -h|--help)          usage; exit 0 ;;
         *)                  error "Unknown option: $1 (use --help)" ;;
@@ -120,21 +118,86 @@ prompt() {
 }
 
 detect_private_ip() {
-    local detected=""
-    detected="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')"
-    [[ -n "$detected" ]] || detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    printf '%s' "$detected"
+    local candidate
+    while read -r candidate; do
+        if trusted_private_ipv4 "$candidate"; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done < <(hostname -I 2>/dev/null | tr ' ' '\n')
+    return 1
 }
 
-normalize_worker_exposure() {
-    case "${1,,}" in
-        internet|internet-exposed|public|external) printf 'internet\n' ;;
-        local|local-only|private|internal|lan) printf 'local\n' ;;
-        *) return 1 ;;
-    esac
+valid_ipv4() {
+    local ip="$1" octet
+    local -a octets
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r -a octets <<< "$ip"
+    for octet in "${octets[@]}"; do
+        (( 10#$octet <= 255 )) || return 1
+    done
 }
 
-default_ip="$(detect_private_ip)"
+trusted_private_ipv4() {
+    local ip="$1" a b _
+    valid_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    (( a == 10 )) ||
+        (( a == 172 && b >= 16 && b <= 31 )) ||
+        (( a == 192 && b == 168 )) ||
+        (( a == 100 && b >= 64 && b <= 127 ))
+}
+
+trusted_private_cidr() {
+    local cidr="$1" ip prefix a b _
+    [[ "$cidr" == */* ]] || return 1
+    ip="${cidr%/*}"; prefix="${cidr#*/}"
+    trusted_private_ipv4 "$ip" || return 1
+    [[ "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+    prefix=$((10#$prefix))
+    (( prefix >= 1 && prefix <= 32 )) || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    if (( a == 10 )); then (( prefix >= 8 ))
+    elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
+    elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
+    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
+    fi
+}
+
+ipv4_to_int() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
+}
+
+cidr_contains_ip() {
+    local cidr="$1" ip="$2" network prefix mask ip_value network_value
+    trusted_private_cidr "$cidr" && trusted_private_ipv4 "$ip" || return 1
+    network="${cidr%/*}"; prefix=$((10#${cidr#*/}))
+    ip_value="$(ipv4_to_int "$ip")"; network_value="$(ipv4_to_int "$network")"
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    (( (ip_value & mask) == (network_value & mask) ))
+}
+
+server_url_ipv4() {
+    local value="${1%/}" authority host
+    value="${value#https://}"
+    authority="${value%%/*}"
+    [[ -n "$authority" && "$authority" == "$value" ]] || return 1
+    host="${authority%%:*}"
+    trusted_private_ipv4 "$host" || return 1
+    printf '%s' "$host"
+}
+
+interface_owning_ip() {
+    local address="$1"
+    ip -4 -o address show scope global | awk -v ip="$address" \
+        '{split($4, parts, "/")} parts[1] == ip {print $2; exit}'
+}
+
+default_ip="$(detect_private_ip || true)"
 if [[ -z "$SERVER_URL" && -n "$default_ip" ]]; then
     SERVER_URL="https://${default_ip}:6443"
 fi
@@ -172,7 +235,6 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     prompt COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
     prompt COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
     prompt K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
-    [[ -n "$WORKER_EXPOSURE" ]] || prompt WORKER_EXPOSURE "Are these workers internet-exposed or local/private? [internet/local]" "local"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
         prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)"
     done
@@ -185,22 +247,39 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
 else
     [[ -n "$WORKER_HOSTS" ]] || error "--hosts is required in non-interactive mode."
 fi
-WORKER_EXPOSURE="${WORKER_EXPOSURE:-local}"
-WORKER_EXPOSURE="$(normalize_worker_exposure "$WORKER_EXPOSURE")" || error "Worker exposure must be 'internet' or 'local'."
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required for worker UFW."
-[[ "$NODE_NETWORK_CIDR" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]] || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
+trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be an RFC1918 or Tailscale IPv4 CIDR: $NODE_NETWORK_CIDR"
+SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
+    error "The worker K3s URL must use the control plane's RFC1918 or Tailscale IPv4 address: $SERVER_URL"
+cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || \
+    error "Control-plane URL address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
 [[ -f "$SECURITY_HARDENER" ]] || error "Security policy script not found: $SECURITY_HARDENER"
+[[ -x "$K3S_NETWORK_CONFIGURATOR" ]] || error "K3s network configurator not found or not executable: $K3S_NETWORK_CONFIGURATOR"
+CONTROL_PLANE_CLUSTER_INTERFACE="$(interface_owning_ip "$SERVER_PRIVATE_IP")"
+[[ -n "$CONTROL_PLANE_CLUSTER_INTERFACE" ]] || \
+    error "Control-plane address $SERVER_PRIVATE_IP is not assigned to a local interface. Run this mode on the control-plane node."
+
+info "Reconciling K3s private networking on $SERVER_PRIVATE_IP via $CONTROL_PLANE_CLUSTER_INTERFACE..."
+"$K3S_NETWORK_CONFIGURATOR" \
+    --private-ip "$SERVER_PRIVATE_IP" \
+    --private-interface "$CONTROL_PLANE_CLUSTER_INTERFACE" \
+    --restart
 
 if command -v ufw >/dev/null 2>&1 && "${LOCAL_SUDO[@]}" ufw status | grep -q '^Status: active'; then
     [[ -n "$NODE_NETWORK_CIDR" ]] || error "UFW is active on the control plane. Provide --node-network-cidr to open only the trusted private network."
     info "Allowing K3s node traffic from $NODE_NETWORK_CIDR on the control plane..."
     "${LOCAL_SUDO[@]}" sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-    "${LOCAL_SUDO[@]}" ufw allow from "$NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
-    "${LOCAL_SUDO[@]}" ufw allow from "$NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
-    "${LOCAL_SUDO[@]}" ufw allow from "$NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
-    "${LOCAL_SUDO[@]}" ufw allow from 10.42.0.0/16 to any >/dev/null
-    "${LOCAL_SUDO[@]}" ufw allow from 10.43.0.0/16 to any >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 6443 proto tcp >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 2049 proto tcp comment 'Longhorn RWX' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 3260 proto tcp comment 'Longhorn iSCSI' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 8000 proto tcp comment 'Longhorn backing image' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 8002 proto tcp comment 'Longhorn backing data' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 8500:8504 proto tcp comment 'Longhorn instance manager' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 9500:9503 proto tcp comment 'Longhorn manager' >/dev/null
+    "${LOCAL_SUDO[@]}" ufw allow in on "$CONTROL_PLANE_CLUSTER_INTERFACE" from "$NODE_NETWORK_CIDR" to any port 10000:31000 proto tcp comment 'Longhorn engines and replicas' >/dev/null
     "${LOCAL_SUDO[@]}" ufw reload >/dev/null
 fi
 
@@ -222,14 +301,24 @@ build_target() {
 
 check_target() {
     local target="$1"
+    local connection_info client_ip client_port worker_ip worker_port
     [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ || "$target" =~ ^[A-Za-z0-9._:-]+$ ]] || \
         error "Invalid SSH target: $target"
     ssh "${ssh_options[@]}" "$target" \
         'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
         error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
-    if [[ "$WORKER_EXPOSURE" == "internet" ]] && [[ "$(ssh "${ssh_options[@]}" "$target" 'id -u')" == "0" ]]; then
-        error "Refusing to configure an internet-facing worker through root-only SSH because the policy disables root login. Use a non-root account with passwordless sudo."
-    fi
+    connection_info="$(ssh "${ssh_options[@]}" "$target" 'printf "%s" "$SSH_CONNECTION"')"
+    read -r client_ip client_port worker_ip worker_port <<< "$connection_info"
+    trusted_private_ipv4 "$client_ip" || \
+        error "SSH to $target does not originate from a private control-plane address (observed: ${client_ip:-unknown})."
+    trusted_private_ipv4 "$worker_ip" || \
+        error "SSH to $target reached a public worker address (${worker_ip:-unknown}); workers must be LAN/Tailscale-only."
+    cidr_contains_ip "$NODE_NETWORK_CIDR" "$client_ip" || \
+        error "Control-plane source $client_ip is outside trusted node CIDR $NODE_NETWORK_CIDR."
+    cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || \
+        error "Worker address $worker_ip is outside trusted node CIDR $NODE_NETWORK_CIDR."
+    TARGET_CONTROL_PLANE_IP="$client_ip"
+    TARGET_WORKER_IP="$worker_ip"
 }
 
 remote_hostname() {
@@ -237,7 +326,7 @@ remote_hostname() {
 }
 
 install_worker() {
-    local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5"
+    local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5" control_plane_ip="$6"
     local remote_dir="" remote_installer="" remote_hardener=""
     local remote_command quoted quoted_dir quoted_installer quoted_hardener argument
     local worker_args=(
@@ -246,6 +335,7 @@ install_worker() {
         --token-stdin
         --node-name "$node_name"
         --ssh-port "$SSH_PORT"
+        --control-plane-ip "$control_plane_ip"
     )
 
     [[ -z "$node_ip" ]] || worker_args+=(--node-ip "$node_ip")
@@ -253,8 +343,6 @@ install_worker() {
     [[ -z "$taints" ]] || worker_args+=(--taints "$taints")
     [[ -z "$NODE_NETWORK_CIDR" ]] || worker_args+=(--node-network-cidr "$NODE_NETWORK_CIDR")
     [[ -z "$K3S_VERSION" ]] || worker_args+=(--k3s-version "$K3S_VERSION")
-    worker_args+=(--worker-exposure "$WORKER_EXPOSURE")
-
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
     printf -v quoted_dir '%q' "$remote_dir"
@@ -294,6 +382,11 @@ install_worker() {
     done
     [[ "$node_registered" == "true" ]] || error "Worker '$node_name' did not register within 60 seconds."
     kubectl wait --for=condition=Ready "node/$node_name" --timeout=5m
+    kubectl label "node/$node_name" \
+        node.swirlit.dev/role=worker \
+        node.swirlit.dev/exposure=local \
+        --overwrite >/dev/null
+    kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb- >/dev/null 2>&1 || true
 }
 
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
@@ -308,7 +401,7 @@ if [[ "$NON_INTERACTIVE" == "true" ]]; then
         check_target "$target"
         node_name="$(remote_hostname "$target")"
         [[ -n "$node_name" ]] || error "Could not determine the hostname of $target."
-        install_worker "$target" "$node_name" "" "$COMMON_LABELS" "$COMMON_TAINTS"
+        install_worker "$target" "$node_name" "$TARGET_WORKER_IP" "$COMMON_LABELS" "$COMMON_TAINTS" "$TARGET_CONTROL_PLANE_IP"
     done
 else
     for ((index=1; index<=worker_count; index++)); do
@@ -326,10 +419,12 @@ else
         worker_labels=""
         worker_taints=""
         prompt worker_name "Unique Kubernetes node name" "$detected_name"
-        prompt worker_ip "Advertised private node IP (blank for automatic detection)"
+        prompt worker_ip "Advertised private node IP" "$TARGET_WORKER_IP"
+        trusted_private_ipv4 "$worker_ip" || error "Worker node IP must be RFC1918 or Tailscale: $worker_ip"
+        cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || error "Worker node IP $worker_ip is outside $NODE_NETWORK_CIDR"
         prompt worker_labels "Node labels, comma-separated (optional)" "$COMMON_LABELS"
         prompt worker_taints "Node taints, comma-separated (optional)" "$COMMON_TAINTS"
-        install_worker "$target" "$worker_name" "$worker_ip" "$worker_labels" "$worker_taints"
+        install_worker "$target" "$worker_name" "$worker_ip" "$worker_labels" "$worker_taints" "$TARGET_CONTROL_PLANE_IP"
     done
 fi
 

@@ -11,8 +11,8 @@ NODE_IP=""
 NODE_LABELS=""
 NODE_TAINTS=""
 NODE_NETWORK_CIDR=""
+CONTROL_PLANE_IP=""
 K3S_VERSION=""
-WORKER_EXPOSURE="${K3S_WORKER_EXPOSURE:-}"
 HARDENING_SSH_PORT=""
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -39,7 +39,7 @@ Automation usage (the token is deliberately accepted only through stdin):
     --token-stdin \
     --node-name worker-01 \
     --node-network-cidr 10.0.0.0/24 \
-    --worker-exposure local
+    --control-plane-ip 10.0.0.10
 
 Options:
   --server-url URL          K3s server URL; https:// and :6443 are added if omitted
@@ -49,17 +49,22 @@ Options:
   --labels CSV              Initial Kubernetes node labels (key=value,key=value)
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  Trusted private network shared by cluster nodes
+  --control-plane-ip IP     Exact private control-plane source allowed to SSH here
   --k3s-version VERSION     Install the exact server version, for example v1.36.3+k3s1
-  --worker-exposure MODE    Worker exposure: internet or local (default: local)
-  --harden-security         Compatibility alias for --worker-exposure internet
-  --skip-security-hardening Compatibility alias for --worker-exposure local; UFW is still applied
-  --ssh-port PORT           SSH port retained by internet-facing hardening (default: current session or 22)
+  --worker-exposure local   Deprecated compatibility option; any other value is rejected
+  --skip-security-hardening Deprecated no-op; the local-worker firewall is always enforced
+  --ssh-port PORT           SSH port allowed only from the control plane (default: current session or 22)
   --non-interactive         Fail instead of prompting for missing required values
   -h, --help                Show this help
 
 Run one of these commands on the control-plane node to obtain a join token:
   sudo cat /var/lib/rancher/k3s/server/node-token
   sudo k3s token create --ttl 1h --description worker-join
+
+Workers are local-only. The installer rejects public IP interfaces and a
+public K3s server URL, and configures UFW so SSH is accepted only from the exact
+private control-plane address. Outbound traffic remains enabled for updates,
+image pulls, and workloads.
 EOF
 }
 
@@ -78,12 +83,14 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         NODE_TAINTS="${1#*=}" ;;
         --node-network-cidr) shift; [[ $# -gt 0 ]] || error "Missing value for --node-network-cidr"; NODE_NETWORK_CIDR="$1" ;;
         --node-network-cidr=*) NODE_NETWORK_CIDR="${1#*=}" ;;
+        --control-plane-ip) shift; [[ $# -gt 0 ]] || error "Missing value for --control-plane-ip"; CONTROL_PLANE_IP="$1" ;;
+        --control-plane-ip=*) CONTROL_PLANE_IP="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
-        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; WORKER_EXPOSURE="$1" ;;
-        --worker-exposure=*) WORKER_EXPOSURE="${1#*=}" ;;
-        --harden-security)  WORKER_EXPOSURE=internet ;;
-        --skip-security-hardening) WORKER_EXPOSURE=local ;;
+        --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
+        --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
+        --harden-security)  error "Internet-facing workers are forbidden; local-worker security is mandatory" ;;
+        --skip-security-hardening) : ;;
         --ssh-port)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-port"; HARDENING_SSH_PORT="$1" ;;
         --ssh-port=*)       HARDENING_SSH_PORT="${1#*=}" ;;
         --non-interactive)  NON_INTERACTIVE=true ;;
@@ -111,20 +118,94 @@ normalize_server_url() {
     printf '%s\n' "$value"
 }
 
-normalize_worker_exposure() {
-    case "${1,,}" in
-        internet|internet-exposed|public|external) printf 'internet\n' ;;
-        local|local-only|private|internal|lan) printf 'local\n' ;;
-        *) return 1 ;;
-    esac
+valid_ipv4() {
+    local ip="$1" octet
+    local -a octets
+    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+    IFS='.' read -r -a octets <<< "$ip"
+    for octet in "${octets[@]}"; do
+        (( 10#$octet <= 255 )) || return 1
+    done
+}
+
+trusted_private_ipv4() {
+    local ip="$1" a b _
+    valid_ipv4 "$ip" || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    (( a == 10 )) ||
+        (( a == 172 && b >= 16 && b <= 31 )) ||
+        (( a == 192 && b == 168 )) ||
+        (( a == 100 && b >= 64 && b <= 127 ))
+}
+
+trusted_private_cidr() {
+    local cidr="$1" ip prefix a b _
+    [[ "$cidr" == */* ]] || return 1
+    ip="${cidr%/*}"; prefix="${cidr#*/}"
+    trusted_private_ipv4 "$ip" || return 1
+    [[ "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
+    prefix=$((10#$prefix))
+    (( prefix >= 1 && prefix <= 32 )) || return 1
+    IFS='.' read -r a b _ <<< "$ip"
+    a=$((10#$a)); b=$((10#$b))
+    if (( a == 10 )); then (( prefix >= 8 ))
+    elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
+    elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
+    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
+    fi
+}
+
+ipv4_to_int() {
+    local a b c d
+    IFS='.' read -r a b c d <<< "$1"
+    printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
+}
+
+cidr_contains_ip() {
+    local cidr="$1" ip="$2" network prefix mask ip_value network_value
+    trusted_private_cidr "$cidr" && trusted_private_ipv4 "$ip" || return 1
+    network="${cidr%/*}"; prefix=$((10#${cidr#*/}))
+    ip_value="$(ipv4_to_int "$ip")"; network_value="$(ipv4_to_int "$network")"
+    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
+    (( (ip_value & mask) == (network_value & mask) ))
+}
+
+server_url_ipv4() {
+    local value="${1%/}" authority host
+    value="${value#https://}"
+    authority="${value%%/*}"
+    [[ -n "$authority" && "$authority" == "$value" ]] || return 1
+    host="${authority%%:*}"
+    trusted_private_ipv4 "$host" || return 1
+    printf '%s' "$host"
+}
+
+detect_node_ip() {
+    ip -4 route get "$1" 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}'
+}
+
+detect_node_interface() {
+    ip -4 route get "$1" 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}'
+}
+
+reject_public_ip_interfaces() {
+    local interface address
+    while read -r interface address; do
+        address="${address%/*}"
+        trusted_private_ipv4 "$address" || \
+            error "Interface $interface has public IPv4 address $address. This machine cannot be enrolled as a worker."
+    done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
+
+    while read -r interface address; do
+        address="${address%/*}"
+        [[ "${address,,}" =~ ^f[cd] ]] || \
+            error "Interface $interface has public IPv6 address $address. This machine cannot be enrolled as a worker."
+    done < <(ip -6 -o address show scope global | awk '{print $2, $4}')
 }
 
 valid_node_name() {
     [[ ${#1} -le 253 && "$1" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]
-}
-
-valid_cidr() {
-    [[ "$1" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]
 }
 
 trim() {
@@ -146,24 +227,25 @@ fi
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
     [[ -n "$SERVER_URL" ]] || prompt SERVER_URL "Control-plane IP, hostname, or URL"
+    SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
+    SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
+        error "Use the control plane's RFC1918 or Tailscale IPv4 address, not a public address or hostname."
+    [[ -n "$CONTROL_PLANE_IP" ]] || prompt CONTROL_PLANE_IP "Private control-plane IP allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
     if [[ -z "$JOIN_TOKEN" ]]; then
         read -rsp "K3s join token (input hidden): " JOIN_TOKEN
         printf '\n'
     fi
     [[ -n "$NODE_NAME" ]] || prompt NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
-    [[ -n "$NODE_IP" ]] || prompt NODE_IP "Node private IP (blank for automatic detection)"
+    [[ -n "$NODE_IP" ]] || prompt NODE_IP "Node private IP" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
     [[ -n "$NODE_LABELS" ]] || prompt NODE_LABELS "Initial labels, comma-separated (optional)"
     [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
-    [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "Trusted private node CIDR (required when UFW is active; e.g. 10.0.0.0/24)"
+    [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "Trusted RFC1918/Tailscale node CIDR (e.g. 10.0.0.0/24)"
     [[ -n "$K3S_VERSION" ]] || prompt K3S_VERSION "Exact K3s version (blank to use the current stable release)"
-    [[ -n "$WORKER_EXPOSURE" ]] || prompt WORKER_EXPOSURE "Is this worker internet-exposed or local/private? [internet/local]" "local"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
         prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
     done
 fi
 
-WORKER_EXPOSURE="${WORKER_EXPOSURE:-local}"
-WORKER_EXPOSURE="$(normalize_worker_exposure "$WORKER_EXPOSURE")" || error "Worker exposure must be 'internet' or 'local'."
 if [[ -z "$HARDENING_SSH_PORT" && -n "${SSH_CONNECTION:-}" ]]; then
     read -r _ _ _ HARDENING_SSH_PORT <<< "$SSH_CONNECTION"
 fi
@@ -171,20 +253,27 @@ HARDENING_SSH_PORT="${HARDENING_SSH_PORT:-22}"
 
 [[ -n "$SERVER_URL" ]] || error "A control-plane URL is required."
 SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
+SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
+    error "The K3s URL must use the control plane's RFC1918 or Tailscale IPv4 address: $SERVER_URL"
+CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-$SERVER_PRIVATE_IP}"
+trusted_private_ipv4 "$CONTROL_PLANE_IP" || error "Control-plane SSH source must be RFC1918 or Tailscale: $CONTROL_PLANE_IP"
 [[ -n "$JOIN_TOKEN" ]] || error "A K3s join token is required; use --token-stdin or run interactively."
 NODE_NAME="${NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
 valid_node_name "$NODE_NAME" || error "Invalid node name '$NODE_NAME'. Use lower-case DNS characters and a unique name."
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "A trusted node network CIDR is required for the worker firewall."
-valid_cidr "$NODE_NETWORK_CIDR" || error "Invalid node network CIDR: $NODE_NETWORK_CIDR"
+trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be an RFC1918 or Tailscale IPv4 CIDR: $NODE_NETWORK_CIDR"
+NODE_IP="${NODE_IP:-$(detect_node_ip "$SERVER_PRIVATE_IP")}"
+NODE_INTERFACE="$(detect_node_interface "$SERVER_PRIVATE_IP")"
+trusted_private_ipv4 "$NODE_IP" || error "Worker node IP must be RFC1918 or Tailscale: ${NODE_IP:-unavailable}"
+[[ -n "$NODE_INTERFACE" ]] || error "Could not determine the private interface used to reach $SERVER_PRIVATE_IP"
+cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || error "K3s server address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
+cidr_contains_ip "$NODE_NETWORK_CIDR" "$CONTROL_PLANE_IP" || error "Control-plane SSH source $CONTROL_PLANE_IP is outside $NODE_NETWORK_CIDR"
+cidr_contains_ip "$NODE_NETWORK_CIDR" "$NODE_IP" || error "Worker node IP $NODE_IP is outside $NODE_NETWORK_CIDR"
+reject_public_ip_interfaces
 [[ -z "$K3S_VERSION" || "$K3S_VERSION" != *[[:space:]]* ]] || error "The K3s version cannot contain whitespace."
 [[ "$HARDENING_SSH_PORT" =~ ^[0-9]+$ && "$HARDENING_SSH_PORT" -ge 1 && "$HARDENING_SSH_PORT" -le 65535 ]] || \
     error "SSH port must be an integer from 1 to 65535."
 [[ -x "$SECURITY_HARDENER" ]] || error "Security policy script not found or not executable: $SECURITY_HARDENER"
-if [[ "$WORKER_EXPOSURE" == "internet" ]]; then
-    if [[ $EUID -eq 0 && "${SUDO_USER:-root}" == "root" && -z "${SSH_ALLOWED_USERS:-}" ]]; then
-        error "Set SSH_ALLOWED_USERS to at least one non-root account for an internet-facing worker; the policy disables root SSH login."
-    fi
-fi
 
 if [[ $EUID -eq 0 ]]; then
     SUDO=()
@@ -196,12 +285,6 @@ fi
 
 if "${SUDO[@]}" systemctl cat k3s.service >/dev/null 2>&1; then
     error "This machine has a K3s server service. Refusing to replace it with a worker."
-fi
-
-UFW_ACTIVE=false
-if command -v ufw >/dev/null 2>&1 && "${SUDO[@]}" ufw status | grep -q '^Status: active'; then
-    UFW_ACTIVE=true
-    [[ -n "$NODE_NETWORK_CIDR" ]] || error "UFW is active. Provide --node-network-cidr so K3s traffic is allowed only from the trusted private network."
 fi
 
 command -v apt-get >/dev/null 2>&1 || error "This installer currently supports Debian/Ubuntu workers (apt-get is required)."
@@ -223,30 +306,34 @@ else
     warn "K3s AppArmor installer was not found next to this script; the runtime default will be used unchanged."
 fi
 
-if [[ "$UFW_ACTIVE" == "true" ]]; then
-    info "Allowing K3s node traffic from $NODE_NETWORK_CIDR and the default pod/service networks."
-    "${SUDO[@]}" sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-    "${SUDO[@]}" ufw allow from "$NODE_NETWORK_CIDR" to any port 8472 proto udp >/dev/null
-    "${SUDO[@]}" ufw allow from "$NODE_NETWORK_CIDR" to any port 10250 proto tcp >/dev/null
-    "${SUDO[@]}" ufw allow from 10.42.0.0/16 to any >/dev/null
-    "${SUDO[@]}" ufw allow from 10.43.0.0/16 to any >/dev/null
-    "${SUDO[@]}" ufw reload >/dev/null
-fi
+info "Enforcing the local-only firewall before K3s enrollment..."
+K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
+CONTROL_PLANE_IP="$CONTROL_PLANE_IP" \
+    "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
+    --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
 
 info "Checking access to $SERVER_URL..."
 curl -kfsS --connect-timeout 10 --max-time 20 "$SERVER_URL/cacerts" >/dev/null || \
     error "Cannot reach $SERVER_URL. Check routing and TCP port 6443 on the control-plane firewall."
 
-agent_args=(agent)
-[[ -z "$NODE_IP" ]] || agent_args+=(--node-ip "$NODE_IP")
+agent_args=(agent --node-ip "$NODE_IP" --flannel-iface "$NODE_INTERFACE")
 if [[ -n "$NODE_LABELS" ]]; then
     IFS=',' read -r -a label_values <<< "$NODE_LABELS"
     for value in "${label_values[@]}"; do
         value="$(trim "$value")"
         [[ -n "$value" ]] || error "Labels cannot contain an empty item."
+        case "${value%%=*}" in
+            svccontroller.k3s.cattle.io/enablelb|node-role.kubernetes.io/control-plane|node.swirlit.dev/role|node.swirlit.dev/exposure)
+                error "Reserved topology label cannot be set on a worker: ${value%%=*}"
+                ;;
+        esac
         agent_args+=(--node-label "$value")
     done
 fi
+agent_args+=(
+    --node-label node.swirlit.dev/role=worker
+    --node-label node.swirlit.dev/exposure=local
+)
 if [[ -n "$NODE_TAINTS" ]]; then
     IFS=',' read -r -a taint_values <<< "$NODE_TAINTS"
     for value in "${taint_values[@]}"; do
@@ -272,9 +359,11 @@ unset JOIN_TOKEN
 
 "${SUDO[@]}" systemctl is-active --quiet k3s-agent || error "k3s-agent did not become active; inspect: sudo journalctl -u k3s-agent"
 
-info "Applying the $WORKER_EXPOSURE worker security policy..."
+info "Applying the mandatory local-only worker security policy..."
 K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" \
-    "$SECURITY_HARDENER" --apply --server-exposure "$WORKER_EXPOSURE" --node-role worker --ssh-port "$HARDENING_SSH_PORT"
+CONTROL_PLANE_IP="$CONTROL_PLANE_IP" \
+    "$SECURITY_HARDENER" --apply --server-exposure local --node-role worker \
+    --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT"
 
 info "Worker '$NODE_NAME' is running. On the control plane, verify it with:"
 printf '  kubectl wait --for=condition=Ready node/%s --timeout=5m\n' "$NODE_NAME"

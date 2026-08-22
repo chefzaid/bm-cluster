@@ -14,11 +14,11 @@ Odoo.
 - Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
 - Homepage service catalog and Kubernetes status dashboard
-- UFW on every node, Fail2ban and CrowdSec on internet-facing nodes, and control-plane Lynis audits
+- UFW on every node, Fail2ban and CrowdSec on the internet-facing control plane, and control-plane Lynis audits
 
 ## Architecture
 
-Public HTTPS traffic enters through the NGINX LoadBalancer and is routed by
+Public HTTPS traffic enters only through the control-plane NGINX LoadBalancer and is routed by
 hostname to ClusterIP services. Cloudflare provides public DNS and edge TLS;
 NGINX uses a wildcard Cloudflare Origin CA certificate for strict end-to-end
 TLS.
@@ -99,14 +99,28 @@ control plane highly available.
 
 Worker requirements:
 
-- Debian or Ubuntu, a unique hostname, and network access to the control plane
-- SSH key authentication as root or a user with passwordless `sudo`; workers
-  marked internet-facing require the non-root option because that policy disables
-  root SSH login
-- A trusted private node CIDR so UFW can allow only required cluster traffic
+- Debian or Ubuntu, a unique hostname, and only RFC1918, Tailscale
+  (`100.64.0.0/10`), or IPv6 ULA addresses; public IP interfaces are rejected
+- No router port-forward, public DNS record, public load balancer, or direct
+  internet ingress to a worker
+- Tailscale SSH must be disabled on workers (`sudo tailscale set --ssh=false`);
+  use the regular host SSH service over the Tailscale address so UFW remains authoritative
+- SSH key authentication from the control plane as root or a user with
+  passwordless `sudo`; after enrollment, UFW accepts the worker SSH port only
+  from the exact private control-plane source address
+- A trusted private node CIDR containing the control-plane K3s address, the
+  control-plane SSH source, and every worker address
 - TCP 6443 from workers to the server, UDP 8472 between nodes, and TCP 10250
   from the server to workers, restricted to the private node network
+- Longhorn's TCP peer ports (2049, 3260, 8000, 8002, 8500-8504, 9500-9503,
+  and 10000-31000), restricted to the same private network and interface
 - Enough CPU, memory, and disk for the workloads assigned to the node
+
+The live control plane's private overlay address is `100.69.22.24`. Home/LAN
+workers must join the same Tailscale network before enrollment; use
+`https://100.69.22.24:6443` as `K3S_SERVER_URL` and `100.64.0.0/10` as
+`K3S_NODE_NETWORK_CIDR`. Do not use the control plane's public address for
+worker enrollment.
 
 To add workers later, run the unified worker assistant from either the control
 plane or the new worker:
@@ -127,37 +141,53 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 sudo k3s token create --ttl 1h --description worker-join
 ```
 
-Both modes ask whether the worker is internet-facing or local/private. UFW is
-configured on every worker. Fail2ban, CrowdSec, and additional SSH hardening are
-installed only on internet-facing workers. Lynis is never installed persistently
-on workers. Token input is hidden and is never placed in command-line arguments
-or copied to disk.
+Workers are always local/private; there is no internet-facing worker mode. Both
+paths validate the private addresses before changing the machine, apply a
+default-deny inbound UFW policy before K3s enrollment, allow SSH only from the
+control plane, set Tailscale to `nodivert` so its packet-filter hook cannot
+bypass UFW, and retain only the private-interface K3s peer rules. Fail2ban and CrowdSec
+are removed from workers because public SSH is impossible; Lynis is never
+installed persistently there. Outbound traffic remains allowed for operating
+system updates, image pulls, and workloads. Token input is hidden and is never
+placed in command-line arguments or copied to disk.
 
 For repeatable enrollment through the control-plane installer:
 
 ```bash
 K3S_WORKER_HOSTS=ubuntu@10.0.0.12,ubuntu@10.0.0.13 \
 K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
-K3S_WORKER_EXPOSURE=local \
 K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 ./install-control-plane.sh --yes
 ```
 
 Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
-`K3S_WORKER_SSH_PORT`, `K3S_WORKER_EXPOSURE`, `K3S_WORKER_LABELS`, and
-`K3S_WORKER_TAINTS`. Worker exposure defaults to `local`; set it to `internet`
-only when the worker itself accepts traffic from the public internet. New
-DaemonSet workloads, including node metrics and log collection, automatically
-run on eligible workers. The installer sets Longhorn's default replica count for
-new volumes to the number of Ready nodes, capped at three; it does not relocate
-or change existing volumes.
+`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`. The K3s
+server URL must use a private/Tailscale control-plane address.
+`K3S_PRIVATE_ADDRESS`, `K3S_PRIVATE_INTERFACE`, and `K3S_PUBLIC_ADDRESS` can
+override control-plane network detection. The installer persists the private
+node IP, public ExternalIP, API certificate SAN, and Flannel interface in a K3s
+configuration drop-in before enrolling workers. New DaemonSet
+workloads, including node metrics and log collection, automatically run on
+eligible workers. The control plane alone receives K3s' LoadBalancer allowlist
+label, and ingress is pinned there. The installer sets Longhorn's default
+replica count for new volumes to the number of Ready nodes, capped at three; it
+does not relocate or change existing volumes.
 
 ## Host security policy
 
-| Node | Local/private | Internet-facing |
+| Node | Exposure | Enforced host controls |
 |---|---|---|
-| Control plane | UFW and Lynis | UFW, Fail2ban, CrowdSec, SSH hardening, and Lynis |
-| Worker | UFW | UFW, Fail2ban, CrowdSec, and SSH hardening |
+| Control plane | Local or internet-facing | UFW and Lynis; internet mode also enables Fail2ban, CrowdSec, and SSH hardening while retaining password authentication |
+| Worker | Local/private only | UFW default-deny inbound, no public IP interface, SSH only from the exact control-plane IP, and K3s peer ports only from the trusted node CIDR |
+
+The internet-facing control-plane policy keeps password SSH available as
+requested, disables root SSH, limits authentication attempts and connection
+bursts, and protects sshd with both Fail2ban and CrowdSec. Fail2ban observes a
+one-hour window, starts with a 24-hour ban, and exponentially extends repeat
+bans up to 30 days; CrowdSec also detects slow brute-force and user-enumeration
+patterns and applies seven-day decisions. UFW exposes HTTP/HTTPS only to
+Cloudflare proxy networks, keeps the Kubernetes API on the private interface,
+and retains approximately three months of authentication logs for review.
 
 Lynis is installed only on the control plane. To audit the complete cluster,
 run the control-plane audit assistant as the same user and SSH identity used to
@@ -253,6 +283,7 @@ above, not by the Ansible inventory.
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
+| `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
 | `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
 | `deployments/` | Kubernetes resources |
@@ -264,7 +295,9 @@ above, not by the Ansible inventory.
 - Keep administrative UI hostnames behind Cloudflare Access.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.
-- Local-only nodes keep UFW but omit Fail2ban and CrowdSec; local control planes retain Lynis.
+- Workers are permanently local-only: never assign or forward public traffic to them.
+- Worker UFW permits SSH only from the control plane and private K3s peer traffic; outbound access remains available.
+- Local-only nodes omit Fail2ban and CrowdSec; local control planes retain Lynis.
 
 ## License
 

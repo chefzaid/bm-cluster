@@ -21,8 +21,9 @@ The assistant asks where it is running:
   1. Control plane - enroll one or more remote workers over SSH
   2. Worker machine - join this machine using the control-plane URL and token
 
-Both paths ask whether workers are internet-facing or local/private. Every
-worker receives UFW; only internet-facing workers receive Fail2ban and CrowdSec.
+Workers are always local/private. Both paths reject public worker addresses and
+configure UFW so SSH is accepted only from the control plane; public worker
+exposure is not a supported mode.
 
 Explicit mode selection:
   ./install-worker.sh --control-plane [control-plane options]

@@ -29,6 +29,15 @@
       loop:
         - "{{ infra_namespace }}"
 
+    - name: Keep public load balancers and ingress on control-plane nodes
+      command: >
+        kubectl label nodes
+        -l node-role.kubernetes.io/control-plane
+        svccontroller.k3s.cattle.io/enablelb=true
+        node.swirlit.dev/role=control-plane
+        node.swirlit.dev/exposure={{ server_exposure_mode }}
+        --overwrite
+
     - name: Apply Kubernetes admission and namespace security baseline
       command: kubectl apply -f {{ k8s_dir }}/security-baseline.yaml
       register: security_baseline
@@ -101,6 +110,7 @@
         --version {{ ingress_nginx_chart_version }}
         --set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true
+        --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'
         --wait --timeout 300s
 
     - name: Install or upgrade Argo CD on the security-patched release

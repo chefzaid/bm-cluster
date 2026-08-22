@@ -15,6 +15,7 @@ K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
+K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
 AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
@@ -286,6 +287,19 @@ else
 fi
 
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
+    if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
+        [[ -x "$K3S_NETWORK_SCRIPT" ]] || error "K3s private-network configurator not found or not executable: $K3S_NETWORK_SCRIPT"
+        network_args=()
+        [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]] || network_args+=(--private-ip "$K3S_PRIVATE_ADDRESS")
+        [[ -z "${K3S_PRIVATE_INTERFACE:-}" ]] || network_args+=(--private-interface "$K3S_PRIVATE_INTERFACE")
+        [[ -z "${K3S_PUBLIC_ADDRESS:-}" ]] || network_args+=(--public-ip "$K3S_PUBLIC_ADDRESS")
+        if [[ "$INSTALL_K3S" != "true" ]] && systemctl cat k3s.service >/dev/null 2>&1; then
+            network_args+=(--restart)
+        fi
+        step "Configuring private K3s control-plane networking..."
+        "$K3S_NETWORK_SCRIPT" "${network_args[@]}"
+    fi
+
     if [[ "$INSTALL_K3S" == "true" ]]; then
         info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
         curl -sfL https://get.k3s.io | sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh -s - \
@@ -350,6 +364,15 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     kubectl cluster-info &>/dev/null || error "Cannot reach K8s cluster."
     [[ "$NEEDS_HELM" != "true" ]] || command -v helm &>/dev/null || error "helm not found."
 
+    mapfile -t control_plane_nodes < <(kubectl get nodes \
+        -l node-role.kubernetes.io/control-plane -o name)
+    [[ ${#control_plane_nodes[@]} -gt 0 ]] || error "No control-plane node was found."
+    kubectl label "${control_plane_nodes[@]}" \
+        svccontroller.k3s.cattle.io/enablelb=true \
+        node.swirlit.dev/role=control-plane \
+        "node.swirlit.dev/exposure=$SERVER_EXPOSURE" \
+        --overwrite >/dev/null
+
     if [[ "$INSTALL_K3S" == "true" ]]; then
         kubectl wait --for=condition=Ready node --all --timeout=120s
     fi
@@ -365,7 +388,6 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]] || worker_manager_args+=(--node-network-cidr "$K3S_NODE_NETWORK_CIDR")
         [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
         [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
-        [[ -z "${K3S_WORKER_EXPOSURE:-}" ]] || worker_manager_args+=(--worker-exposure "$K3S_WORKER_EXPOSURE")
         step "Adding K3s worker nodes..."
         "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
     fi
@@ -436,6 +458,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --version "$INGRESS_NGINX_CHART_VERSION" \
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
+            --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
             --wait --timeout 300s
     fi
 

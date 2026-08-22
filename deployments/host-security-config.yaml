@@ -14,8 +14,16 @@ data:
       local: [ufw, lynis]
       internet: [ufw, fail2ban, crowdsec, lynis]
     worker:
-      local: [ufw]
-      internet: [ufw, fail2ban, crowdsec]
+      exposure: local-only
+      controls: [ufw, default-deny-inbound, private-address-enforcement]
+      ssh-source: control-plane-private-ip-only
+      tailscale-ssh-server: forbidden
+      tailscale-netfilter-mode: nodivert
+      k3s-peer-source: trusted-private-node-cidr-only
+      longhorn-peer-source: trusted-private-node-cidr-only
+      public-ip-addresses: forbidden
+      public-ingress: forbidden
+      outbound: allowed-for-updates-images-and-workloads
     lynis-worker-audits: transient-ssh-copy-from-control-plane
 
   fail2ban-jail.local: |
