@@ -494,7 +494,7 @@ data:
         editable: false
         jsonData:
           prometheusType: Prometheus
-          prometheusVersion: 3.13.2
+          prometheusVersion: 3.14.0
           timeInterval: 15s
       - name: Elasticsearch
         uid: elasticsearch
