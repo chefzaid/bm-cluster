@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/network.sh
+source "$NETWORK_LIBRARY"
+
 PRIVATE_IP="${K3S_PRIVATE_ADDRESS:-}"
 PRIVATE_INTERFACE="${K3S_PRIVATE_INTERFACE:-}"
 PUBLIC_IP="${K3S_PUBLIC_ADDRESS:-}"
@@ -46,35 +55,6 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-
-valid_ipv4() {
-    local ip="$1" octet
-    local -a octets
-    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-        (( 10#$octet <= 255 )) || return 1
-    done
-}
-
-trusted_private_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 10 )) ||
-        (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 )) ||
-        (( a == 100 && b >= 64 && b <= 127 ))
-}
-
-tailscale_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 100 && b >= 64 && b <= 127 ))
-}
 
 detect_default_route_value() {
     local key="$1"

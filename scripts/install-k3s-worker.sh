@@ -18,6 +18,14 @@ REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/network.sh
+source "$NETWORK_LIBRARY"
+
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 
@@ -50,7 +58,7 @@ Options:
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
   --control-plane-ip IP     Exact private control-plane source allowed to SSH here
-  --k3s-version VERSION     Install the exact server version, for example v1.36.3+k3s1
+  --k3s-version VERSION     Install the control plane's exact K3s version
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-security-hardening Deprecated no-op; the local-worker firewall is always enforced
   --ssh-port PORT           SSH port allowed only from the control plane (default: current session or 22)
@@ -116,77 +124,6 @@ normalize_server_url() {
         value="${value}:6443"
     fi
     printf '%s\n' "$value"
-}
-
-valid_ipv4() {
-    local ip="$1" octet
-    local -a octets
-    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-        (( 10#$octet <= 255 )) || return 1
-    done
-}
-
-trusted_private_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 10 )) ||
-        (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 )) ||
-        (( a == 100 && b >= 64 && b <= 127 ))
-}
-
-tailscale_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 100 && b >= 64 && b <= 127 ))
-}
-
-trusted_private_cidr() {
-    local cidr="$1" ip prefix a b _
-    [[ "$cidr" == */* ]] || return 1
-    ip="${cidr%/*}"; prefix="${cidr#*/}"
-    trusted_private_ipv4 "$ip" || return 1
-    [[ "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
-    prefix=$((10#$prefix))
-    (( prefix >= 1 && prefix <= 32 )) || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    if (( a == 10 )); then (( prefix >= 8 ))
-    elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
-    elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
-    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
-    fi
-}
-
-ipv4_to_int() {
-    local a b c d
-    IFS='.' read -r a b c d <<< "$1"
-    printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
-}
-
-cidr_contains_ip() {
-    local cidr="$1" ip="$2" network prefix mask ip_value network_value
-    trusted_private_cidr "$cidr" && trusted_private_ipv4 "$ip" || return 1
-    network="${cidr%/*}"; prefix=$((10#${cidr#*/}))
-    ip_value="$(ipv4_to_int "$ip")"; network_value="$(ipv4_to_int "$network")"
-    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
-    (( (ip_value & mask) == (network_value & mask) ))
-}
-
-server_url_ipv4() {
-    local value="${1%/}" authority host
-    value="${value#https://}"
-    authority="${value%%/*}"
-    [[ -n "$authority" && "$authority" == "$value" ]] || return 1
-    host="${authority%%:*}"
-    trusted_private_ipv4 "$host" || return 1
-    printf '%s' "$host"
 }
 
 detect_node_ip() {

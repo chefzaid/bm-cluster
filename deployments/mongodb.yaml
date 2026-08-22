@@ -58,11 +58,23 @@ spec:
       labels:
         app: mongodb
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mongodb
           # MongoDB 8.x refuses Linux 6.19-7.0.13; 7.0.40 is the newest
           # stable version compatible with Ubuntu 26.04's current 7.0.0 kernel.
           image: mongo@sha256:8ef27524b4cde51b9f07bb0827a56d02c6d3b148d0b7d0ca8ff4dfd57351ff4f
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: MONGO_INITDB_ROOT_USERNAME
               valueFrom:

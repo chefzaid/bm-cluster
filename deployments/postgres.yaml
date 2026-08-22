@@ -73,9 +73,21 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: postgres
         image: postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         env:
         - name: POSTGRES_DB
           valueFrom:
@@ -122,6 +134,13 @@ spec:
             - $(POSTGRES_DB)
           initialDelaySeconds: 5
           periodSeconds: 5
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
       volumes:
       - name: postgres-storage
         persistentVolumeClaim:

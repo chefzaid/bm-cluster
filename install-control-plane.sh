@@ -6,6 +6,21 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_CONFIG="$SCRIPT_DIR/config/platform.env"
+if [[ ! -r "$PLATFORM_CONFIG" ]]; then
+    echo "[ERROR] Shared platform contract not found: $PLATFORM_CONFIG" >&2
+    exit 1
+fi
+# shellcheck source=config/platform.env
+source "$PLATFORM_CONFIG"
+NETWORK_LIBRARY="$SCRIPT_DIR/scripts/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=scripts/lib/network.sh
+source "$NETWORK_LIBRARY"
+
 DEPLOY_DIR="$SCRIPT_DIR/deployments"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
@@ -18,15 +33,40 @@ LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
 AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
-K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-v1.36.3+k3s1}"
+K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
-INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-4.15.1}"
-LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-1.12.1}"
-VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-0.34.1}"
-EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-2.9.0}"
-ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-10.3.3}"
-ARGOCD_IMAGE_TAG="${ARGOCD_IMAGE_TAG:-v3.5.1}"
+INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-$DEFAULT_INGRESS_NGINX_CHART_VERSION}"
+LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-$DEFAULT_LONGHORN_CHART_VERSION}"
+VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-$DEFAULT_VAULT_CHART_VERSION}"
+EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-$DEFAULT_EXTERNAL_SECRETS_CHART_VERSION}"
+ARGOCD_CHART_VERSION="${ARGOCD_CHART_VERSION:-$DEFAULT_ARGOCD_CHART_VERSION}"
+ARGOCD_IMAGE_TAG="${ARGOCD_IMAGE_TAG:-$DEFAULT_ARGOCD_IMAGE_TAG}"
+LONGHORN_HELM_TIMEOUT="${LONGHORN_HELM_TIMEOUT:-$DEFAULT_LONGHORN_HELM_TIMEOUT}"
+LONGHORN_POD_WAIT_TIMEOUT="${LONGHORN_POD_WAIT_TIMEOUT:-$DEFAULT_LONGHORN_POD_WAIT_TIMEOUT}"
+INGRESS_HELM_TIMEOUT="${INGRESS_HELM_TIMEOUT:-$DEFAULT_INGRESS_HELM_TIMEOUT}"
+VAULT_WAIT_TIMEOUT="${VAULT_WAIT_TIMEOUT:-$DEFAULT_VAULT_WAIT_TIMEOUT}"
+EXTERNAL_SECRETS_HELM_TIMEOUT="${EXTERNAL_SECRETS_HELM_TIMEOUT:-$DEFAULT_EXTERNAL_SECRETS_HELM_TIMEOUT}"
+EXTERNAL_SECRET_WAIT_TIMEOUT="${EXTERNAL_SECRET_WAIT_TIMEOUT:-$DEFAULT_EXTERNAL_SECRET_WAIT_TIMEOUT}"
+ARGOCD_HELM_TIMEOUT="${ARGOCD_HELM_TIMEOUT:-$DEFAULT_ARGOCD_HELM_TIMEOUT}"
+DATASTORE_WAIT_TIMEOUT="${DATASTORE_WAIT_TIMEOUT:-$DEFAULT_DATASTORE_WAIT_TIMEOUT}"
+PLATFORM_WAIT_TIMEOUT="${PLATFORM_WAIT_TIMEOUT:-$DEFAULT_PLATFORM_WAIT_TIMEOUT}"
+NEXUS_WAIT_TIMEOUT="${NEXUS_WAIT_TIMEOUT:-$DEFAULT_NEXUS_WAIT_TIMEOUT}"
+POST_DEPLOY_JOB_WAIT_TIMEOUT="${POST_DEPLOY_JOB_WAIT_TIMEOUT:-$DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT}"
+CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
+
+IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
+IFS=',' read -r -a PLATFORM_MANIFEST_ARRAY <<< "$PLATFORM_MANIFESTS"
+IFS=',' read -r -a POST_DEPLOY_CREATE_MANIFEST_ARRAY <<< "$POST_DEPLOY_CREATE_MANIFESTS"
+IFS=',' read -r -a EXTERNAL_SECRET_NAME_ARRAY <<< "$EXTERNAL_SECRET_NAMES"
+IFS=',' read -r -a DATASTORE_WAIT_APP_ARRAY <<< "$DATASTORE_WAIT_APPS"
+IFS=',' read -r -a PLATFORM_WAIT_APP_ARRAY <<< "$PLATFORM_WAIT_APPS"
+IFS=',' read -r -a PLATFORM_WAIT_DAEMONSET_ARRAY <<< "$PLATFORM_WAIT_DAEMONSETS"
+if [[ -n "${CLOUDFLARE_HOST_LABELS:-}" ]]; then
+    read -r -a CLOUDFLARE_HOST_LABEL_ARRAY <<< "$CLOUDFLARE_HOST_LABELS"
+else
+    IFS=',' read -r -a CLOUDFLARE_HOST_LABEL_ARRAY <<< "$DEFAULT_CLOUDFLARE_HOST_LABELS"
+fi
 
 for arg in "$@"; do
     case "$arg" in
@@ -71,38 +111,6 @@ ask_with_default() {
     read -rp "$(echo -e "${YELLOW}$prompt $suffix${NC} ")" answer
     answer="${answer:-$default_choice}"
     [[ "$answer" =~ ^[Yy]$ ]]
-}
-
-normalize_server_exposure() {
-    local exposure="${1,,}"
-
-    case "$exposure" in
-        internet|internet-exposed|public|external)
-            echo "internet"
-            ;;
-        local|local-only|private|internal|lan)
-            echo "local"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-is_cluster_private_ipv4() {
-    local ip="$1" octet a b
-    local -a octets
-    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-        (( 10#$octet <= 255 )) || return 1
-    done
-    a=$((10#${octets[0]}))
-    b=$((10#${octets[1]}))
-    (( a == 10 )) ||
-        (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 )) ||
-        (( a == 100 && b >= 64 && b <= 127 ))
 }
 
 ask_server_exposure() {
@@ -222,7 +230,7 @@ if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
     export K3S_PRIVATE_ADDRESS
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
-    is_cluster_private_ipv4 "$K3S_PRIVATE_ADDRESS" || \
+    trusted_private_ipv4 "$K3S_PRIVATE_ADDRESS" || \
         error "K3S_PRIVATE_ADDRESS must be this control plane's RFC1918 or Tailscale IPv4 address."
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
@@ -242,7 +250,7 @@ else
 fi
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
-ask_with_default "Deploy/upgrade platform services (Keycloak, monitoring, ELK, Jenkins, SonarQube, Nexus, GitLab, DBGate, Kafka UI, Portainer, Homepage, ingress rules)?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+ask_with_default "Deploy/upgrade platform services from the shared inventory?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
 ask_with_default "Deploy/upgrade Odoo (ERP/CRM)?" "Y" && DEPLOY_ODOO=true || DEPLOY_ODOO=false
 ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
@@ -431,22 +439,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$CONFIGURE_CLOUDFLARE" != "true" && ( "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ) ]]; then
         step "Ensuring HTTPS TLS secret..."
-        ensure_tls_secret infra swirlit-dev-tls \
-            keycloak.swirlit.dev \
-            jenkins.swirlit.dev \
-            sonarqube.swirlit.dev \
-            nexus.swirlit.dev \
-            argocd.swirlit.dev \
-            grafana.swirlit.dev \
-            kibana.swirlit.dev \
-            gitlab.swirlit.dev \
-            longhorn.swirlit.dev \
-            vault.swirlit.dev \
-            dbgate.swirlit.dev \
-            kafka.swirlit.dev \
-            odoo.swirlit.dev \
-            portainer.swirlit.dev \
-            devapp.swirlit.dev
+        tls_domains=("$CLOUDFLARE_ZONE")
+        for label in "${CLOUDFLARE_HOST_LABEL_ARRAY[@]}"; do
+            tls_domains+=("$label.$CLOUDFLARE_ZONE")
+        done
+        ensure_tls_secret infra swirlit-dev-tls "${tls_domains[@]}"
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
@@ -467,14 +464,14 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1 \
             --set "defaultSettings.storageMinimalAvailablePercentage=20" \
             --set "defaultSettings.storageOverProvisioningPercentage=110" \
-            --wait --timeout 300s
+            --wait --timeout "$LONGHORN_HELM_TIMEOUT"
 
         kubectl patch storageclass longhorn -p \
             '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
         kubectl patch storageclass local-path -p \
             '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
         kubectl wait --for=condition=ready pod -l app=longhorn-manager \
-            -n longhorn-system --timeout=180s
+            -n longhorn-system --timeout="$LONGHORN_POD_WAIT_TIMEOUT"
         kubectl -n longhorn-system patch settings.longhorn.io default-replica-count \
             --type=merge -p "{\"value\":\"$longhorn_replicas\"}" >/dev/null
     fi
@@ -489,7 +486,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
             --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
-            --wait --timeout 300s
+            --wait --timeout "$INGRESS_HELM_TIMEOUT"
     fi
 
     if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
@@ -518,44 +515,43 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --namespace infra \
             --version "$EXTERNAL_SECRETS_CHART_VERSION" \
             --set installCRDs=true \
-            --wait --timeout 300s
+            --wait --timeout "$EXTERNAL_SECRETS_HELM_TIMEOUT"
 
         step "Applying unified Vault manifests (ingress, RBAC, and secret sync)..."
         kubectl apply -f "$DEPLOY_DIR/vault.yaml"
 
-        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout=300s
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout=180s
+        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout="$VAULT_WAIT_TIMEOUT"
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout="$VAULT_WAIT_TIMEOUT"
 
         [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || chmod +x "$VAULT_BOOTSTRAP_SCRIPT"
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
 
-        for es in postgres-secret mongodb-secret odoo-secret sonarqube-db-credentials grafana-admin-secret keycloak-admin-secret keycloak-realm-config jenkins-maven-settings jenkins-npm-config dbgate-auth-secret kafka-ui-auth-secret portainer-auth-secret; do
-            kubectl wait --for=condition=Ready externalsecret/"$es" -n infra --timeout=180s 2>/dev/null || warn "ExternalSecret '$es' is still reconciling."
+        for es in "${EXTERNAL_SECRET_NAME_ARRAY[@]}"; do
+            kubectl wait --for=condition=Ready externalsecret/"$es" -n infra \
+                --timeout="$EXTERNAL_SECRET_WAIT_TIMEOUT"
         done
     fi
 
     if [[ "$DEPLOY_DATA_STORES" == "true" ]]; then
         step "Deploying core data stores..."
-        kubectl apply -f "$DEPLOY_DIR/postgres.yaml"
-        kubectl apply -f "$DEPLOY_DIR/kafka.yaml"
-        kubectl apply -f "$DEPLOY_DIR/redis.yaml"
-        kubectl apply -f "$DEPLOY_DIR/mongodb.yaml"
+        for manifest in "${DATASTORE_MANIFEST_ARRAY[@]}"; do
+            kubectl apply -f "$DEPLOY_DIR/$manifest"
+        done
 
-        kubectl wait --for=condition=ready pod -l app=postgres  -n infra --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=redis     -n infra --timeout=120s
-        kubectl wait --for=condition=ready pod -l app=mongodb   -n infra --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=kafka-controller -n infra --timeout=180s
-        kubectl wait --for=condition=ready pod -l app=kafka     -n infra --timeout=180s
+        for app in "${DATASTORE_WAIT_APP_ARRAY[@]}"; do
+            kubectl wait --for=condition=ready pod -l "app=$app" -n infra \
+                --timeout="$DATASTORE_WAIT_TIMEOUT"
+        done
     fi
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Deploying platform services..."
-        for f in keycloak.yaml monitoring.yaml elk.yaml logging-agent.yaml jenkins.yaml sonarqube.yaml nexus.yaml gitlab.yaml dbgate.yaml kafka-ui.yaml portainer.yaml homepage.yaml ingress.yaml; do
-            kubectl apply -f "$DEPLOY_DIR/$f"
+        for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
+            kubectl apply -f "$DEPLOY_DIR/$manifest"
         done
 
-        kubectl rollout status deployment/nexus -n infra --timeout=600s
+        kubectl rollout status deployment/nexus -n infra --timeout="$NEXUS_WAIT_TIMEOUT"
         [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || chmod +x "$NEXUS_REGISTRY_SCRIPT"
         step "Configuring the private Nexus image registry and service accounts..."
         "$NEXUS_REGISTRY_SCRIPT"
@@ -563,29 +559,30 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             registry_namespace="${registry_secret%%/*}"
             registry_name="${registry_secret##*/}"
             kubectl wait --for=condition=Ready externalsecret/"$registry_name" \
-                -n "$registry_namespace" --timeout=180s 2>/dev/null || warn "ExternalSecret '$registry_secret' is still reconciling."
+                -n "$registry_namespace" --timeout="$EXTERNAL_SECRET_WAIT_TIMEOUT"
         done
 
-        kubectl wait --for=condition=ready pod -l app=keycloak      -n infra --timeout=180s 2>/dev/null || warn "Keycloak still starting..."
-        kubectl wait --for=condition=ready pod -l app=jenkins        -n infra --timeout=180s 2>/dev/null || warn "Jenkins still starting..."
-        kubectl wait --for=condition=ready pod -l app=elasticsearch  -n infra --timeout=180s 2>/dev/null || warn "Elasticsearch still starting..."
-        kubectl wait --for=condition=ready pod -l app=kibana         -n infra --timeout=180s 2>/dev/null || warn "Kibana still starting..."
-        kubectl wait --for=condition=ready pod -l app=logstash       -n infra --timeout=180s 2>/dev/null || warn "Logstash still starting..."
-        kubectl rollout status daemonset/node-exporter -n infra --timeout=180s 2>/dev/null || warn "Node Exporter still starting..."
-        kubectl rollout status daemonset/fluent-bit   -n infra --timeout=180s 2>/dev/null || warn "Fluent Bit still starting..."
-        kubectl wait --for=condition=ready pod -l app=kube-state-metrics -n infra --timeout=180s 2>/dev/null || warn "kube-state-metrics still starting..."
-        kubectl wait --for=condition=ready pod -l app=gitlab         -n infra --timeout=900s 2>/dev/null || warn "GitLab still starting..."
-        kubectl wait --for=condition=ready pod -l app=dbgate         -n infra --timeout=180s 2>/dev/null || warn "DBGate still starting..."
-        kubectl wait --for=condition=ready pod -l app=kafka-ui       -n infra --timeout=300s 2>/dev/null || warn "Kafka UI still starting..."
-        kubectl wait --for=condition=ready pod -l app=portainer      -n infra --timeout=300s 2>/dev/null || warn "Portainer still starting..."
-        kubectl wait --for=condition=ready pod -l app=homepage       -n infra --timeout=300s 2>/dev/null || warn "Homepage still starting..."
+        for app in "${PLATFORM_WAIT_APP_ARRAY[@]}"; do
+            kubectl wait --for=condition=ready pod -l "app=$app" -n infra \
+                --timeout="$PLATFORM_WAIT_TIMEOUT"
+        done
+        for daemonset in "${PLATFORM_WAIT_DAEMONSET_ARRAY[@]}"; do
+            kubectl rollout status "daemonset/$daemonset" -n infra \
+                --timeout="$PLATFORM_WAIT_TIMEOUT"
+        done
+        for manifest in "${POST_DEPLOY_CREATE_MANIFEST_ARRAY[@]}"; do
+            created_resource="$(kubectl create -f "$DEPLOY_DIR/$manifest" -o name)"
+            kubectl wait --for=condition=complete "$created_resource" -n infra \
+                --timeout="$POST_DEPLOY_JOB_WAIT_TIMEOUT"
+        done
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
         step "Deploying Odoo..."
         kubectl apply -f "$DEPLOY_DIR/odoo.yaml"
         kubectl apply -f "$DEPLOY_DIR/ingress.yaml"
-        kubectl wait --for=condition=ready pod -l app=odoo -n infra --timeout=900s 2>/dev/null || warn "Odoo is still starting..."
+        kubectl wait --for=condition=ready pod -l app=odoo -n infra \
+            --timeout="$PLATFORM_WAIT_TIMEOUT"
     fi
 
     if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
@@ -604,7 +601,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set server.service.type=ClusterIP \
             --set configs.params."server\\.insecure"=true \
             --set redis.enabled=true \
-            --wait --timeout 600s
+            --wait --timeout "$ARGOCD_HELM_TIMEOUT"
     fi
 else
     warn "All Kubernetes feature groups were skipped."

@@ -48,13 +48,16 @@ Homepage is the single entry point for every installed application, platform
 tool, internal data service, observability component, security tool, and
 Kubernetes system service. Public entries are clickable; internal-only entries
 show their purpose and live Kubernetes status without exposing them publicly.
+The `devapp` hostname and catalog entry are published here, but its Deployment,
+Ingress, Jenkins pipeline, and Argo CD application remain owned by the separate
+`devapp` repository.
 
 ## Service dashboard
 
 Open `https://dashboard.swirlit.dev` for the complete categorized service
 catalog; the zone apex redirects there. Cloudflare Access protects the
-dashboard, Argo CD, DBGate, Grafana, Jenkins, Kafka UI, Kibana, Longhorn, Nexus,
-Portainer, SonarQube, and Vault with an email one-time PIN and a 24-hour session.
+administrative host inventory in `config/platform.env` with an email one-time
+PIN and a 24-hour session.
 Cluster automation uses internal Kubernetes service names, so these public
 administration hostnames can remain protected without blocking builds,
 deployments, package downloads, or scans.
@@ -334,17 +337,46 @@ Ansible remains available for repeatable local deployments:
 ansible-playbook ansible/deploy.yml
 ansible-playbook ansible/deploy.yml -e server_exposure=local
 ansible-playbook ansible/deploy.yml -e install_odoo=false
+ansible-playbook ansible/deploy.yml -e deploy_platform_services=false
 ansible-playbook ansible/deploy.yml -e k3s_node_network_cidr=10.0.0.0/24
 ```
 
-The Ansible playbook deploys platform resources to the cluster in the active
-kubeconfig; worker operating-system provisioning is handled by the scripts
-above, not by the Ansible inventory.
+Ansible uses the same release versions, ordered manifest inventories,
+dependencies, and readiness checks as the interactive installer. It reconciles
+all feature groups by default except Cloudflare. Feature switches are
+`install_longhorn`, `install_ingress`, `install_vault_stack`,
+`deploy_data_stores`, `deploy_platform_services`, `install_odoo`,
+`install_descheduler`, and `install_argocd`. Dependencies are enabled
+automatically: platform services and Odoo require data stores; data stores
+require Vault and External Secrets; Cloudflare requires ingress.
+
+To run the same non-interactive Cloudflare reconciliation from Ansible, export
+the secret inputs and opt in explicitly:
+
+```bash
+export CLOUDFLARE_API_TOKEN='your Cloudflare User API Token (cfut_... type)'
+export CLOUDFLARE_ACCESS_ALLOWED_EMAILS='admin@example.com'
+ansible-playbook ansible/deploy.yml -e configure_cloudflare=true
+```
+
+The playbook deploys platform resources through the active kubeconfig; K3s
+control-plane installation and worker operating-system provisioning remain the
+responsibility of the installers above.
+
+Release defaults and ordered service inventories live only in
+`config/platform.env`. Before committing or deploying, validate shell syntax,
+Ansible, YAML, immutable image references, and hostname inventories:
+
+```bash
+./scripts/validate-repository.sh
+./scripts/validate-repository.sh --live # server-side dry-run; no mutation
+```
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
+| `config/platform.env` | Shared release, manifest, readiness, and public-host contract |
 | `install-control-plane.sh` | Install or reconcile the K3s control plane and platform services |
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
@@ -357,6 +389,8 @@ above, not by the Ansible inventory.
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
 | `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
+| `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
+| `scripts/validate-repository.sh` | Consistency checks and optional live server dry-run |
 | `deployments/` | Kubernetes resources |
 | `ansible/` | Ansible deployment entry point |
 

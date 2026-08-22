@@ -4,6 +4,14 @@ set -euo pipefail
 set +x
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/network.sh
+source "$NETWORK_LIBRARY"
+
 WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
@@ -99,6 +107,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -f "$WORKER_INSTALLER" ]] || error "Worker installer not found: $WORKER_INSTALLER"
+[[ -f "$NETWORK_LIBRARY" ]] || error "Network library not found: $NETWORK_LIBRARY"
 [[ -f "$K3S_APPARMOR_INSTALLER" ]] || error "AppArmor installer not found: $K3S_APPARMOR_INSTALLER"
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
 command -v ssh >/dev/null 2>&1 || error "ssh is required."
@@ -137,83 +146,6 @@ detect_private_ip() {
         fi
     fi
     return 1
-}
-
-valid_ipv4() {
-    local ip="$1" octet
-    local -a octets
-    [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-        (( 10#$octet <= 255 )) || return 1
-    done
-}
-
-trusted_private_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 10 )) ||
-        (( a == 172 && b >= 16 && b <= 31 )) ||
-        (( a == 192 && b == 168 )) ||
-        (( a == 100 && b >= 64 && b <= 127 ))
-}
-
-tailscale_ipv4() {
-    local ip="$1" a b _
-    valid_ipv4 "$ip" || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    (( a == 100 && b >= 64 && b <= 127 ))
-}
-
-trusted_private_cidr() {
-    local cidr="$1" ip prefix a b _
-    [[ "$cidr" == */* ]] || return 1
-    ip="${cidr%/*}"; prefix="${cidr#*/}"
-    trusted_private_ipv4 "$ip" || return 1
-    [[ "$prefix" =~ ^[0-9]{1,2}$ ]] || return 1
-    prefix=$((10#$prefix))
-    (( prefix >= 1 && prefix <= 32 )) || return 1
-    IFS='.' read -r a b _ <<< "$ip"
-    a=$((10#$a)); b=$((10#$b))
-    if (( a == 10 )); then (( prefix >= 8 ))
-    elif (( a == 172 && b >= 16 && b <= 31 )); then (( prefix >= 12 ))
-    elif (( a == 192 && b == 168 )); then (( prefix >= 16 ))
-    else (( a == 100 && b >= 64 && b <= 127 && prefix >= 10 ))
-    fi
-}
-
-ipv4_to_int() {
-    local a b c d
-    IFS='.' read -r a b c d <<< "$1"
-    printf '%u' "$(( (10#$a << 24) | (10#$b << 16) | (10#$c << 8) | 10#$d ))"
-}
-
-cidr_contains_ip() {
-    local cidr="$1" ip="$2" network prefix mask ip_value network_value
-    trusted_private_cidr "$cidr" && trusted_private_ipv4 "$ip" || return 1
-    network="${cidr%/*}"; prefix=$((10#${cidr#*/}))
-    ip_value="$(ipv4_to_int "$ip")"; network_value="$(ipv4_to_int "$network")"
-    mask=$(( (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF ))
-    (( (ip_value & mask) == (network_value & mask) ))
-}
-
-server_url_ipv4() {
-    local value="${1%/}" authority host
-    value="${value#https://}"
-    authority="${value%%/*}"
-    [[ -n "$authority" && "$authority" == "$value" ]] || return 1
-    host="${authority%%:*}"
-    trusted_private_ipv4 "$host" || return 1
-    printf '%s' "$host"
-}
-
-interface_owning_ip() {
-    local address="$1"
-    ip -4 -o address show scope global | awk -v ip="$address" \
-        '{split($4, parts, "/")} parts[1] == ip {print $2; exit}'
 }
 
 default_ip="$(detect_private_ip || true)"
@@ -376,9 +308,10 @@ install_worker() {
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
     printf -v quoted_dir '%q' "$remote_dir"
-    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/apparmor"
+    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/apparmor"
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
     info "Copying the worker host-security policy to $target..."
     scp "${scp_options[@]}" "$SECURITY_HARDENER" "$target:$remote_dir/scripts/"

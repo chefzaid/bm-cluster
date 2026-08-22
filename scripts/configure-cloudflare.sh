@@ -3,8 +3,24 @@ set -Eeuo pipefail
 
 umask 077
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
+if [[ ! -r "$PLATFORM_CONFIG" ]]; then
+    echo "[ERROR] Shared platform contract not found: $PLATFORM_CONFIG" >&2
+    exit 1
+fi
+# shellcheck source=../config/platform.env
+source "$PLATFORM_CONFIG"
+NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/network.sh
+source "$NETWORK_LIBRARY"
+
 API_BASE="${CLOUDFLARE_API_BASE:-https://api.cloudflare.com/client/v4}"
-ZONE_NAME="${CLOUDFLARE_ZONE:-swirlit.dev}"
+ZONE_NAME="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 ORIGIN_IP="${CLOUDFLARE_ORIGIN_IP:-}"
 API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
@@ -29,42 +45,12 @@ ORIGIN_LOCK_STATUS="not requested"
 WORK_DIR=""
 CURL_CONFIG=""
 
-DEFAULT_HOST_LABELS=(
-    argocd
-    dashboard
-    dbgate
-    devapp
-    gitlab
-    grafana
-    jenkins
-    kafka
-    keycloak
-    kibana
-    longhorn
-    nexus
-    odoo
-    portainer
-    sonarqube
-    vault
-)
+IFS=',' read -r -a DEFAULT_HOST_LABELS <<< "$DEFAULT_CLOUDFLARE_HOST_LABELS"
 
 # Browser-facing administration interfaces belong here. Cluster automation uses
 # Kubernetes service DNS and therefore does not need to bypass Access on these
 # public hostnames.
-DEFAULT_ACCESS_HOST_LABELS=(
-    argocd
-    dashboard
-    dbgate
-    grafana
-    jenkins
-    kafka
-    kibana
-    longhorn
-    nexus
-    portainer
-    sonarqube
-    vault
-)
+IFS=',' read -r -a DEFAULT_ACCESS_HOST_LABELS <<< "$DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -87,7 +73,7 @@ Cloudflare Origin CA certificate in Kubernetes, and applies a secure/performance
 baseline, scoped WAF/cache rules, and email-OTP Access for administrative UIs.
 
 Options:
-  --zone DOMAIN       Cloudflare zone (default: swirlit.dev)
+  --zone DOMAIN       Cloudflare zone (default: config/platform.env)
   --account-id ID     Cloudflare account ID; discovered when omitted
   --origin-ip IP      NGINX public IPv4; discovered from Kubernetes when omitted
   -h, --help          Show this help
@@ -556,19 +542,6 @@ configure_access() {
                 info "Reconciled Access protection for $fqdn."
             fi
         fi
-    done
-}
-
-valid_ipv4() {
-    local candidate="$1"
-    local octets=()
-    local octet
-
-    IFS='.' read -r -a octets <<< "$candidate"
-    [[ ${#octets[@]} -eq 4 ]] || return 1
-    for octet in "${octets[@]}"; do
-        [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
-        ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
     done
 }
 
