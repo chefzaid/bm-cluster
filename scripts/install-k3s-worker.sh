@@ -30,10 +30,10 @@ usage() {
 Install this machine as a K3s worker (agent).
 
 Interactive usage:
-  ./scripts/install-k3s-worker.sh
+  ./install-worker.sh
 
 Automation usage (the token is deliberately accepted only through stdin):
-  printf '%s\n' "$K3S_JOIN_TOKEN" | ./scripts/install-k3s-worker.sh \
+  printf '%s\n' "$K3S_JOIN_TOKEN" | ./install-worker.sh \
     --non-interactive \
     --server-url https://10.0.0.10:6443 \
     --token-stdin \
@@ -48,7 +48,7 @@ Options:
   --labels CSV              Initial Kubernetes node labels (key=value,key=value)
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  Trusted private network shared by cluster nodes
-  --k3s-version VERSION     Install the exact server version, for example v1.34.4+k3s1
+  --k3s-version VERSION     Install the exact server version, for example v1.36.3+k3s1
   --harden-security         Apply worker-specific UFW, SSH, Fail2ban, CrowdSec, and Lynis hardening
   --skip-security-hardening Do not apply the host hardening suite
   --ssh-port PORT           SSH server port retained by host hardening (default: current session or 22)

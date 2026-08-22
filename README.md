@@ -128,7 +128,7 @@ run the interactive worker installer. The token prompt is hidden, and this path
 asks whether the local worker should be hardened:
 
 ```bash
-./scripts/install-k3s-worker.sh
+./install-worker.sh
 ```
 
 For repeatable enrollment through the main installer:
@@ -223,8 +223,9 @@ above, not by the Ansible inventory.
 | Path | Purpose |
 |---|---|
 | `install-infrastructure.sh` | Interactive bare-metal installer |
+| `install-worker.sh` | Join the current machine to an existing control plane as a worker |
 | `scripts/add-k3s-workers.sh` | Multi-worker enrollment over SSH from the control plane |
-| `scripts/install-k3s-worker.sh` | Interactive or automated installer run on a worker |
+| `scripts/install-k3s-worker.sh` | Worker installation implementation reused by both enrollment entry points |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
