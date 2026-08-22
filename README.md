@@ -93,108 +93,61 @@ provided.
 
 ## Adding worker nodes
 
-Worker enrollment is built into `install-control-plane.sh`; no separate setup
-step is required during the initial installation. Answer **yes** to “Add or
-reconcile K3s worker nodes over SSH.” It accepts any number of workers and asks
-for the SSH settings and each worker's explicit private IPv4 address, unique
-node name, labels, and taints. The control plane remains the only server, so
-adding workers increases workload capacity but does not make the Kubernetes
-control plane highly available.
+Worker enrollment is built into `install-control-plane.sh`. Answer **yes** to
+adding workers, choose **OVH vRack/private LAN** or **Tailscale**, then enter any
+number of workers. Use one transport consistently for the control plane and all
+workers in an enrollment run. Adding workers increases workload capacity; it
+does not make the single K3s control plane highly available.
 
 Worker requirements:
 
-- Debian or Ubuntu, a unique hostname, and an explicitly entered RFC1918 IPv4
-  address (`10.0.0.0/8`, `172.16.0.0/12`, or `192.168.0.0/16`) or Tailscale
-  IPv4 address (`100.64.0.0/10`)
-- No public IPv4 or public IPv6 interface; IPv6 ULA is permitted, and enrollment
-  aborts before making changes when a public address is detected
-- No router port-forward, public DNS record, public load balancer, or direct
-  internet ingress to a worker
+- Debian or Ubuntu, a unique hostname, and sufficient CPU, memory, and disk
 - SSH key authentication from the control plane as root or a user with
-  passwordless `sudo`; after enrollment, UFW accepts the worker SSH port only
-  from the exact private control-plane source address
-- A trusted private node CIDR containing the control-plane K3s address, the
-  control-plane SSH source, and every worker address
-- TCP 6443 from workers to the server, UDP 8472 between nodes, and TCP 10250
-  from the server to workers, restricted to the private node network
-- Longhorn's TCP peer ports (2049, 3260, 8000, 8002, 8500-8504, 9500-9503,
-  and 10000-31000), restricted to the same private network and interface
-- Enough CPU, memory, and disk for the workloads assigned to the node
+  passwordless `sudo`
+- No public DNS, port-forward, load balancer, or application ingress targeting a
+  worker
+- vRack workers must have only RFC1918/ULA addressing and controlled outbound
+  egress; Tailscale workers may retain a provider interface for outbound traffic
+  and initial SSH bootstrap, but receive no inbound UFW rule on that interface
 
 ### Private node network
 
-Set up the private node transport before running either installer. The control
-plane and every worker must use the same transport; do not mix vRack/LAN and
-Tailscale node addresses in one enrollment run.
-
 #### OVH vRack — recommended for the current cluster
 
-Use vRack for OVH-hosted nodes because it keeps cluster and storage traffic on
-OVH's private network without an overlay dependency. OVH's
+Use vRack when all nodes are on OVH because it keeps cluster and Longhorn
+traffic on the provider network. Before running the installer, use OVH's
 [dedicated-server vRack guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server)
-is the authority for the current Control Panel and operating-system steps.
-
-1. Confirm that every chosen OVH server supports vRack. In the OVHcloud Control
-   Panel, order/activate vRack under **Network → vRack private network**.
-2. Open that vRack, add the control plane and every worker, and wait until all
-   services show as attached.
-3. On each server, identify the secondary/private NIC with `ip -br link` and
-   `ip -br address`. Never replace the public NIC configuration on the control
-   plane.
-4. Assign a unique RFC1918 address to the vRack NIC. For Ubuntu/netplan, create
-   or merge the following structure, substituting the actual interface and a
-   unique address on every host:
-
-   ```yaml
-   network:
-     version: 2
-     ethernets:
-       eno2:
-         dhcp4: false
-         addresses:
-           - 10.50.0.10/24 # control plane; use .11, .12, ... on workers
-   ```
-
-   Validate safely with `sudo netplan try`, then apply with
-   `sudo netplan apply`. OVH dedicated servers use untagged VLAN 0 by default;
-   configure an 802.1Q VLAN only when you deliberately created one. The
-   [OVH mixed Public Cloud/dedicated guide](https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/configuring-the-vrack-between-the-public-cloud-and-a-dedicated-server)
-   covers that tagged case.
-5. Verify private routing in both directions with `ping` and SSH using only the
-   chosen vRack IPs. Use `10.50.0.0/24` as `K3S_NODE_NETWORK_CIDR` in this
-   example.
-6. Workers must not retain public addressing. Before removing their public
-   network configuration, verify vRack access through the control plane and
-   arrange controlled outbound egress/NAT for updates and image pulls. Keep an
-   OVH IPMI/KVM recovery path available while changing network configuration.
+to create the vRack, attach every server, assign unique RFC1918 addresses to the
+private NICs, and verify bidirectional SSH/ping. Keep the control plane's public
+NIC intact. Verify access and an IPMI/KVM recovery path before removing worker
+public addressing, and provide workers controlled NAT/egress for updates and
+image pulls. The installer asks for the control-plane IP, node CIDR, and each
+worker vRack IP and validates them before changing K3s or UFW.
 
 #### Tailscale — cross-provider alternative
 
-Use Tailscale when nodes span providers or no common private network is
-available. Install and authenticate it on the control plane and every worker
-before enrollment, following the official
-[Linux installation guide](https://tailscale.com/docs/install/linux):
+Use Tailscale when nodes span providers. The only account preparation is:
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up --ssh=false
-tailscale ip -4
-tailscale status
-```
+1. Create or sign in to a tailnet.
+2. Open [Tailscale Admin Console → Settings → Keys](https://login.tailscale.com/admin/settings/keys)
+   and choose **Generate access token**. This must be a personal API access token beginning with
+   `tskey-api-`, not a node auth key beginning with `tskey-auth-`. Use an
+   Owner/Admin/Network-admin account, choose a short expiry, and revoke
+   the access token after provisioning if it is no longer needed.
+3. Run `./install-control-plane.sh` or `./install-worker.sh`, select Tailscale,
+   and paste the access token into the hidden prompt.
 
-For repeatable server provisioning, Tailscale recommends tagged nodes and auth
-keys; create a restricted `tag:k3s-node` in the tailnet policy, generate an auth
-key for that tag, and follow the
-[server provisioning guide](https://tailscale.com/kb/1245/set-up-servers).
-Do not enable Tailscale SSH: the host's regular sshd and UFW enforce the exact
-control-plane source rule. When Tailscale addresses are selected, the security
-script automatically selects `nodivert` netfilter mode so UFW remains
-authoritative; see the official
-[netfilter-mode reference](https://tailscale.com/docs/reference/netfilter-modes).
-
-Use the control plane's `tailscale ip -4` result as `K3S_PRIVATE_ADDRESS`, each
-worker's result as its worker IP, and `100.64.0.0/10` as
-`K3S_NODE_NETWORK_CIDR`. No address is hard-coded in this repository.
+No manual Tailscale node, tag, policy, auth-key, address, or firewall setup is
+required. The automation installs Tailscale, validates and ETag-merges the
+current account policy, creates separate control-plane/worker tags and
+least-privilege grants, replaces only an untouched default allow-all policy,
+and preserves unrelated existing policy. It creates a one-use, pre-approved,
+one-hour tagged key per node, disables node-key expiry for the resulting tagged
+servers, removes its temporary secret material, disables Tailscale SSH, selects
+`nodivert` so UFW remains authoritative, and configures `100.64.0.0/10` as the
+node network. In control-plane mode, enter each worker's
+temporary SSH hostname/IP; enrollment switches to its Tailscale IP as soon as
+the overlay is ready.
 
 To add workers later, run the unified worker assistant from either the control
 plane or the new worker:
@@ -203,30 +156,26 @@ plane or the new worker:
 ./install-worker.sh
 ```
 
-It first asks where it is running. **Control-plane mode** asks how many workers
-to add and for their SSH addresses, reads the local token without printing it,
-copies the installer to every worker, and waits for each node to become Ready.
-**Worker mode** joins the current machine and asks for the control-plane address
-and token. It displays these commands to run on the control plane; the second
-creates an optional short-lived token:
+It asks where it is running and which transport to use. Control-plane mode can
+enroll any number of remote workers and waits for each to become Ready. Worker
+mode joins the current machine and shows the commands used to obtain its K3s
+join token:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
 sudo k3s token create --ttl 1h --description worker-join
 ```
 
-Workers are always private-only; there is no internet-facing worker mode. Both
-paths validate the explicitly supplied RFC1918 or Tailscale addresses before
-changing the machine, apply a default-deny inbound UFW policy before K3s
-enrollment, allow SSH only from the control plane, and retain only the selected
-private-interface K3s peer rules. Fail2ban and CrowdSec are removed from workers
-because public SSH is impossible; Lynis is never installed persistently there.
-Outbound traffic remains allowed for updates, image pulls, and workloads. Token
-input is hidden and is never placed in command-line arguments or copied to disk.
+Workers have no internet-facing mode. UFW is default-deny inbound and permits
+SSH only from the exact control-plane address plus required K3s/Longhorn peer
+ports on the chosen private interface. Fail2ban, CrowdSec, and persistent Lynis
+are absent from workers. Secret input is hidden and is never stored in the
+repository or placed in command-line arguments.
 
-For repeatable enrollment through the control-plane installer:
+For non-interactive vRack enrollment:
 
 ```bash
+K3S_NODE_TRANSPORT=vrack \
 K3S_WORKER_IPS=10.0.0.12,10.0.0.13 \
 K3S_WORKER_IDENTITY_FILE="$HOME/.ssh/id_ed25519" \
 K3S_PRIVATE_ADDRESS=10.0.0.10 \
@@ -234,18 +183,13 @@ K3S_NODE_NETWORK_CIDR=10.0.0.0/24 \
 ./install-control-plane.sh --yes
 ```
 
-Optional common settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
-`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`. The K3s
-server URL and every worker address must be RFC1918 or Tailscale IPv4 literals.
-`K3S_PRIVATE_ADDRESS`, `K3S_PRIVATE_INTERFACE`, and `K3S_PUBLIC_ADDRESS` can
-override control-plane network detection. The installer persists the private
-node IP, public ExternalIP, API certificate SAN, and Flannel interface in a K3s
-configuration drop-in before enrolling workers. New DaemonSet
-workloads, including node metrics and log collection, automatically run on
-eligible workers. The control plane alone receives K3s' LoadBalancer allowlist
-label, and ingress is pinned there. The installer sets Longhorn's default
-replica count for new volumes to the number of Ready nodes, capped at three; it
-does not relocate or change existing volumes.
+Optional settings are `K3S_SERVER_URL`, `K3S_WORKER_SSH_USER`,
+`K3S_WORKER_SSH_PORT`, `K3S_WORKER_LABELS`, and `K3S_WORKER_TAINTS`.
+Non-interactive Tailscale enrollment uses `K3S_NODE_TRANSPORT=tailscale`,
+`K3S_WORKER_HOSTS`, and a transient `TAILSCALE_API_TOKEN`; interactive hidden
+input is preferred. New metrics/logging DaemonSets automatically run on eligible
+workers. Ingress remains pinned to the control plane, and Longhorn's default for
+new volumes follows the Ready-node count, capped at three.
 
 ## Host security policy
 
@@ -376,13 +320,14 @@ Ansible, YAML, immutable image references, and hostname inventories:
 
 | Path | Purpose |
 |---|---|
-| `config/platform.env` | Shared release, manifest, readiness, and public-host contract |
+| `config/platform.env` | Shared release, manifest, readiness, public-host, and private-transport contract |
 | `install-control-plane.sh` | Install or reconcile the K3s control plane and platform services |
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
+| `scripts/configure-tailscale.sh` | Tailnet policy, role tags, one-use keys, and node reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
@@ -400,7 +345,7 @@ Ansible, YAML, immutable image references, and hostname inventories:
 - Keep administrative UI hostnames behind Cloudflare Access.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.
-- Workers are permanently local-only: never assign or forward public traffic to them.
+- Workers accept no public traffic: never publish, forward, or load-balance traffic to them.
 - Worker UFW permits SSH only from the control plane and private K3s peer traffic; outbound access remains available.
 - Local-only nodes omit Fail2ban and CrowdSec; local control planes retain Lynis.
 

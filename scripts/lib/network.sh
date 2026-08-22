@@ -9,6 +9,14 @@ normalize_server_exposure() {
     esac
 }
 
+normalize_node_transport() {
+    case "${1,,}" in
+        vrack|v-rack|ovh|lan|private-network) printf 'vrack\n' ;;
+        tailscale|tailnet|ts) printf 'tailscale\n' ;;
+        *) return 1 ;;
+    esac
+}
+
 valid_ipv4() {
     local ip="$1" octet
     local -a octets

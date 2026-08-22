@@ -78,7 +78,9 @@ if valid_ipv4 10.20.30.40 &&
    cidr_contains_ip 10.50.0.0/24 10.50.0.254 &&
    ! cidr_contains_ip 10.50.0.0/24 10.50.1.1 &&
    [[ "$(server_url_ipv4 https://100.100.10.5:6443)" == 100.100.10.5 ]] &&
-   [[ "$(normalize_server_exposure private)" == local ]]; then
+   [[ "$(normalize_server_exposure private)" == local ]] &&
+   [[ "$(normalize_node_transport v-rack)" == vrack ]] &&
+   [[ "$(normalize_node_transport ts)" == tailscale ]]; then
     pass "shared network validation behavior"
 else
     fail "shared network validation behavior"
@@ -215,7 +217,7 @@ else
     fail "Git patch whitespace"
 fi
 
-if grep -RIE '((cfat|cfut)_[[:alnum:]]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)' \
+if grep -RIE '((cfat|cfut)_[[:alnum:]]{20,}|tskey-(api|auth)-[[:alnum:]_-]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----)' \
     --exclude-dir=.git "$REPOSITORY_ROOT" >/dev/null; then
     fail "repository contains no recognizable tokens or private keys"
 else

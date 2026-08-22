@@ -14,6 +14,9 @@ NODE_NETWORK_CIDR=""
 CONTROL_PLANE_IP=""
 K3S_VERSION=""
 HARDENING_SSH_PORT=""
+NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
+TAILSCALE_READY=false
+TAILSCALE_API_TOKEN_STDIN=false
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
@@ -28,6 +31,7 @@ source "$NETWORK_LIBRARY"
 
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
+TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 
 info()  { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*" >&2; }
@@ -43,6 +47,7 @@ Interactive usage:
 Automation usage (the token is deliberately accepted only through stdin):
   printf '%s\n' "$K3S_JOIN_TOKEN" | ./install-worker.sh --worker \
     --non-interactive \
+    --transport vrack \
     --server-url https://10.0.0.10:6443 \
     --token-stdin \
     --node-name worker-01 \
@@ -59,6 +64,10 @@ Options:
   --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
   --control-plane-ip IP     Exact private control-plane source allowed to SSH here
   --k3s-version VERSION     Install the control plane's exact K3s version
+  --transport MODE          Private transport: vrack or tailscale
+  --tailscale-api-token-stdin
+                            Read a tskey-api access token from stdin and automate Tailscale
+  --tailscale-ready         Tailscale was already provisioned by the control plane
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-security-hardening Deprecated no-op; the local-worker firewall is always enforced
   --ssh-port PORT           SSH port allowed only from the control plane (default: current session or 22)
@@ -69,10 +78,10 @@ Run one of these commands on the control-plane node to obtain a join token:
   sudo cat /var/lib/rancher/k3s/server/node-token
   sudo k3s token create --ttl 1h --description worker-join
 
-Workers are private-only. The installer asks for and validates the worker's
-RFC1918 provider/LAN IP or existing Tailscale IP, rejects public interfaces and
-a public K3s URL, and configures UFW so SSH is accepted only from the exact
-control-plane address. Outbound traffic remains enabled for updates and images.
+Workers never accept public ingress. vRack workers reject public interfaces;
+Tailscale workers may retain a provider interface for outbound/bootstrap use,
+but UFW exposes SSH and cluster ports only on tailscale0 to the control plane
+and tagged cluster peers. Outbound traffic remains enabled for updates/images.
 EOF
 }
 
@@ -95,6 +104,10 @@ while [[ $# -gt 0 ]]; do
         --control-plane-ip=*) CONTROL_PLANE_IP="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
+        --transport)        shift; [[ $# -gt 0 ]] || error "Missing value for --transport"; NODE_TRANSPORT="$1" ;;
+        --transport=*)      NODE_TRANSPORT="${1#*=}" ;;
+        --tailscale-api-token-stdin) TAILSCALE_API_TOKEN_STDIN=true ;;
+        --tailscale-ready)  TAILSCALE_READY=true ;;
         --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --harden-security)  error "Internet-facing workers are forbidden; local-worker security is mandatory" ;;
@@ -160,6 +173,46 @@ trim() {
     printf '%s' "$value"
 }
 
+select_transport() {
+    local answer=""
+    if [[ -n "$NODE_TRANSPORT" ]]; then
+        NODE_TRANSPORT="$(normalize_node_transport "$NODE_TRANSPORT")" || error "Transport must be vrack or tailscale."
+        return
+    fi
+    [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
+    printf '%s\n' \
+        "Select the private node transport:" \
+        "  1) OVH vRack / private LAN" \
+        "  2) Tailscale (automated cross-provider overlay)"
+    while true; do
+        read -rp "Select 1 or 2: " answer
+        case "$answer" in
+            1|vrack|vRack|lan) NODE_TRANSPORT=vrack; return ;;
+            2|tailscale|ts) NODE_TRANSPORT=tailscale; return ;;
+            *) warn "Enter 1 for vRack or 2 for Tailscale." ;;
+        esac
+    done
+}
+
+select_transport
+if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
+    if [[ "$TAILSCALE_READY" != "true" ]]; then
+        [[ "$TOKEN_STDIN" != "true" || "$TAILSCALE_API_TOKEN_STDIN" != "true" ]] || \
+            error "K3s and Tailscale tokens cannot both use stdin; provision Tailscale first or use TAILSCALE_API_TOKEN."
+        tailscale_args=(--role worker)
+        if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
+            tailscale_args+=(--api-token-stdin)
+        fi
+        info "Automating the Tailscale account, role policy, and this worker node."
+        "$TAILSCALE_CONFIGURATOR" "${tailscale_args[@]}" >/dev/null
+    fi
+    command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed."
+    tailscale status >/dev/null 2>&1 || error "Tailscale is not connected."
+    NODE_IP="${NODE_IP:-$(tailscale ip -4 | head -n 1)}"
+    NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
+fi
+
 info "K3s worker enrollment"
 printf '%s\n' \
     "On the control-plane node, obtain a token with one of:" \
@@ -224,7 +277,9 @@ ROUTE_NODE_IP="$(detect_node_ip "$SERVER_PRIVATE_IP")"
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || error "K3s server address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$CONTROL_PLANE_IP" || error "Control-plane SSH source $CONTROL_PLANE_IP is outside $NODE_NETWORK_CIDR"
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$NODE_IP" || error "Worker node IP $NODE_IP is outside $NODE_NETWORK_CIDR"
-reject_public_ip_interfaces
+if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
+    reject_public_ip_interfaces
+fi
 [[ -z "$K3S_VERSION" || "$K3S_VERSION" != *[[:space:]]* ]] || error "The K3s version cannot contain whitespace."
 [[ "$HARDENING_SSH_PORT" =~ ^[0-9]+$ && "$HARDENING_SSH_PORT" -ge 1 && "$HARDENING_SSH_PORT" -le 65535 ]] || \
     error "SSH port must be an integer from 1 to 65535."

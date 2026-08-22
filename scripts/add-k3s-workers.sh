@@ -12,12 +12,21 @@ fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
 
+PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
+if [[ -r "$PLATFORM_CONFIG" ]]; then
+    # shellcheck source=../config/platform.env
+    source "$PLATFORM_CONFIG"
+fi
+
 WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
+TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
+WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
+NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 SERVER_URL=""
 SSH_USER="${USER:-}"
 SSH_PORT="22"
@@ -27,6 +36,8 @@ COMMON_LABELS=""
 COMMON_TAINTS=""
 K3S_VERSION=""
 NON_INTERACTIVE=false
+TAILSCALE_API_TOKEN_STDIN=false
+TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
 JOIN_TOKEN=""
 LOCAL_SUDO=()
 
@@ -43,12 +54,15 @@ Interactive usage (run on the K3s control-plane node):
 
 Non-interactive worker selection:
   ./install-worker.sh --control-plane \
+    --transport vrack \
     --worker-ips 10.0.0.12,10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
     --identity-file ~/.ssh/id_ed25519
 
 Options:
-  --worker-ips CSV          Explicit RFC1918 or Tailscale IPv4 addresses of workers
+  --transport MODE          Private transport: vrack or tailscale
+  --worker-ips CSV          vRack/private RFC1918 addresses of workers
+  --worker-hosts CSV        Tailscale bootstrap SSH hosts/IPs (one or more)
   --server-url URL          K3s URL using this control plane's private IPv4
   --ssh-user USER           Common SSH user (default: current user)
   --ssh-port PORT           Common SSH port (default: 22)
@@ -57,16 +71,19 @@ Options:
   --labels CSV              Labels applied to every newly registered worker
   --taints CSV              Taints applied to every newly registered worker
   --k3s-version VERSION     Worker K3s version (default: exact server version)
+  --tailscale-api-token-stdin
+                            Read a personal tskey-api access token from stdin
   --worker-exposure local   Deprecated compatibility option; any other value is rejected
   --skip-worker-hardening   Deprecated no-op; the local-worker firewall is always enforced
-  --non-interactive         Fail instead of prompting; implied by --worker-ips
+  --non-interactive         Fail instead of prompting; implied by either worker list
   -h, --help                Show this help
 
 SSH key authentication and either root access or passwordless sudo are required.
-The assistant explicitly asks for each worker's private IP. RFC1918 provider/LAN
-networking is preferred; an existing Tailscale address is also supported.
-Workers cannot have public/global interfaces. UFW allows worker SSH only from
-the exact control-plane source while retaining required private K3s traffic.
+vRack mode asks for final RFC1918 worker IPs. Tailscale mode asks for temporary
+SSH bootstrap hosts, installs and tags Tailscale automatically, then switches
+all enrollment traffic to tailscale0. Public bootstrap interfaces receive no
+inbound UFW allowance after enrollment. SSH is allowed only from the exact
+Tailscale control-plane address.
 The join token is never placed in command-line arguments or copied to disk.
 
 Token commands, if this script is not run on the control plane:
@@ -77,8 +94,12 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --transport)        shift; [[ $# -gt 0 ]] || error "Missing value for --transport"; NODE_TRANSPORT="$1" ;;
+        --transport=*)      NODE_TRANSPORT="${1#*=}" ;;
         --worker-ips)       shift; [[ $# -gt 0 ]] || error "Missing worker IP list"; WORKER_IPS="$1"; NON_INTERACTIVE=true ;;
         --worker-ips=*)     WORKER_IPS="${1#*=}"; NON_INTERACTIVE=true ;;
+        --worker-hosts)     shift; [[ $# -gt 0 ]] || error "Missing worker host list"; WORKER_HOSTS="$1"; NON_INTERACTIVE=true ;;
+        --worker-hosts=*)   WORKER_HOSTS="${1#*=}"; NON_INTERACTIVE=true ;;
         --server-url)       shift; [[ $# -gt 0 ]] || error "Missing value for --server-url"; SERVER_URL="$1" ;;
         --server-url=*)     SERVER_URL="${1#*=}" ;;
         --ssh-user)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-user"; SSH_USER="$1" ;;
@@ -95,6 +116,7 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         COMMON_TAINTS="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
         --k3s-version=*)    K3S_VERSION="${1#*=}" ;;
+        --tailscale-api-token-stdin) TAILSCALE_API_TOKEN_STDIN=true ;;
         --worker-exposure)  shift; [[ $# -gt 0 ]] || error "Missing value for --worker-exposure"; [[ "${1,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --worker-exposure=*) exposure_value="${1#*=}"; [[ "${exposure_value,,}" =~ ^(local|local-only|private|internal|lan)$ ]] || error "Internet-facing workers are forbidden" ;;
         --harden-workers)   error "Internet-facing workers are forbidden; worker hardening is always local-only" ;;
@@ -110,6 +132,7 @@ done
 [[ -f "$NETWORK_LIBRARY" ]] || error "Network library not found: $NETWORK_LIBRARY"
 [[ -f "$K3S_APPARMOR_INSTALLER" ]] || error "AppArmor installer not found: $K3S_APPARMOR_INSTALLER"
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
+[[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
 command -v ssh >/dev/null 2>&1 || error "ssh is required."
 command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
@@ -127,6 +150,27 @@ prompt() {
     printf -v "$variable_name" '%s' "${answer:-$default_value}"
 }
 
+select_transport() {
+    local answer=""
+    if [[ -n "$NODE_TRANSPORT" ]]; then
+        NODE_TRANSPORT="$(normalize_node_transport "$NODE_TRANSPORT")" || error "Transport must be vrack or tailscale."
+        return
+    fi
+    [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
+    printf '%s\n' \
+        "Select the private node transport:" \
+        "  1) OVH vRack / private LAN" \
+        "  2) Tailscale (automated cross-provider overlay)"
+    while true; do
+        read -rp "Select 1 or 2 [1]: " answer
+        case "${answer:-1}" in
+            1|vrack|vRack|lan) NODE_TRANSPORT=vrack; return ;;
+            2|tailscale|ts) NODE_TRANSPORT=tailscale; return ;;
+            *) warn "Enter 1 for vRack or 2 for Tailscale." ;;
+        esac
+    done
+}
+
 detect_private_ip() {
     local interface candidate
     while read -r interface candidate; do
@@ -138,17 +182,27 @@ detect_private_ip() {
         fi
     done < <(ip -4 -o address show scope global | awk '{print $2, $4}')
 
-    if ip -4 address show dev tailscale0 >/dev/null 2>&1; then
-        candidate="$(ip -4 -o address show dev tailscale0 scope global | awk 'NR == 1 {sub(/\/.*/, "", $4); print $4}')"
-        if tailscale_ipv4 "$candidate"; then
-            printf '%s' "$candidate"
-            return 0
-        fi
-    fi
     return 1
 }
 
-default_ip="$(detect_private_ip || true)"
+select_transport
+if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
+        IFS= read -r TAILSCALE_API_TOKEN || error "Could not read the Tailscale API access token from stdin."
+    elif [[ -z "$TAILSCALE_API_TOKEN" ]]; then
+        [[ "$NON_INTERACTIVE" != "true" ]] || error "Set TAILSCALE_API_TOKEN or use --tailscale-api-token-stdin."
+        read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " TAILSCALE_API_TOKEN
+        printf '\n'
+    fi
+    [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || \
+        error "Expected a Tailscale API access token beginning with tskey-api-."
+    info "Reconciling the tailnet policy and control-plane role."
+    default_ip="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
+        "$TAILSCALE_CONFIGURATOR" --role control-plane --api-token-stdin)"
+    NODE_NETWORK_CIDR="${NODE_NETWORK_CIDR:-100.64.0.0/10}"
+else
+    default_ip="$(detect_private_ip || true)"
+fi
 if [[ -z "$SERVER_URL" && -n "$default_ip" ]]; then
     SERVER_URL="https://${default_ip}:6443"
 fi
@@ -174,7 +228,12 @@ else
     printf '\n'
 fi
 [[ -n "$JOIN_TOKEN" ]] || error "The K3s join token is empty."
-trap 'JOIN_TOKEN=""; unset JOIN_TOKEN K3S_JOIN_TOKEN 2>/dev/null || true' EXIT
+cleanup_credentials() {
+    JOIN_TOKEN=""
+    TAILSCALE_API_TOKEN=""
+    unset JOIN_TOKEN K3S_JOIN_TOKEN TAILSCALE_API_TOKEN 2>/dev/null || true
+}
+trap cleanup_credentials EXIT HUP INT TERM
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
     prompt SERVER_URL "K3s URL using this control plane's private IPv4 address" "$SERVER_URL"
@@ -182,7 +241,9 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     prompt SSH_PORT "Worker SSH port" "$SSH_PORT"
     prompt IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
     [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
-    prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
+    if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
+        prompt NODE_NETWORK_CIDR "Trusted vRack/private node CIDR (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
+    fi
     prompt COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
     prompt COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
     prompt K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
@@ -196,13 +257,23 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
         [[ "$worker_count" =~ ^[1-9][0-9]*$ ]] || warn "Enter a positive whole number."
     done
 else
-    [[ -n "$WORKER_IPS" ]] || error "--worker-ips is required in non-interactive mode."
+    if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+        [[ -n "$WORKER_HOSTS" ]] || error "--worker-hosts is required for non-interactive Tailscale enrollment."
+    else
+        [[ -n "$WORKER_IPS" ]] || error "--worker-ips is required for non-interactive vRack enrollment."
+    fi
 fi
 [[ -n "$SERVER_URL" ]] || error "Could not detect the control-plane address; provide --server-url."
 [[ -n "$NODE_NETWORK_CIDR" ]] || error "--node-network-cidr is required for worker UFW."
 trusted_private_cidr "$NODE_NETWORK_CIDR" || error "Node network must be RFC1918 or Tailscale 100.64.0.0/10: $NODE_NETWORK_CIDR"
 SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
     error "The worker K3s URL must use the control plane's RFC1918 or Tailscale IPv4 address: $SERVER_URL"
+if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+    tailscale_ipv4 "$SERVER_PRIVATE_IP" || error "Tailscale transport requires a control-plane address in 100.64.0.0/10."
+    [[ "$NODE_NETWORK_CIDR" == "100.64.0.0/10" ]] || error "Tailscale transport uses K3S_NODE_NETWORK_CIDR=100.64.0.0/10."
+else
+    ! tailscale_ipv4 "$SERVER_PRIVATE_IP" || error "vRack transport requires an RFC1918 control-plane address, not Tailscale."
+fi
 cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || \
     error "Control-plane URL address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
 [[ -f "$SECURITY_HARDENER" ]] || error "Security policy script not found: $SECURITY_HARDENER"
@@ -259,6 +330,65 @@ build_target() {
     fi
 }
 
+check_bootstrap_target() {
+    local target="$1"
+    [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ || "$target" =~ ^[A-Za-z0-9._:-]+$ ]] || \
+        error "Invalid SSH bootstrap target: $target"
+    ssh "${ssh_options[@]}" "$target" \
+        'test "$(id -u)" -eq 0 || (command -v sudo >/dev/null 2>&1 && sudo -n true)' >/dev/null || \
+        error "Cannot use passwordless sudo on $target. Configure SSH keys and NOPASSWD sudo, or connect as root."
+}
+
+provision_tailscale_target() {
+    local bootstrap_target="$1" remote_dir remote_script quoted_dir quoted_script node_auth_key worker_ip
+    local tagged_target="" reachable=false
+
+    info "Checking bootstrap SSH access to $bootstrap_target..."
+    check_bootstrap_target "$bootstrap_target"
+    TAILSCALE_NODE_NAME="$(remote_hostname "$bootstrap_target")"
+    [[ -n "$TAILSCALE_NODE_NAME" ]] || error "Could not determine the hostname of $bootstrap_target."
+
+    remote_dir="$(ssh "${ssh_options[@]}" "$bootstrap_target" 'mktemp -d /tmp/bm-cluster-tailscale.XXXXXX')"
+    [[ "$remote_dir" == /tmp/bm-cluster-tailscale.* ]] || error "Could not create a safe Tailscale bootstrap directory on $bootstrap_target."
+    printf -v quoted_dir '%q' "$remote_dir"
+    ssh "${ssh_options[@]}" "$bootstrap_target" "chmod 700 $quoted_dir"
+    scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$bootstrap_target:$remote_dir/"
+    remote_script="$remote_dir/configure-tailscale.sh"
+    printf -v quoted_script '%q' "$remote_script"
+
+    info "Creating a one-use, one-hour Tailscale worker key for $TAILSCALE_NODE_NAME."
+    node_auth_key="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
+        "$TAILSCALE_CONFIGURATOR" --role worker --create-auth-key --api-token-stdin)"
+    [[ "$node_auth_key" =~ ^tskey-auth-[A-Za-z0-9_-]+$ ]] || error "Could not create a Tailscale worker auth key."
+    info "Installing and connecting Tailscale on $bootstrap_target."
+    if ! worker_ip="$(printf '%s\n' "$node_auth_key" | ssh "${ssh_options[@]}" "$bootstrap_target" \
+        "chmod 700 $quoted_script && $quoted_script --role worker --hostname $(printf '%q' "$TAILSCALE_NODE_NAME") --auth-key-stdin")"; then
+        node_auth_key=""
+        ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
+        error "Tailscale provisioning failed on $bootstrap_target."
+    fi
+    node_auth_key=""
+    worker_ip="$(awk 'NF {value=$0} END {print value}' <<< "$worker_ip")"
+    tailscale_ipv4 "$worker_ip" || error "The worker did not return a valid Tailscale IPv4 address: ${worker_ip:-none}"
+    printf '%s\n' "$TAILSCALE_API_TOKEN" | \
+        "$TAILSCALE_CONFIGURATOR" --role worker --tag-ip "$worker_ip" --api-token-stdin >/dev/null
+    ssh "${ssh_options[@]}" "$bootstrap_target" "rm -r -- $quoted_dir" >/dev/null 2>&1 || true
+
+    "${LOCAL_SUDO[@]}" tailscale ping --c=3 --timeout=5s "$worker_ip" >/dev/null || \
+        error "The control plane cannot reach new Tailscale peer $worker_ip."
+    tagged_target="$(build_target "$worker_ip")"
+    for _ in {1..15}; do
+        if ssh "${ssh_options[@]}" "$tagged_target" true >/dev/null 2>&1; then
+            reachable=true
+            break
+        fi
+        sleep 2
+    done
+    [[ "$reachable" == "true" ]] || error "SSH did not become reachable over Tailscale at $tagged_target."
+    TAILSCALE_TARGET="$tagged_target"
+    TAILSCALE_WORKER_IP="$worker_ip"
+}
+
 check_target() {
     local target="$1" expected_worker_ip="$2"
     local connection_info client_ip client_port worker_ip worker_port
@@ -293,12 +423,15 @@ install_worker() {
     local remote_command quoted quoted_dir quoted_installer quoted_hardener argument
     local worker_args=(
         --non-interactive
+        --transport "$NODE_TRANSPORT"
         --server-url "$SERVER_URL"
         --token-stdin
         --node-name "$node_name"
         --ssh-port "$SSH_PORT"
         --control-plane-ip "$control_plane_ip"
     )
+
+    [[ "$NODE_TRANSPORT" != "tailscale" ]] || worker_args+=(--tailscale-ready)
 
     [[ -z "$node_ip" ]] || worker_args+=(--node-ip "$node_ip")
     [[ -z "$labels" ]] || worker_args+=(--labels "$labels")
@@ -311,6 +444,7 @@ install_worker() {
     ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/apparmor"
     info "Copying the worker installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
     info "Copying the worker host-security policy to $target..."
@@ -321,7 +455,7 @@ install_worker() {
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
-    remote_command="chmod 700 $quoted_installer $quoted_hardener && $quoted_installer"
+    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") && $quoted_installer"
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"
@@ -353,18 +487,31 @@ install_worker() {
 }
 
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
-    IFS=',' read -r -a hosts <<< "$WORKER_IPS"
+    if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+        IFS=',' read -r -a hosts <<< "$WORKER_HOSTS"
+    else
+        IFS=',' read -r -a hosts <<< "$WORKER_IPS"
+    fi
     [[ ${#hosts[@]} -gt 0 ]] || error "No worker hosts were provided."
     for host in "${hosts[@]}"; do
         host="${host#"${host%%[![:space:]]*}"}"
         host="${host%"${host##*[![:space:]]}"}"
-        [[ -n "$host" ]] || error "--worker-ips contains an empty item."
-        trusted_private_ipv4 "$host" || error "Worker IP must be an RFC1918 or Tailscale IPv4 literal: $host"
-        cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "Worker IP $host is outside $NODE_NETWORK_CIDR"
-        target="$(build_target "$host")"
+        [[ -n "$host" ]] || error "Worker host list contains an empty item."
+        if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+            bootstrap_target="$(build_target "$host")"
+            provision_tailscale_target "$bootstrap_target"
+            target="$TAILSCALE_TARGET"
+            host="$TAILSCALE_WORKER_IP"
+            node_name="$TAILSCALE_NODE_NAME"
+        else
+            trusted_private_ipv4 "$host" && ! tailscale_ipv4 "$host" || error "vRack worker IP must be an RFC1918 IPv4 literal: $host"
+            cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "Worker IP $host is outside $NODE_NETWORK_CIDR"
+            target="$(build_target "$host")"
+            node_name=""
+        fi
         info "Checking SSH access to $target..."
         check_target "$target" "$host"
-        node_name="$(remote_hostname "$target")"
+        node_name="${node_name:-$(remote_hostname "$target")}"
         [[ -n "$node_name" ]] || error "Could not determine the hostname of $target."
         install_worker "$target" "$node_name" "$TARGET_WORKER_IP" "$COMMON_LABELS" "$COMMON_TAINTS" "$TARGET_CONTROL_PLANE_IP"
     done
@@ -372,14 +519,25 @@ else
     for ((index=1; index<=worker_count; index++)); do
         printf '\nWorker %d of %d\n' "$index" "$worker_count"
         worker_host=""
-        prompt worker_host "Worker private IPv4 address (RFC1918 or Tailscale)"
-        trusted_private_ipv4 "$worker_host" || error "Worker IP must be an RFC1918 or Tailscale IPv4 literal: $worker_host"
-        cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
-        target="$(build_target "$worker_host")"
+        if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
+            prompt worker_host "Worker bootstrap SSH host or IP (used only until Tailscale is ready)"
+            [[ -n "$worker_host" ]] || error "A worker bootstrap SSH host is required."
+            bootstrap_target="$(build_target "$worker_host")"
+            provision_tailscale_target "$bootstrap_target"
+            target="$TAILSCALE_TARGET"
+            worker_host="$TAILSCALE_WORKER_IP"
+            detected_name="$TAILSCALE_NODE_NAME"
+        else
+            prompt worker_host "Worker vRack/private RFC1918 IPv4 address"
+            trusted_private_ipv4 "$worker_host" && ! tailscale_ipv4 "$worker_host" || error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
+            cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
+            target="$(build_target "$worker_host")"
+            detected_name=""
+        fi
         info "Checking SSH access to $target..."
         check_target "$target" "$worker_host"
 
-        detected_name="$(remote_hostname "$target")"
+        detected_name="${detected_name:-$(remote_hostname "$target")}"
         worker_name=""
         worker_labels=""
         worker_taints=""

@@ -805,7 +805,14 @@ if [[ "$NODE_ROLE" == "worker" ]]; then
   [[ -n "$CONTROL_PLANE_IP" ]] || err "CONTROL_PLANE_IP is required so worker SSH can be restricted to the control plane"
   trusted_private_ipv4 "$CONTROL_PLANE_IP" || \
     err "CONTROL_PLANE_IP must be an RFC1918 or Tailscale IPv4 address"
-  reject_public_worker_addresses
+  if [[ "$K3S_NODE_NETWORK_CIDR" == "100.64.0.0/10" ]]; then
+    # Cross-provider workers may need a provider address for outbound updates
+    # and initial bootstrap. UFW below exposes nothing on that interface: SSH
+    # and all K3s/Longhorn ports are bound to tailscale0 and its exact sources.
+    info "Tailscale worker transport selected; public interfaces receive no inbound UFW allowances."
+  else
+    reject_public_worker_addresses
+  fi
 fi
 
 configure_tailscale_firewall_integration

@@ -31,8 +31,11 @@ NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
+TAILSCALE_SCRIPT="$SCRIPT_DIR/scripts/configure-tailscale.sh"
 AUTO_APPROVE=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
+K3S_NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
+TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
@@ -133,6 +136,50 @@ ask_server_exposure() {
     done
 }
 
+select_node_transport() {
+    local default_transport raw_answer normalized
+    default_transport="$(normalize_node_transport "${DEFAULT_K3S_NODE_TRANSPORT:-vrack}")" || default_transport=vrack
+
+    if [[ -n "$K3S_NODE_TRANSPORT" ]]; then
+        normalize_node_transport "$K3S_NODE_TRANSPORT" || error "K3S_NODE_TRANSPORT must be vrack or tailscale."
+        return
+    fi
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        if [[ -n "${K3S_WORKER_HOSTS:-}" ]]; then
+            printf 'tailscale\n'
+        elif [[ -n "${K3S_WORKER_IPS:-}" ]]; then
+            printf 'vrack\n'
+        else
+            error "Set K3S_NODE_TRANSPORT=vrack|tailscale when adding workers non-interactively."
+        fi
+        return
+    fi
+
+    printf '%s\n' \
+        "Select the private node transport:" \
+        "  1) OVH vRack / private LAN (recommended when all nodes are on OVH)" \
+        "  2) Tailscale (automated cross-provider overlay)" >&2
+    while true; do
+        read -rp "Select 1 or 2 [$([[ "$default_transport" == "vrack" ]] && printf 1 || printf 2)]: " raw_answer
+        raw_answer="${raw_answer:-$default_transport}"
+        if normalized="$(normalize_node_transport "$raw_answer")"; then
+            printf '%s\n' "$normalized"
+            return
+        fi
+        case "$raw_answer" in
+            1) printf 'vrack\n'; return ;;
+            2) printf 'tailscale\n'; return ;;
+        esac
+        warn "Enter 1 for vRack or 2 for Tailscale."
+    done
+}
+
+cleanup_private_credentials() {
+    TAILSCALE_API_TOKEN=""
+    unset TAILSCALE_API_TOKEN 2>/dev/null || true
+}
+trap cleanup_private_credentials EXIT HUP INT TERM
+
 ensure_tls_secret() {
     local namespace="$1"
     local secret_name="$2"
@@ -217,29 +264,47 @@ fi
 ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
 ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
 if [[ "$AUTO_APPROVE" == "true" ]]; then
-    [[ -n "${K3S_WORKER_IPS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+    [[ -n "${K3S_WORKER_IPS:-}${K3S_WORKER_HOSTS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
 else
     ask_with_default "Add or reconcile K3s worker nodes over SSH?" "N" && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
 fi
-if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-        error "K3S_PRIVATE_ADDRESS is required with workers and must be this control plane's vRack/LAN or Tailscale IPv4 address."
-    fi
-    read -rp "$(echo -e "${YELLOW}Control-plane private IPv4 (vRack/LAN or Tailscale):${NC} ")" K3S_PRIVATE_ADDRESS
-    [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane private IPv4 address is required when adding workers."
-    export K3S_PRIVATE_ADDRESS
-fi
 if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
-    trusted_private_ipv4 "$K3S_PRIVATE_ADDRESS" || \
-        error "K3S_PRIVATE_ADDRESS must be this control plane's RFC1918 or Tailscale IPv4 address."
-fi
-if [[ "$ADD_K3S_WORKERS" == "true" && -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-        error "K3S_NODE_NETWORK_CIDR is required with K3S_WORKER_IPS so worker UFW rules can be configured safely."
+    K3S_NODE_TRANSPORT="$(select_node_transport)"
+    export K3S_NODE_TRANSPORT
+    if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
+        [[ -x "$TAILSCALE_SCRIPT" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_SCRIPT"
+        if [[ -z "$TAILSCALE_API_TOKEN" ]]; then
+            [[ "$AUTO_APPROVE" != "true" ]] || error "Set TAILSCALE_API_TOKEN to a personal tskey-api access token for non-interactive Tailscale setup."
+            read -rsp "Tailscale personal API access token (tskey-api-..., Admin Console -> Settings -> Keys): " TAILSCALE_API_TOKEN
+            printf '\n'
+        fi
+        [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || error "Expected a Tailscale API access token beginning with tskey-api-."
+        step "Reconciling the tailnet policy and control-plane role..."
+        K3S_PRIVATE_ADDRESS="$(printf '%s\n' "$TAILSCALE_API_TOKEN" | \
+            "$TAILSCALE_SCRIPT" --role control-plane --api-token-stdin)"
+        K3S_PRIVATE_INTERFACE=tailscale0
+        K3S_NODE_NETWORK_CIDR=100.64.0.0/10
+        export K3S_PRIVATE_ADDRESS K3S_PRIVATE_INTERFACE K3S_NODE_NETWORK_CIDR
+    else
+        if [[ -z "${K3S_PRIVATE_ADDRESS:-}" ]]; then
+            if [[ "$AUTO_APPROVE" == "true" ]]; then
+                error "K3S_PRIVATE_ADDRESS is required with vRack workers."
+            fi
+            read -rp "$(echo -e "${YELLOW}Control-plane vRack/private RFC1918 IPv4:${NC} ")" K3S_PRIVATE_ADDRESS
+            [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane vRack/private IPv4 address is required."
+            export K3S_PRIVATE_ADDRESS
+        fi
+        trusted_private_ipv4 "$K3S_PRIVATE_ADDRESS" && ! tailscale_ipv4 "$K3S_PRIVATE_ADDRESS" || \
+            error "vRack transport requires this control plane's RFC1918 IPv4 address."
+        if [[ -z "${K3S_NODE_NETWORK_CIDR:-}" ]]; then
+            if [[ "$AUTO_APPROVE" == "true" ]]; then
+                error "K3S_NODE_NETWORK_CIDR is required with vRack workers."
+            fi
+            read -rp "$(echo -e "${YELLOW}Trusted vRack/private node CIDR (for example 10.50.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
+            [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted vRack/private node CIDR is required."
+            export K3S_NODE_NETWORK_CIDR
+        fi
     fi
-    read -rp "$(echo -e "${YELLOW}Trusted private node CIDR (for example 10.0.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
-    [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted node CIDR is required when adding workers."
-    export K3S_NODE_NETWORK_CIDR
 fi
 ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
 ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
@@ -418,6 +483,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         worker_manager_args=()
         worker_ip_list="${K3S_WORKER_IPS:-}"
         [[ -z "$worker_ip_list" ]] || worker_manager_args+=(--worker-ips "$worker_ip_list")
+        worker_host_list="${K3S_WORKER_HOSTS:-}"
+        [[ -z "$worker_host_list" ]] || worker_manager_args+=(--worker-hosts "$worker_host_list")
+        worker_manager_args+=(--transport "$K3S_NODE_TRANSPORT")
         worker_server_url="${K3S_SERVER_URL:-https://${K3S_PRIVATE_ADDRESS}:6443}"
         worker_manager_args+=(--server-url "$worker_server_url")
         [[ -z "${K3S_WORKER_SSH_USER:-}" ]] || worker_manager_args+=(--ssh-user "$K3S_WORKER_SSH_USER")
@@ -427,7 +495,12 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "${K3S_WORKER_LABELS:-}" ]] || worker_manager_args+=(--labels "$K3S_WORKER_LABELS")
         [[ -z "${K3S_WORKER_TAINTS:-}" ]] || worker_manager_args+=(--taints "$K3S_WORKER_TAINTS")
         step "Adding K3s worker nodes..."
-        "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
+        if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
+            printf '%s\n' "$TAILSCALE_API_TOKEN" | \
+                "$WORKER_INSTALLER_SCRIPT" --control-plane --tailscale-api-token-stdin "${worker_manager_args[@]}"
+        else
+            "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
+        fi
     fi
 
     step "Creating infra namespace..."
