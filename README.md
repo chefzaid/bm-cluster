@@ -69,12 +69,12 @@ Cluster workloads use the private `swirlit.internal` DNS zone. CoreDNS maps ever
 preserving additional labels for headless services such as
 `kafka-controller-0.kafka-controller.swirlit.internal`. Curated aliases map
 `user-app.swirlit.internal`, `order-app.swirlit.internal`, and
-`devapp-web.swirlit.internal` into the `devapp` namespace, and
-`longhorn-frontend.swirlit.internal` into `longhorn-system`.
+`devapp.swirlit.internal` into the `devapp` namespace, and
+`longhorn.swirlit.internal` into `longhorn-system`.
 
 The zone is cluster-only: it is not published by Cloudflare and is not expected
 to resolve on the public Internet or from ordinary host tools. K3s/containerd
-uses `nexus-registry.swirlit.internal:5000` through its node-local registry mirror,
+uses `nexus.swirlit.internal:5000` through its node-local registry mirror,
 whose endpoint is the Nexus ClusterIP. Kubernetes API endpoints retain their
 canonical `kubernetes.default.svc` identity because that name is covered by the
 API server certificate.
@@ -389,7 +389,7 @@ to the workflow's immutable action pins.
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
-| `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for `nexus-registry.swirlit.internal` |
+| `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for `nexus.swirlit.internal` |
 | `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |

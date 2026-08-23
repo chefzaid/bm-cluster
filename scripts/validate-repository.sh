@@ -156,7 +156,7 @@ else
 fi
 
 if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
-   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus-registry.swirlit.internal:5000" ]] &&
+   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus.swirlit.internal:5000" ]] &&
    grep -Fq 'name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto' \
        "$REPOSITORY_ROOT/deployments/coredns-custom.yaml" &&
    [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
@@ -179,18 +179,19 @@ else
     fail "runtime and documentation references use the swirlit.internal alias zone"
 fi
 
-local_zone_references="$({
-    grep -RIl --exclude='configure-k3s-registry-mirror.sh' \
-        --exclude='validate-repository.sh' --exclude-dir=.git \
+legacy_private_dns_label=local
+legacy_private_zone="swirlit.${legacy_private_dns_label}"
+legacy_private_zone_references="$({
+    grep -RIl -F --exclude='validate-repository.sh' --exclude-dir=.git \
         --exclude-dir=node_modules --exclude-dir=target \
-        'swirlit\.local' "$REPOSITORY_ROOT" || true
+        "$legacy_private_zone" "$REPOSITORY_ROOT" || true
 } | LC_ALL=C sort -u)"
-if [[ -z "$local_zone_references" ]]; then
-    pass "legacy swirlit.local references are absent"
+if [[ -z "$legacy_private_zone_references" ]]; then
+    pass "legacy private DNS zone references are absent"
 else
-    printf 'Legacy swirlit.local references remain:\n%s\n' \
-        "$local_zone_references" >&2
-    fail "legacy swirlit.local references are absent"
+    printf 'Legacy private DNS zone references remain:\n%s\n' \
+        "$legacy_private_zone_references" >&2
+    fail "legacy private DNS zone references are absent"
 fi
 
 manifest_inventory_failed=false

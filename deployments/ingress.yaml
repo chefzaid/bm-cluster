@@ -200,6 +200,6 @@ metadata:
   namespace: infra
 spec:
   type: ExternalName
-  externalName: longhorn-frontend.swirlit.internal
+  externalName: longhorn.swirlit.internal
   ports:
   - port: 80

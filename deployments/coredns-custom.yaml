@@ -8,6 +8,6 @@ data:
     # Curated non-Infra aliases must precede the general Infra suffix rule.
     rewrite stop name exact user-app.swirlit.internal. user-app.devapp.svc.cluster.local. answer auto
     rewrite stop name exact order-app.swirlit.internal. order-app.devapp.svc.cluster.local. answer auto
-    rewrite stop name exact devapp-web.swirlit.internal. devapp-web.devapp.svc.cluster.local. answer auto
-    rewrite stop name exact longhorn-frontend.swirlit.internal. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
+    rewrite stop name exact devapp.swirlit.internal. devapp-web.devapp.svc.cluster.local. answer auto
+    rewrite stop name exact longhorn.swirlit.internal. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
     rewrite stop name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto
