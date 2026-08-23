@@ -60,7 +60,7 @@ spec:
               import urllib.request
               import uuid
 
-              base_url = "http://portainer.infra.svc.cluster.local:9000/api"
+              base_url = "http://portainer.swirlit.local:9000/api"
               username = os.environ["PORTAINER_USERNAME"]
               password = os.environ["PORTAINER_PASSWORD"]
 

@@ -155,8 +155,31 @@ else
     pass "platform contract uses source-safe properties"
 fi
 
+if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.local" ]] &&
+   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus-registry.swirlit.local:5000" ]] &&
+   grep -Fq 'name suffix .swirlit.local. .infra.svc.cluster.local. answer auto' \
+       "$REPOSITORY_ROOT/deployments/coredns-custom.yaml" &&
+   [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
+    pass "cluster-only internal DNS and node registry alias contracts are complete"
+else
+    fail "cluster-only internal DNS and node registry alias contracts are complete"
+fi
+
+legacy_internal_references="$({
+    grep -RIl --exclude='coredns-custom.yaml' --exclude='validate-repository.sh' --exclude-dir=.git \
+        --exclude-dir=node_modules --exclude-dir=target \
+        'infra\.svc\.cluster\.local' "$REPOSITORY_ROOT" || true
+} | LC_ALL=C sort -u)"
+if [[ -z "$legacy_internal_references" ]]; then
+    pass "runtime and documentation references use the swirlit.local alias zone"
+else
+    printf 'Canonical Infra service references remain outside CoreDNS:\n%s\n' \
+        "$legacy_internal_references" >&2
+    fail "runtime and documentation references use the swirlit.local alias zone"
+fi
+
 manifest_inventory_failed=false
-for manifest_csv in "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS"; do
+for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS"; do
     IFS=',' read -r -a manifests <<< "$manifest_csv"
     for manifest in "${manifests[@]}"; do
         if [[ ! -f "$REPOSITORY_ROOT/deployments/$manifest" ]]; then
@@ -165,7 +188,7 @@ for manifest_csv in "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_C
         fi
     done
 done
-for inventory in DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS; do
+for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS; do
     value="${!inventory}"
     if [[ "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | wc -l)" -ne "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | sort -u | wc -l)" ]]; then
         printf 'Contract list contains duplicates: %s\n' "$inventory" >&2

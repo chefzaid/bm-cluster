@@ -124,7 +124,7 @@ spec:
         - -ec
         - |
           until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
-            --host=postgres.infra.svc.cluster.local \
+            --host=postgres.swirlit.local \
             --username="$POSTGRES_ADMIN_USER" \
             --dbname=postgres \
             --command='SELECT 1' >/dev/null 2>&1; do
@@ -132,7 +132,7 @@ spec:
             sleep 2
           done
           PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
-            --host=postgres.infra.svc.cluster.local \
+            --host=postgres.swirlit.local \
             --username="$POSTGRES_ADMIN_USER" \
             --dbname=postgres \
             --set=ON_ERROR_STOP=1 \
@@ -158,7 +158,7 @@ spec:
         - containerPort: 9000
         env:
         - name: SONAR_JDBC_URL
-          value: "jdbc:postgresql://postgres.infra.svc.cluster.local:5432/sonarqube"
+          value: "jdbc:postgresql://postgres.swirlit.local:5432/sonarqube"
         - name: SONAR_JDBC_USERNAME
           value: "sonar"
         - name: SONAR_JDBC_PASSWORD

@@ -19,8 +19,6 @@ NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_READY=false
 TAILSCALE_API_TOKEN_STDIN=false
 TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
-REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
-REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
 NON_INTERACTIVE=false
 INSTALLER_TEMP_DIR=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,6 +27,8 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
     # shellcheck source=../config/platform.env
     source "$PLATFORM_CONFIG"
 fi
+REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-nexus-registry.swirlit.local:5000}}"
+REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}}"
 TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-${DEFAULT_TAILSCALE_TAILNET:--}}"
 TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cluster}}"
 TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
@@ -49,6 +49,7 @@ fi
 source "$TRANSPORT_GUIDE_LIBRARY"
 
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
+K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/configure-k3s-registry-mirror.sh"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
@@ -453,12 +454,10 @@ install_environment=(env "K3S_URL=$SERVER_URL" "K3S_TOKEN=$JOIN_TOKEN" "K3S_NODE
 [[ -z "$K3S_VERSION" ]] || install_environment+=("INSTALL_K3S_VERSION=$K3S_VERSION")
 
 info "Installing K3s agent '$NODE_NAME'..."
-if ! "${SUDO[@]}" test -f /etc/rancher/k3s/registries.yaml; then
-    printf 'mirrors:\n  "%s":\n    endpoint:\n      - "%s"\n' "$REGISTRY_HOST" "$REGISTRY_ENDPOINT" | \
-        "${SUDO[@]}" install -D -o root -g root -m 0600 /dev/stdin /etc/rancher/k3s/registries.yaml
-elif ! "${SUDO[@]}" grep -Fq "$REGISTRY_HOST" /etc/rancher/k3s/registries.yaml; then
-    error "/etc/rancher/k3s/registries.yaml exists without the internal Nexus mirror; merge $REGISTRY_HOST before enrolling this worker."
-fi
+[[ -x "$K3S_REGISTRY_MIRROR_SCRIPT" ]] || \
+    error "K3s registry mirror configurator is not executable: $K3S_REGISTRY_MIRROR_SCRIPT"
+K3S_REGISTRY_HOST="$REGISTRY_HOST" K3S_REGISTRY_ENDPOINT="$REGISTRY_ENDPOINT" \
+    "$K3S_REGISTRY_MIRROR_SCRIPT"
 INSTALLER_TEMP_DIR="$(mktemp -d /tmp/bm-cluster-worker-installers.XXXXXX)"
 chmod 700 "$INSTALLER_TEMP_DIR"
 k3s_installer="$INSTALLER_TEMP_DIR/k3s-install.sh"

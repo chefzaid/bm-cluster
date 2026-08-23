@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  swirlit.override: |
+    # Curated non-Infra aliases must precede the general Infra suffix rule.
+    rewrite stop name exact user-app.swirlit.local. user-app.devapp.svc.cluster.local. answer auto
+    rewrite stop name exact order-app.swirlit.local. order-app.devapp.svc.cluster.local. answer auto
+    rewrite stop name exact devapp-web.swirlit.local. devapp-web.devapp.svc.cluster.local. answer auto
+    rewrite stop name exact longhorn-frontend.swirlit.local. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
+    rewrite stop name suffix .swirlit.local. .infra.svc.cluster.local. answer auto

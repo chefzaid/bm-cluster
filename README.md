@@ -36,7 +36,7 @@ Odoo, and SonarQube. GitLab keeps its bundled PostgreSQL 17 because GitLab 19
 does not support PostgreSQL 18.
 
 Databases, caches, queues, and search backends remain internal Kubernetes
-services and are not published through DNS.
+services and are not published through public DNS.
 
 DBGate is preconfigured from Kubernetes Secrets with access to every logical
 database in the PostgreSQL cluster, plus MongoDB and Redis. Kafka administration
@@ -61,6 +61,23 @@ PIN and a 24-hour session.
 Cluster automation uses internal Kubernetes service names, so these public
 administration hostnames can remain protected without blocking builds,
 deployments, package downloads, or scans.
+
+### Internal service DNS
+
+Cluster workloads use the private `swirlit.local` DNS zone. CoreDNS maps every
+`<name>.swirlit.local` query to the same Service name in the `infra` namespace,
+preserving additional labels for headless services such as
+`kafka-controller-0.kafka-controller.swirlit.local`. Curated aliases map
+`user-app.swirlit.local`, `order-app.swirlit.local`, and
+`devapp-web.swirlit.local` into the `devapp` namespace, and
+`longhorn-frontend.swirlit.local` into `longhorn-system`.
+
+The zone is cluster-only: it is not published by Cloudflare and is not expected
+to resolve on the public Internet or from ordinary host tools. K3s/containerd
+uses `nexus-registry.swirlit.local:5000` through its node-local registry mirror,
+whose endpoint is the Nexus ClusterIP. Kubernetes API endpoints retain their
+canonical `kubernetes.default.svc` identity because that name is covered by the
+API server certificate.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `deployments/homepage.yaml`. Both
@@ -359,7 +376,7 @@ to the workflow's immutable action pins.
 
 | Path | Purpose |
 |---|---|
-| `config/platform.env` | Shared release, manifest, readiness, public-host, and private-transport contract |
+| `config/platform.env` | Shared release, internal-DNS, manifest, readiness, public-host, and private-transport contract |
 | `install-control-plane.sh` | Install or reconcile the K3s control plane and platform services |
 | `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
@@ -372,17 +389,20 @@ to the workflow's immutable action pins.
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
+| `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for `nexus-registry.swirlit.local` |
 | `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
 | `scripts/lib/transport-guide.sh` | Shared guided vRack/Tailscale account prerequisites and verification |
 | `scripts/validate-repository.sh` | Consistency checks and optional live server dry-run |
-| `deployments/` | Kubernetes resources |
+| `deployments/coredns-custom.yaml` | Cluster-only `swirlit.local` service aliases imported by K3s CoreDNS |
+| `deployments/` | Remaining Kubernetes resources |
 | `ansible/` | Ansible deployment entry point |
 
 ## Security notes
 
 - Keep PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and Prometheus internal.
+- Keep `swirlit.local` in CoreDNS only; never publish it through Cloudflare or public DNS.
 - Keep administrative UI hostnames behind Cloudflare Access.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.

@@ -297,7 +297,7 @@ data:
 
       - job_name: kube-state-metrics
         static_configs:
-          - targets: ["kube-state-metrics.infra.svc.cluster.local:8080"]
+          - targets: ["kube-state-metrics.swirlit.local:8080"]
 
       - job_name: node-exporter
         kubernetes_sd_configs:
@@ -536,7 +536,7 @@ data:
         uid: prometheus
         type: prometheus
         access: proxy
-        url: http://prometheus.infra.svc.cluster.local:9090
+        url: http://prometheus.swirlit.local:9090
         isDefault: true
         editable: false
         jsonData:
@@ -547,7 +547,7 @@ data:
         uid: elasticsearch
         type: elasticsearch
         access: proxy
-        url: http://elasticsearch.infra.svc.cluster.local:9200
+        url: http://elasticsearch.swirlit.local:9200
         database: kubernetes-logs-*
         editable: false
         jsonData:

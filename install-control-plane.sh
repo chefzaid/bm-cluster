@@ -37,6 +37,7 @@ CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
 WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
+K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
@@ -62,8 +63,8 @@ nodesource_installer=""
 k3s_installer=""
 helm_installer=""
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
-K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
-K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}"
+K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-$DEFAULT_K3S_REGISTRY_HOST}"
+K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-$DEFAULT_K3S_REGISTRY_ENDPOINT}"
 INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-$DEFAULT_INGRESS_NGINX_CHART_VERSION}"
 LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-$DEFAULT_LONGHORN_CHART_VERSION}"
 VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-$DEFAULT_VAULT_CHART_VERSION}"
@@ -83,6 +84,7 @@ NEXUS_WAIT_TIMEOUT="${NEXUS_WAIT_TIMEOUT:-$DEFAULT_NEXUS_WAIT_TIMEOUT}"
 POST_DEPLOY_JOB_WAIT_TIMEOUT="${POST_DEPLOY_JOB_WAIT_TIMEOUT:-$DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT}"
 CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
 
+IFS=',' read -r -a FOUNDATION_MANIFEST_ARRAY <<< "$FOUNDATION_MANIFESTS"
 IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
 IFS=',' read -r -a PLATFORM_MANIFEST_ARRAY <<< "$PLATFORM_MANIFESTS"
 IFS=',' read -r -a POST_DEPLOY_CREATE_MANIFEST_ARRAY <<< "$POST_DEPLOY_CREATE_MANIFESTS"
@@ -513,14 +515,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         sudo chown "$USER":"$USER" ~/.kube/config
         chmod 600 ~/.kube/config
 
-        if [[ ! -f /etc/rancher/k3s/registries.yaml ]]; then
-            printf 'mirrors:\n  "%s":\n    endpoint:\n      - "%s"\n' \
-                "$K3S_REGISTRY_HOST" "$K3S_REGISTRY_ENDPOINT" | \
-                sudo install -o root -g root -m 0600 /dev/stdin /etc/rancher/k3s/registries.yaml
-            sudo systemctl restart k3s
-        elif ! sudo grep -Fq "$K3S_REGISTRY_HOST" /etc/rancher/k3s/registries.yaml; then
-            error "/etc/rancher/k3s/registries.yaml exists without the internal Nexus mirror; merge $K3S_REGISTRY_HOST manually."
-        fi
+        [[ -x "$K3S_REGISTRY_MIRROR_SCRIPT" ]] || \
+            error "K3s registry mirror configurator is not executable: $K3S_REGISTRY_MIRROR_SCRIPT"
+        K3S_REGISTRY_HOST="$K3S_REGISTRY_HOST" K3S_REGISTRY_ENDPOINT="$K3S_REGISTRY_ENDPOINT" \
+            "$K3S_REGISTRY_MIRROR_SCRIPT"
     fi
     export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
     grep -q "KUBECONFIG" ~/.bashrc 2>/dev/null || \
@@ -603,6 +601,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     step "Creating infra namespace..."
     kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    step "Configuring the cluster-only $DEFAULT_INTERNAL_DNS_ZONE service aliases..."
+    for manifest in "${FOUNDATION_MANIFEST_ARRAY[@]}"; do
+        kubectl apply -f "$DEPLOY_DIR/$manifest"
+    done
     kubectl apply -f "$DEPLOY_DIR/security-baseline.yaml"
 
     step "Publishing host security policy record..."

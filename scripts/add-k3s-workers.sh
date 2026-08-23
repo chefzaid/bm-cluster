@@ -28,6 +28,7 @@ fi
 
 WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
+K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
@@ -167,6 +168,7 @@ done
 [[ -f "$WORKER_INSTALLER" ]] || error "Worker installer not found: $WORKER_INSTALLER"
 [[ -f "$NETWORK_LIBRARY" ]] || error "Network library not found: $NETWORK_LIBRARY"
 [[ -f "$K3S_APPARMOR_INSTALLER" ]] || error "AppArmor installer not found: $K3S_APPARMOR_INSTALLER"
+[[ -x "$K3S_REGISTRY_MIRROR_SCRIPT" ]] || error "K3s registry mirror configurator not found or not executable: $K3S_REGISTRY_MIRROR_SCRIPT"
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
 [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
 [[ -x "$OVH_VRACK_CONFIGURATOR" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_CONFIGURATOR"
@@ -584,7 +586,7 @@ install_worker() {
     printf -v quoted_dir '%q' "$remote_dir"
     ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/apparmor"
     info "Copying the worker installer and enforced AppArmor profile to $target..."
-    scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$target:$remote_dir/scripts/"
+    scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$K3S_REGISTRY_MIRROR_SCRIPT" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$OVH_VRACK_CONFIGURATOR" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/apparmor/"
@@ -596,7 +598,7 @@ install_worker() {
     remote_command="chmod 700 $quoted_installer && $quoted_installer"
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
-    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") && $quoted_installer"
+    remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-k3s-registry-mirror.sh") $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") && $quoted_installer"
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"

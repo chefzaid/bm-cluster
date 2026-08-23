@@ -46,7 +46,7 @@ metadata:
 spec:
   provider:
     vault:
-      server: http://vault.infra.svc.cluster.local:8200
+      server: http://vault.swirlit.local:8200
       path: secret
       version: v2
       auth:

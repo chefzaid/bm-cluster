@@ -8,7 +8,7 @@ data:
   logstash.conf: |
     input {
       kafka {
-        bootstrap_servers => "kafka.infra.svc.cluster.local:9092"
+        bootstrap_servers => "kafka.swirlit.local:9092"
         topics => ["order_topic", "order_result_topic"]
         group_id => "logstash"
         codec => "json"
@@ -37,7 +37,7 @@ data:
     }
     output {
       elasticsearch {
-        hosts => ["http://elasticsearch.infra.svc.cluster.local:9200"]
+        hosts => ["http://elasticsearch.swirlit.local:9200"]
         index => "app-logs-%{+yyyy.MM.dd}"
         template => "/usr/share/logstash/config/app-logs-template.json"
         template_name => "app-logs-single-node"
@@ -319,7 +319,7 @@ spec:
         - containerPort: 5601
         env:
         - name: ELASTICSEARCH_HOSTS
-          value: '["http://elasticsearch.infra.svc.cluster.local:9200"]'
+          value: '["http://elasticsearch.swirlit.local:9200"]'
         - name: SERVER_BASEPATH
           value: ""
         - name: NODE_OPTIONS

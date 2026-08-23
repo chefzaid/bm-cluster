@@ -48,6 +48,8 @@
     post_deploy_job_wait_timeout: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
 
+    foundation_manifests: >-
+      {{ lookup('ansible.builtin.ini', 'FOUNDATION_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
     datastore_manifests: >-
       {{ lookup('ansible.builtin.ini', 'DATASTORE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
     platform_manifests: >-
@@ -248,6 +250,15 @@
         kubectl apply -f -
       register: namespace_apply
       changed_when: "'created' in namespace_apply.stdout or 'configured' in namespace_apply.stdout"
+
+    - name: Configure K3s containerd for the internal registry alias
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-registry-mirror.sh"
+
+    - name: Configure cluster-only internal service aliases
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
+      loop: "{{ foundation_manifests }}"
+      register: foundation_apply
+      changed_when: "'created' in foundation_apply.stdout or 'configured' in foundation_apply.stdout"
 
     - name: Keep public load balancers and ingress on control-plane nodes
       ansible.builtin.command: >-

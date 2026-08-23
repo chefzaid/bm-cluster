@@ -81,7 +81,7 @@ data:
     [OUTPUT]
         Name                      es
         Match                     kube.*
-        Host                      elasticsearch.infra.svc.cluster.local
+        Host                      elasticsearch.swirlit.local
         Port                      9200
         Logstash_Format           On
         Logstash_Prefix           kubernetes-logs
@@ -183,19 +183,19 @@ spec:
             - sh
             - -c
             - |
-              until curl -fsS http://elasticsearch.infra.svc.cluster.local:9200 >/dev/null; do sleep 5; done
+              until curl -fsS http://elasticsearch.swirlit.local:9200 >/dev/null; do sleep 5; done
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/ilm-policy.json \
-                http://elasticsearch.infra.svc.cluster.local:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
+                http://elasticsearch.swirlit.local:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/index-template.json \
-                http://elasticsearch.infra.svc.cluster.local:9200/_template/kubernetes-logs >/dev/null
+                http://elasticsearch.swirlit.local:9200/_template/kubernetes-logs >/dev/null
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary '{"index.lifecycle.name":"bm-cluster-logs-7d"}' \
-                'http://elasticsearch.infra.svc.cluster.local:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
+                'http://elasticsearch.swirlit.local:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
           securityContext:
             runAsNonRoot: true
             runAsUser: 100
