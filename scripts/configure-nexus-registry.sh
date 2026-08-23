@@ -196,14 +196,14 @@ configure_user() {
     path="security/users/$user_id"
     jq -n --arg id "$user_id" --arg role "$role" '{
       userId:$id,firstName:$id,lastName:"service account",
-      emailAddress:($id+"@invalid.local"),source:"default",status:"active",roles:[$role]
+      emailAddress:($id+"@example.invalid"),source:"default",status:"active",roles:[$role]
     }' > "$work_dir/user.json"
   else
     method=POST
     path=security/users
     jq -n --arg id "$user_id" --arg password "$password" --arg role "$role" '{
       userId:$id,firstName:$id,lastName:"service account",
-      emailAddress:($id+"@invalid.local"),password:$password,status:"active",roles:[$role]
+      emailAddress:($id+"@example.invalid"),password:$password,status:"active",roles:[$role]
     }' > "$work_dir/user.json"
   fi
   status="$(nexus_request "$method" "$path" "$work_dir/user.json")"
