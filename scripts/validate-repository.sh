@@ -166,7 +166,8 @@ else
 fi
 
 legacy_internal_references="$({
-    grep -RIl --exclude='coredns-custom.yaml' --exclude='validate-repository.sh' --exclude-dir=.git \
+    grep -RIl --exclude='coredns-custom.yaml' --exclude='configure-k3s-registry-mirror.sh' \
+        --exclude='validate-repository.sh' --exclude-dir=.git \
         --exclude-dir=node_modules --exclude-dir=target \
         'infra\.svc\.cluster\.local' "$REPOSITORY_ROOT" || true
 } | LC_ALL=C sort -u)"

@@ -10,6 +10,7 @@ fi
 
 REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-nexus-registry.swirlit.local:5000}}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}}"
+LEGACY_REGISTRY_HOST="${K3S_LEGACY_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
 REGISTRY_CONFIG="${K3S_REGISTRY_CONFIG:-/etc/rancher/k3s/registries.yaml}"
 sudo_command=()
 
@@ -45,6 +46,29 @@ elif ! "${sudo_command[@]}" grep -Fq "\"$REGISTRY_HOST\"" "$REGISTRY_CONFIG"; th
           }
         ' "$REGISTRY_CONFIG" > "$temporary_config"
     "${sudo_command[@]}" install -o root -g root -m 0600 "$temporary_config" "$REGISTRY_CONFIG"
+    rm -f "$temporary_config"
+    trap - EXIT
+    changed=true
+fi
+
+if [[ "$LEGACY_REGISTRY_HOST" != "$REGISTRY_HOST" ]] &&
+   "${sudo_command[@]}" grep -Fq "\"$LEGACY_REGISTRY_HOST\"" "$REGISTRY_CONFIG"; then
+    temporary_config="$(mktemp)"
+    trap 'rm -f "$temporary_config"' EXIT
+    "${sudo_command[@]}" awk \
+        -v legacy_header="  \"$LEGACY_REGISTRY_HOST\":" '
+          $0 == legacy_header {
+            skipping_legacy_mirror = 1
+            next
+          }
+          skipping_legacy_mirror && (/^[^[:space:]]/ || /^  [^[:space:]].*:[[:space:]]*$/) {
+            skipping_legacy_mirror = 0
+          }
+          !skipping_legacy_mirror { print }
+        ' "$REGISTRY_CONFIG" > "$temporary_config"
+    "${sudo_command[@]}" install -o root -g root -m 0600 "$temporary_config" "$REGISTRY_CONFIG"
+    rm -f "$temporary_config"
+    trap - EXIT
     changed=true
 fi
 
