@@ -32,11 +32,32 @@ spec:
       labels:
         app: redis
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: redis
         image: redis@sha256:52334768d4a6594d8969f51a1a6fee3ffa7545f6359a4877229cdc754d2def82
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 6379
+        readinessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 3
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 15
+          periodSeconds: 10
         resources:
           requests:
             cpu: 100m

@@ -1,0 +1,119 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: portainer-bootstrap-
+  namespace: infra
+  labels:
+    app: portainer-bootstrap
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 360
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: portainer-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: python@sha256:42825e7ec3437b3bce923c237484eb23d32128476e18307d2f48951bf86f1db2
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          env:
+            - name: PORTAINER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: portainer-auth-secret
+                  key: ADMIN_USERNAME
+            - name: PORTAINER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: portainer-auth-secret
+                  key: ADMIN_PASSWORD
+          command:
+            - python3
+            - -c
+            - |
+              import json
+              import os
+              import time
+              import urllib.error
+              import urllib.request
+              import uuid
+
+              base_url = "http://portainer.swirlit.internal:9000/api"
+              username = os.environ["PORTAINER_USERNAME"]
+              password = os.environ["PORTAINER_PASSWORD"]
+
+              for attempt in range(60):
+                  try:
+                      body = json.dumps({"Username": username, "Password": password}).encode()
+                      request = urllib.request.Request(
+                          base_url + "/auth",
+                          data=body,
+                          headers={"Content-Type": "application/json"},
+                      )
+                      token = json.load(urllib.request.urlopen(request, timeout=5))["jwt"]
+                      break
+                  except (OSError, KeyError, urllib.error.HTTPError):
+                      if attempt == 59:
+                          raise
+                      time.sleep(5)
+
+              headers = {"Authorization": "Bearer " + token}
+              request = urllib.request.Request(base_url + "/endpoints", headers=headers)
+              environments = json.load(urllib.request.urlopen(request, timeout=10))
+              local = next((item for item in environments if item["Type"] == 5), None)
+
+              if local is None:
+                  boundary = "----portainer-" + uuid.uuid4().hex
+                  fields = {"Name": "local", "EndpointCreationType": "5"}
+                  parts = []
+                  for name, value in fields.items():
+                      parts.extend([
+                          "--" + boundary,
+                          'Content-Disposition: form-data; name="' + name + '"',
+                          "",
+                          value,
+                      ])
+                  parts.extend(["--" + boundary + "--", ""])
+                  body = "\r\n".join(parts).encode()
+                  request = urllib.request.Request(
+                      base_url + "/endpoints",
+                      data=body,
+                      headers={
+                          **headers,
+                          "Content-Type": "multipart/form-data; boundary=" + boundary,
+                      },
+                  )
+                  local = json.load(urllib.request.urlopen(request, timeout=30))
+                  print("Registered the local Kubernetes environment.")
+              else:
+                  print("The local Kubernetes environment is already registered.")
+
+              environment_id = local["Id"]
+              request = urllib.request.Request(
+                  base_url + f"/kubernetes/{environment_id}/namespaces",
+                  headers=headers,
+              )
+              namespaces = json.load(urllib.request.urlopen(request, timeout=30))
+              print(f"Portainer can access {len(namespaces)} Kubernetes namespaces.")

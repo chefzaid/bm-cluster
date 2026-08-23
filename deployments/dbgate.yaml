@@ -43,6 +43,7 @@ spec:
       labels:
         app: dbgate
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -72,7 +73,7 @@ spec:
             - name: LABEL_postgres
               value: "PostgreSQL cluster"
             - name: SERVER_postgres
-              value: "postgres.infra.svc.cluster.local"
+              value: "postgres.swirlit.internal"
             - name: PORT_postgres
               value: "5432"
             - name: ENGINE_postgres
@@ -90,7 +91,7 @@ spec:
             - name: LABEL_mongodb
               value: "MongoDB"
             - name: SERVER_mongodb
-              value: "mongodb.infra.svc.cluster.local"
+              value: "mongodb.swirlit.internal"
             - name: PORT_mongodb
               value: "27017"
             - name: ENGINE_mongodb
@@ -108,7 +109,7 @@ spec:
             - name: LABEL_redis
               value: "Redis"
             - name: SERVER_redis
-              value: "redis.infra.svc.cluster.local"
+              value: "redis.swirlit.internal"
             - name: PORT_redis
               value: "6379"
             - name: ENGINE_redis

@@ -71,13 +71,13 @@ spec:
         - name: KAFKA_NODE_ID
           value: "3000"
         - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-          value: "3000@kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+          value: "3000@kafka-controller-0.kafka-controller.swirlit.internal:9093"
         - name: KAFKA_CONTROLLER_LISTENER_NAMES
           value: "CONTROLLER"
         - name: KAFKA_LISTENERS
           value: "CONTROLLER://0.0.0.0:9093"
         - name: KAFKA_ADVERTISED_LISTENERS
-          value: "CONTROLLER://kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+          value: "CONTROLLER://kafka-controller-0.kafka-controller.swirlit.internal:9093"
         - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
           value: "CONTROLLER:PLAINTEXT"
         - name: KAFKA_LOG_DIRS
@@ -175,11 +175,11 @@ spec:
         - name: KAFKA_NODE_ID
           value: "1"
         - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-          value: "3000@kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093"
+          value: "3000@kafka-controller-0.kafka-controller.swirlit.internal:9093"
         - name: KAFKA_CONTROLLER_LISTENER_NAMES
           value: "CONTROLLER"
         - name: KAFKA_ADVERTISED_LISTENERS
-          value: "PLAINTEXT://kafka.infra.svc.cluster.local:9092"
+          value: "PLAINTEXT://kafka.swirlit.internal:9092"
         - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
           value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
         - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR

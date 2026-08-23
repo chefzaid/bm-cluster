@@ -9,6 +9,25 @@ metadata:
   annotations:
     ds-cluster.swirlit.dev/enforced-by: scripts/configure-node-security.sh
 data:
+  node-policy.yaml: |
+    control-plane:
+      local: [ufw, lynis]
+      internet: [ufw, fail2ban, crowdsec, lynis]
+    worker:
+      exposure: local-only
+      controls: [ufw, default-deny-inbound, private-address-enforcement]
+      accepted-node-addresses: [rfc1918-ipv4, tailscale-100.64.0.0/10]
+      preferred-transport: provider-private-network
+      ssh-source: control-plane-private-ip-only
+      tailscale-netfilter-mode: nodivert-when-selected
+      tailscale-ssh-server: disabled-when-selected
+      k3s-peer-source: trusted-private-node-cidr-only
+      longhorn-peer-source: trusted-private-node-cidr-only
+      public-ip-addresses: forbidden
+      public-ingress: forbidden
+      outbound: allowed-for-updates-images-and-workloads
+    lynis-worker-audits: transient-ssh-copy-from-control-plane
+
   fail2ban-jail.local: |
     # Managed by scripts/configure-node-security.sh
     [DEFAULT]

@@ -28,6 +28,7 @@ spec:
       labels:
         app: nexus
     spec:
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 200
         runAsUser: 200
@@ -43,6 +44,26 @@ spec:
           name: http
         - containerPort: 5000
           name: docker
+        startupProbe:
+          httpGet:
+            path: /service/rest/v1/status
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 90
+        readinessProbe:
+          httpGet:
+            path: /service/rest/v1/status
+            port: http
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          tcpSocket:
+            port: http
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 6
         volumeMounts:
         - name: nexus-data
           mountPath: /nexus-data

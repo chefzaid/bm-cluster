@@ -3,8 +3,24 @@ set -Eeuo pipefail
 
 umask 077
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_CONFIG="$SCRIPT_DIR/../config/platform.env"
+if [[ ! -r "$PLATFORM_CONFIG" ]]; then
+    echo "[ERROR] Shared platform contract not found: $PLATFORM_CONFIG" >&2
+    exit 1
+fi
+# shellcheck source=../config/platform.env
+source "$PLATFORM_CONFIG"
+NETWORK_LIBRARY="$SCRIPT_DIR/lib/network.sh"
+if [[ ! -r "$NETWORK_LIBRARY" ]]; then
+    echo "[ERROR] Shared network library not found: $NETWORK_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/network.sh
+source "$NETWORK_LIBRARY"
+
 API_BASE="${CLOUDFLARE_API_BASE:-https://api.cloudflare.com/client/v4}"
-ZONE_NAME="${CLOUDFLARE_ZONE:-swirlit.dev}"
+ZONE_NAME="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 ORIGIN_IP="${CLOUDFLARE_ORIGIN_IP:-}"
 API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
@@ -20,6 +36,7 @@ ENABLE_WAF="${CLOUDFLARE_ENABLE_WAF:-true}"
 ENABLE_RATE_LIMIT="${CLOUDFLARE_ENABLE_RATE_LIMIT:-true}"
 ENABLE_CACHE_RULES="${CLOUDFLARE_ENABLE_CACHE_RULES:-true}"
 ENABLE_ACCESS="${CLOUDFLARE_ENABLE_ACCESS:-true}"
+PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
 ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
 ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-}"
@@ -28,38 +45,12 @@ ORIGIN_LOCK_STATUS="not requested"
 WORK_DIR=""
 CURL_CONFIG=""
 
-DEFAULT_HOST_LABELS=(
-    argocd
-    dashboard
-    dbgate
-    devapp
-    gitlab
-    grafana
-    jenkins
-    kafka
-    keycloak
-    kibana
-    longhorn
-    nexus
-    odoo
-    portainer
-    sonarqube
-    vault
-)
+IFS=',' read -r -a DEFAULT_HOST_LABELS <<< "$DEFAULT_CLOUDFLARE_HOST_LABELS"
 
-# Only browser-focused BM Cluster administration interfaces belong here. Apps
-# with CI, webhook, Git, package, scanner, or general API clients intentionally
-# remain outside Access so those machine workflows keep working.
-DEFAULT_ACCESS_HOST_LABELS=(
-    dashboard
-    dbgate
-    grafana
-    kafka
-    kibana
-    longhorn
-    portainer
-    vault
-)
+# Browser-facing administration interfaces belong here. Cluster automation uses
+# Kubernetes service DNS and therefore does not need to bypass Access on these
+# public hostnames.
+IFS=',' read -r -a DEFAULT_ACCESS_HOST_LABELS <<< "$DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -82,7 +73,7 @@ Cloudflare Origin CA certificate in Kubernetes, and applies a secure/performance
 baseline, scoped WAF/cache rules, and email-OTP Access for administrative UIs.
 
 Options:
-  --zone DOMAIN       Cloudflare zone (default: swirlit.dev)
+  --zone DOMAIN       Cloudflare zone (default: config/platform.env)
   --account-id ID     Cloudflare account ID; discovered when omitted
   --origin-ip IP      NGINX public IPv4; discovered from Kubernetes when omitted
   -h, --help          Show this help
@@ -103,6 +94,7 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_RATE_LIMIT     Default: true
   CLOUDFLARE_ENABLE_CACHE_RULES    Default: true
   CLOUDFLARE_ENABLE_ACCESS         Default: true
+  CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
   CLOUDFLARE_ACCESS_SESSION_DURATION  Default: 24h
   CLOUDFLARE_ACCESS_HOST_LABELS    Space-separated admin labels replacing defaults
@@ -152,6 +144,8 @@ done
 
 ZONE_NAME="${ZONE_NAME,,}"
 ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
+[[ "$ZONE_NAME" != "${DEFAULT_INTERNAL_DNS_ZONE:-swirlit.internal}" ]] || \
+    error "$ZONE_NAME is the cluster-only CoreDNS zone and must never be published through Cloudflare."
 [[ "$ZONE_NAME" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
     error "Invalid zone name: $ZONE_NAME"
 [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" =~ ^[a-f0-9]{32}$ ]] || \
@@ -164,6 +158,7 @@ ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
 [[ "$ENABLE_RATE_LIMIT" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_RATE_LIMIT must be true or false."
 [[ "$ENABLE_CACHE_RULES" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_CACHE_RULES must be true or false."
 [[ "$ENABLE_ACCESS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_ACCESS must be true or false."
+[[ "$PUBLISH_APEX" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_APEX must be true or false."
 [[ "$HSTS_MAX_AGE" =~ ^[0-9]+$ ]] || error "CLOUDFLARE_HSTS_MAX_AGE must be seconds as a whole number."
 [[ "$ACCESS_SESSION_DURATION" =~ ^[1-9][0-9]*(m|h)$ ]] || \
     error "CLOUDFLARE_ACCESS_SESSION_DURATION must be a positive duration such as 30m or 24h."
@@ -333,11 +328,11 @@ reconcile_ruleset_rule() {
 
 configure_edge_rules() {
     local host_set=""
-    local label host_literal waf_expression cache_expression
+    local fqdn host_literal waf_expression cache_expression
     local rule_file
 
-    for label in "${HOST_LABELS[@]}"; do
-        printf -v host_literal '"%s.%s"' "$label" "$ZONE_NAME"
+    for fqdn in "${DNS_HOSTS[@]}"; do
+        printf -v host_literal '"%s"' "$fqdn"
         host_set+="${host_set:+ }$host_literal"
     done
 
@@ -396,12 +391,16 @@ configure_edge_rules() {
 
 access_app_name() {
     case "$1" in
+        argocd) echo "Argo CD" ;;
         dbgate) echo "DBGate" ;;
         grafana) echo "Grafana" ;;
+        jenkins) echo "Jenkins" ;;
         kafka) echo "Kafka UI" ;;
         kibana) echo "Kibana" ;;
         longhorn) echo "Longhorn" ;;
+        nexus) echo "Nexus" ;;
         portainer) echo "Portainer" ;;
+        sonarqube) echo "SonarQube" ;;
         vault) echo "Vault" ;;
         *) echo "$1" ;;
     esac
@@ -545,19 +544,6 @@ configure_access() {
                 info "Reconciled Access protection for $fqdn."
             fi
         fi
-    done
-}
-
-valid_ipv4() {
-    local candidate="$1"
-    local octets=()
-    local octet
-
-    IFS='.' read -r -a octets <<< "$candidate"
-    [[ ${#octets[@]} -eq 4 ]] || return 1
-    for octet in "${octets[@]}"; do
-        [[ "$octet" =~ ^[0-9]{1,3}$ ]] || return 1
-        ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
     done
 }
 
@@ -748,16 +734,23 @@ else
 fi
 (( ${#HOST_LABELS[@]} > 0 )) || error "At least one public hostname is required."
 
-step "Reconciling proxied DNS records"
+DNS_HOSTS=()
+if [[ "$PUBLISH_APEX" == "true" ]]; then
+    DNS_HOSTS+=("$ZONE_NAME")
+fi
 for label in "${HOST_LABELS[@]}"; do
     [[ "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || error "Invalid hostname label: $label"
-    fqdn="$label.$ZONE_NAME"
+    DNS_HOSTS+=("$label.$ZONE_NAME")
+done
+
+step "Reconciling proxied DNS records"
+for fqdn in "${DNS_HOSTS[@]}"; do
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$fqdn&per_page=100")"
     require_success "$record_response" "DNS lookup for $fqdn"
     address_record_count="$(jq '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")] | length' <<< "$record_response")"
     ((address_record_count <= 1)) || error "$fqdn has multiple A/AAAA/CNAME records; reconcile the conflict before rerunning."
 
-    desired_record_file="$WORK_DIR/dns-$label.json"
+    desired_record_file="$WORK_DIR/dns-${fqdn//./-}.json"
     jq -n --arg name "$fqdn" --arg content "$ORIGIN_IP" \
         '{type:"A",name:$name,content:$content,ttl:1,proxied:true,comment:"Managed by bm-cluster/scripts/configure-cloudflare.sh"}' \
         > "$desired_record_file"
@@ -850,6 +843,8 @@ set_zone_setting ipv6 on "IPv6 compatibility"
 # This zone serves REST APIs, Git webhooks, CLIs, and CI agents in addition to
 # browsers. Browser Integrity Check challenges legitimate non-browser clients;
 # authentication and Cloudflare's network-level protections remain in place.
+# The cluster-only swirlit.internal zone is resolved exclusively by CoreDNS and is
+# intentionally absent from every Cloudflare DNS and edge rule.
 set_zone_setting browser_check off "Browser Integrity Check for API compatibility"
 # These HTML-rewriting/content-blocking features are a poor fit for dashboards
 # and cross-host assets and can cause missing images or modified application UI.
@@ -895,8 +890,7 @@ fi
 lock_origin_firewall
 
 step "Verifying Cloudflare and Kubernetes state"
-for label in "${HOST_LABELS[@]}"; do
-    fqdn="$label.$ZONE_NAME"
+for fqdn in "${DNS_HOSTS[@]}"; do
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?type=A&name=$fqdn&per_page=100")"
     require_success "$record_response" "Final DNS verification for $fqdn"
     jq -e --arg content "$ORIGIN_IP" \
@@ -936,7 +930,7 @@ info "Cloudflare configuration is complete."
 echo ""
 echo "  Zone:          $ZONE_NAME ($ZONE_STATUS)"
 echo "  Origin:        $ORIGIN_IP"
-echo "  DNS records:   ${#HOST_LABELS[@]} proxied A records"
+echo "  DNS records:   ${#DNS_HOSTS[@]} proxied A records"
 echo "  TLS mode:      Full (strict)"
 echo "  Minimum TLS:   $MIN_TLS_VERSION"
 echo "  TLS 1.3:       enabled (0-RTT disabled)"

@@ -1,0 +1,6 @@
+severity=warning
+source-path=SCRIPTDIR
+external-sources=true
+# Remote commands are shell-escaped before SSH; single-quoted remote snippets
+# and literal validation patterns are intentional.
+disable=SC2016,SC2029

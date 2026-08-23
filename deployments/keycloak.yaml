@@ -36,6 +36,7 @@ spec:
         prometheus.io/path: /auth/metrics
         prometheus.io/port: "9000"
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         seccompProfile:

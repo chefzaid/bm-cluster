@@ -32,9 +32,20 @@ spec:
       labels:
         app: kafka-ui
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: kafka-ui
-          image: ghcr.io/kafbat/kafka-ui:v1.5.0
+          image: ghcr.io/kafbat/kafka-ui@sha256:2fc9a60b223de6d8cb45a64175afcbb79207ae19306a0b99c558aeaa1b22b6e9
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
@@ -42,7 +53,7 @@ spec:
             - name: KAFKA_CLUSTERS_0_NAME
               value: bm-cluster
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
-              value: kafka.infra.svc.cluster.local:9092
+              value: kafka.swirlit.internal:9092
             - name: KAFKA_CLUSTERS_0_READONLY
               value: "false"
             - name: AUTH_TYPE
@@ -82,4 +93,3 @@ spec:
             limits:
               cpu: 500m
               memory: 768Mi
-

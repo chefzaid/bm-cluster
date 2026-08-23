@@ -150,9 +150,21 @@ spec:
         app: kube-state-metrics
     spec:
       serviceAccountName: kube-state-metrics
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: kube-state-metrics
-          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics@sha256:01171220c7c059afc85034ffe687bfe7249e41c0cc46fbe9a5128503ceee3016
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: metrics
               containerPort: 8080
@@ -212,19 +224,41 @@ spec:
       labels:
         app: node-exporter
     spec:
+      automountServiceAccountToken: false
       hostNetwork: true
       hostPID: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       tolerations:
         - operator: Exists
       containers:
         - name: node-exporter
-          image: quay.io/prometheus/node-exporter:v1.12.1
+          image: quay.io/prometheus/node-exporter@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - --path.rootfs=/host
             - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/kubelet/pods/.+|var/lib/containerd/.+)($|/)
           ports:
             - name: metrics
               containerPort: 9100
+          readinessProbe:
+            tcpSocket:
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 3
           resources:
             requests:
               cpu: 20m
@@ -261,7 +295,7 @@ data:
 
       - job_name: kube-state-metrics
         static_configs:
-          - targets: ["kube-state-metrics.infra.svc.cluster.local:8080"]
+          - targets: ["kube-state-metrics.swirlit.internal:8080"]
 
       - job_name: node-exporter
         kubernetes_sd_configs:
@@ -354,7 +388,9 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 2Gi
+      # Keep ample headroom above the 1500 MB TSDB retention limit because
+      # WAL and memory-mapped head chunks are not covered by that limit.
+      storage: 4Gi
 
 ---
 apiVersion: v1
@@ -390,11 +426,22 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      automountServiceAccountToken: true
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
         fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: prometheus
-          image: docker.io/prom/prometheus:v3.14.0
+          image: docker.io/prom/prometheus@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
@@ -487,18 +534,18 @@ data:
         uid: prometheus
         type: prometheus
         access: proxy
-        url: http://prometheus.infra.svc.cluster.local:9090
+        url: http://prometheus.swirlit.internal:9090
         isDefault: true
         editable: false
         jsonData:
           prometheusType: Prometheus
-          prometheusVersion: 3.13.2
+          prometheusVersion: 3.14.0
           timeInterval: 15s
       - name: Elasticsearch
         uid: elasticsearch
         type: elasticsearch
         access: proxy
-        url: http://elasticsearch.infra.svc.cluster.local:9200
+        url: http://elasticsearch.swirlit.internal:9200
         database: kubernetes-logs-*
         editable: false
         jsonData:
@@ -740,18 +787,20 @@ spec:
         app: grafana
     spec:
       serviceAccountName: grafana
+      automountServiceAccountToken: true
       securityContext:
+        runAsNonRoot: true
         fsGroup: 472
-      initContainers:
-        - name: prepare-dashboard-directories
-          image: busybox:1.37.0
-          command: ["sh", "-c", "mkdir -p /dashboards/applications && chown -R 472:472 /dashboards && chmod 2775 /dashboards /dashboards/applications"]
-          volumeMounts:
-            - name: dashboard-files
-              mountPath: /dashboards
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
-          image: docker.io/grafana/grafana:13.2.0
+          image: docker.io/grafana/grafana@sha256:95a8098fb092130e111b0264a9be4d3a2bd5405e5dba88d4b8f1f630b389614e
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 3000
@@ -795,7 +844,11 @@ spec:
               mountPath: /var/lib/grafana/dashboards/kubernetes
               readOnly: true
         - name: dashboard-sidecar
-          image: ghcr.io/kiwigrid/k8s-sidecar:2.10.1
+          image: ghcr.io/kiwigrid/k8s-sidecar@sha256:440db6dcf9a724fa2c167612e147ad8839e75104732dc7ec89783e73199837f0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: METHOD
               value: WATCH

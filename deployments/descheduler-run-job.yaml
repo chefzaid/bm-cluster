@@ -14,6 +14,7 @@ spec:
         app: descheduler
     spec:
       serviceAccountName: descheduler
+      automountServiceAccountToken: true
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -35,6 +36,13 @@ spec:
           args:
             - --policy-config-file=/policy-dir/policy.yaml
             - --v=2
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           volumeMounts:
             - name: policy-volume
               mountPath: /policy-dir

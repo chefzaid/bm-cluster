@@ -81,7 +81,7 @@ data:
     [OUTPUT]
         Name                      es
         Match                     kube.*
-        Host                      elasticsearch.infra.svc.cluster.local
+        Host                      elasticsearch.swirlit.internal
         Port                      9200
         Logstash_Format           On
         Logstash_Prefix           kubernetes-logs
@@ -170,6 +170,7 @@ spec:
         prometheus.io/port: "2020"
     spec:
       serviceAccountName: fluent-bit
+      automountServiceAccountToken: true
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -182,19 +183,19 @@ spec:
             - sh
             - -c
             - |
-              until curl -fsS http://elasticsearch.infra.svc.cluster.local:9200 >/dev/null; do sleep 5; done
+              until curl -fsS http://elasticsearch.swirlit.internal:9200 >/dev/null; do sleep 5; done
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/ilm-policy.json \
-                http://elasticsearch.infra.svc.cluster.local:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
+                http://elasticsearch.swirlit.internal:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/index-template.json \
-                http://elasticsearch.infra.svc.cluster.local:9200/_template/kubernetes-logs >/dev/null
+                http://elasticsearch.swirlit.internal:9200/_template/kubernetes-logs >/dev/null
               curl -fsS -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary '{"index.lifecycle.name":"bm-cluster-logs-7d"}' \
-                'http://elasticsearch.infra.svc.cluster.local:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
+                'http://elasticsearch.swirlit.internal:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
           securityContext:
             runAsNonRoot: true
             runAsUser: 100
@@ -202,6 +203,13 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           volumeMounts:
             - name: config
               mountPath: /config

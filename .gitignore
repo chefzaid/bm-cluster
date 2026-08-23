@@ -1,0 +1,21 @@
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.kubeconfig
+
+# Tool and editor state
+.ansible/
+.cache/
+.idea/
+.vscode/
+*.swp
+*~
+
+# Generated validation and OS files
+*.log
+*.retry
+.DS_Store

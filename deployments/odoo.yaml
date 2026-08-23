@@ -53,6 +53,7 @@ spec:
       labels:
         app: odoo
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 100
@@ -76,7 +77,7 @@ spec:
                 printf '[options]\n'
                 printf 'admin_passwd = %s\n' "$ODOO_DATABASE_MASTER_PASSWORD"
                 printf 'data_dir = /var/lib/odoo\n'
-                printf 'db_host = postgres.infra.svc.cluster.local\n'
+                printf 'db_host = postgres.swirlit.internal\n'
                 printf 'db_port = 5432\n'
                 printf 'db_user = %s\n' "$ODOO_DB_USER"
                 printf 'db_password = %s\n' "$ODOO_DB_PASSWORD"
@@ -109,6 +110,13 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_DB_PASSWORD
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo-generated
@@ -198,7 +206,7 @@ spec:
               PY
           env:
             - name: ODOO_DB_HOST
-              value: postgres.infra.svc.cluster.local
+              value: postgres.swirlit.internal
             - name: ODOO_DB_PORT
               value: "5432"
             - name: POSTGRES_ADMIN_USER
@@ -226,6 +234,13 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_ADMIN_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
           volumeMounts:
             - name: odoo-config
               mountPath: /etc/odoo-generated

@@ -311,16 +311,16 @@ data:
             description: DNS, TLS, CDN, WAF, rate limiting, and Access
         - CrowdSec:
             icon: crowdsec.png
-            description: Host intrusion detection and collaborative blocking
+            description: Internet-facing node detection and collaborative blocking
         - Fail2ban:
             icon: fail2ban.png
-            description: Host log-based abuse banning
+            description: Internet-facing node SSH abuse banning
         - UFW:
             icon: mdi-wall-fire
-            description: Host firewall and Cloudflare origin restriction
+            description: Every-node firewall and Cloudflare origin restriction
         - Lynis:
             icon: ubuntu-linux.png
-            description: Host security auditing
+            description: Control-plane audit engine with transient remote worker scans
 
     - Kubernetes System:
         - CoreDNS:
@@ -474,7 +474,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: ghcr.io/gethomepage/homepage:v2.1.2
+        image: ghcr.io/gethomepage/homepage@sha256:00b7ece02a2771c2101bee964323b2a79b7c03240e3b2cf5af4a34d8417c8aac
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -486,7 +486,7 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: HOMEPAGE_ALLOWED_HOSTS
-          value: "$(MY_POD_IP):3000,homepage.infra.svc.cluster.local:3000,dashboard.swirlit.dev"
+          value: "$(MY_POD_IP):3000,homepage.swirlit.internal:3000,dashboard.swirlit.dev"
         - name: LOG_TARGETS
           value: stdout
         ports:

@@ -196,14 +196,14 @@ configure_user() {
     path="security/users/$user_id"
     jq -n --arg id "$user_id" --arg role "$role" '{
       userId:$id,firstName:$id,lastName:"service account",
-      emailAddress:($id+"@invalid.local"),source:"default",status:"active",roles:[$role]
+      emailAddress:($id+"@example.invalid"),source:"default",status:"active",roles:[$role]
     }' > "$work_dir/user.json"
   else
     method=POST
     path=security/users
     jq -n --arg id "$user_id" --arg password "$password" --arg role "$role" '{
       userId:$id,firstName:$id,lastName:"service account",
-      emailAddress:($id+"@invalid.local"),password:$password,status:"active",roles:[$role]
+      emailAddress:($id+"@example.invalid"),password:$password,status:"active",roles:[$role]
     }' > "$work_dir/user.json"
   fi
   status="$(nexus_request "$method" "$path" "$work_dir/user.json")"
@@ -230,7 +230,7 @@ cat > "$work_dir/settings.xml" <<EOF
     <mirror>
       <id>nexus-maven-public</id>
       <mirrorOf>*</mirrorOf>
-      <url>http://nexus.infra.svc.cluster.local:8081/repository/maven-public/</url>
+      <url>http://nexus.swirlit.internal:8081/repository/maven-public/</url>
     </mirror>
   </mirrors>
   <servers>
@@ -243,8 +243,8 @@ cat > "$work_dir/settings.xml" <<EOF
 </settings>
 EOF
 cat > "$work_dir/npmrc" <<EOF
-registry=http://nexus.infra.svc.cluster.local:8081/repository/npm-group/
-//nexus.infra.svc.cluster.local:8081/repository/npm-group/:_auth=$npm_auth
+registry=http://nexus.swirlit.internal:8081/repository/npm-group/
+//nexus.swirlit.internal:8081/repository/npm-group/:_auth=$npm_auth
 EOF
 jq -cn --rawfile settings_xml "$work_dir/settings.xml" --rawfile npmrc "$work_dir/npmrc" \
   '{data:{settings_xml:$settings_xml,npmrc:$npmrc}}' > "$work_dir/vault-jenkins.json"
