@@ -250,14 +250,12 @@ spec:
             - name: metrics
               containerPort: 9100
           readinessProbe:
-            httpGet:
-              path: /-/ready
+            tcpSocket:
               port: metrics
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
-            httpGet:
-              path: /-/healthy
+            tcpSocket:
               port: metrics
             periodSeconds: 30
             timeoutSeconds: 3
