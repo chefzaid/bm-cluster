@@ -230,7 +230,7 @@ cat > "$work_dir/settings.xml" <<EOF
     <mirror>
       <id>nexus-maven-public</id>
       <mirrorOf>*</mirrorOf>
-      <url>http://nexus.swirlit.local:8081/repository/maven-public/</url>
+      <url>http://nexus.swirlit.internal:8081/repository/maven-public/</url>
     </mirror>
   </mirrors>
   <servers>
@@ -243,8 +243,8 @@ cat > "$work_dir/settings.xml" <<EOF
 </settings>
 EOF
 cat > "$work_dir/npmrc" <<EOF
-registry=http://nexus.swirlit.local:8081/repository/npm-group/
-//nexus.swirlit.local:8081/repository/npm-group/:_auth=$npm_auth
+registry=http://nexus.swirlit.internal:8081/repository/npm-group/
+//nexus.swirlit.internal:8081/repository/npm-group/:_auth=$npm_auth
 EOF
 jq -cn --rawfile settings_xml "$work_dir/settings.xml" --rawfile npmrc "$work_dir/npmrc" \
   '{data:{settings_xml:$settings_xml,npmrc:$npmrc}}' > "$work_dir/vault-jenkins.json"

@@ -53,7 +53,7 @@ spec:
             - name: KAFKA_CLUSTERS_0_NAME
               value: bm-cluster
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
-              value: kafka.swirlit.local:9092
+              value: kafka.swirlit.internal:9092
             - name: KAFKA_CLUSTERS_0_READONLY
               value: "false"
             - name: AUTH_TYPE

@@ -155,9 +155,9 @@ else
     pass "platform contract uses source-safe properties"
 fi
 
-if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.local" ]] &&
-   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus-registry.swirlit.local:5000" ]] &&
-   grep -Fq 'name suffix .swirlit.local. .infra.svc.cluster.local. answer auto' \
+if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
+   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus-registry.swirlit.internal:5000" ]] &&
+   grep -Fq 'name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto' \
        "$REPOSITORY_ROOT/deployments/coredns-custom.yaml" &&
    [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
     pass "cluster-only internal DNS and node registry alias contracts are complete"
@@ -172,11 +172,25 @@ legacy_internal_references="$({
         'infra\.svc\.cluster\.local' "$REPOSITORY_ROOT" || true
 } | LC_ALL=C sort -u)"
 if [[ -z "$legacy_internal_references" ]]; then
-    pass "runtime and documentation references use the swirlit.local alias zone"
+    pass "runtime and documentation references use the swirlit.internal alias zone"
 else
     printf 'Canonical Infra service references remain outside CoreDNS:\n%s\n' \
         "$legacy_internal_references" >&2
-    fail "runtime and documentation references use the swirlit.local alias zone"
+    fail "runtime and documentation references use the swirlit.internal alias zone"
+fi
+
+local_zone_references="$({
+    grep -RIl --exclude='configure-k3s-registry-mirror.sh' \
+        --exclude='validate-repository.sh' --exclude-dir=.git \
+        --exclude-dir=node_modules --exclude-dir=target \
+        'swirlit\.local' "$REPOSITORY_ROOT" || true
+} | LC_ALL=C sort -u)"
+if [[ -z "$local_zone_references" ]]; then
+    pass "legacy swirlit.local references are absent"
+else
+    printf 'Legacy swirlit.local references remain:\n%s\n' \
+        "$local_zone_references" >&2
+    fail "legacy swirlit.local references are absent"
 fi
 
 manifest_inventory_failed=false

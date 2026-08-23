@@ -8,14 +8,20 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
     source "$PLATFORM_CONFIG"
 fi
 
-REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-nexus-registry.swirlit.local:5000}}"
+REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-nexus-registry.swirlit.internal:5000}}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}}"
-LEGACY_REGISTRY_HOST="${K3S_LEGACY_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}"
+LEGACY_REGISTRY_HOSTS="${K3S_LEGACY_REGISTRY_HOSTS:-${K3S_LEGACY_REGISTRY_HOST:-nexus-registry.swirlit.local:5000,nexus-registry.infra.svc.cluster.local:5000}}"
+RETAIN_LEGACY_REGISTRY="${K3S_RETAIN_LEGACY_REGISTRY:-false}"
 REGISTRY_CONFIG="${K3S_REGISTRY_CONFIG:-/etc/rancher/k3s/registries.yaml}"
 sudo_command=()
 
 info() { printf '[INFO] %s\n' "$*"; }
 error() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+case "$RETAIN_LEGACY_REGISTRY" in
+    true|false) ;;
+    *) error "K3S_RETAIN_LEGACY_REGISTRY must be true or false" ;;
+esac
 
 if [[ $EUID -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 || error "sudo is required when not running as root"
@@ -51,25 +57,30 @@ elif ! "${sudo_command[@]}" grep -Fq "\"$REGISTRY_HOST\"" "$REGISTRY_CONFIG"; th
     changed=true
 fi
 
-if [[ "$LEGACY_REGISTRY_HOST" != "$REGISTRY_HOST" ]] &&
-   "${sudo_command[@]}" grep -Fq "\"$LEGACY_REGISTRY_HOST\"" "$REGISTRY_CONFIG"; then
-    temporary_config="$(mktemp)"
-    trap 'rm -f "$temporary_config"' EXIT
-    "${sudo_command[@]}" awk \
-        -v legacy_header="  \"$LEGACY_REGISTRY_HOST\":" '
-          $0 == legacy_header {
-            skipping_legacy_mirror = 1
-            next
-          }
-          skipping_legacy_mirror && (/^[^[:space:]]/ || /^  [^[:space:]].*:[[:space:]]*$/) {
-            skipping_legacy_mirror = 0
-          }
-          !skipping_legacy_mirror { print }
-        ' "$REGISTRY_CONFIG" > "$temporary_config"
-    "${sudo_command[@]}" install -o root -g root -m 0600 "$temporary_config" "$REGISTRY_CONFIG"
-    rm -f "$temporary_config"
-    trap - EXIT
-    changed=true
+if [[ "$RETAIN_LEGACY_REGISTRY" == "false" ]]; then
+    IFS=',' read -r -a legacy_registry_hosts <<< "$LEGACY_REGISTRY_HOSTS"
+    for legacy_registry_host in "${legacy_registry_hosts[@]}"; do
+        [[ -n "$legacy_registry_host" && "$legacy_registry_host" != "$REGISTRY_HOST" ]] || continue
+        if "${sudo_command[@]}" grep -Fq "\"$legacy_registry_host\"" "$REGISTRY_CONFIG"; then
+            temporary_config="$(mktemp)"
+            trap 'rm -f "$temporary_config"' EXIT
+            "${sudo_command[@]}" awk \
+                -v legacy_header="  \"$legacy_registry_host\":" '
+                  $0 == legacy_header {
+                    skipping_legacy_mirror = 1
+                    next
+                  }
+                  skipping_legacy_mirror && (/^[^[:space:]]/ || /^  [^[:space:]].*:[[:space:]]*$/) {
+                    skipping_legacy_mirror = 0
+                  }
+                  !skipping_legacy_mirror { print }
+                ' "$REGISTRY_CONFIG" > "$temporary_config"
+            "${sudo_command[@]}" install -o root -g root -m 0600 "$temporary_config" "$REGISTRY_CONFIG"
+            rm -f "$temporary_config"
+            trap - EXIT
+            changed=true
+        fi
+    done
 fi
 
 if [[ "$changed" == "true" ]]; then

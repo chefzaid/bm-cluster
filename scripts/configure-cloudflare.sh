@@ -144,7 +144,7 @@ done
 
 ZONE_NAME="${ZONE_NAME,,}"
 ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
-[[ "$ZONE_NAME" != "${DEFAULT_INTERNAL_DNS_ZONE:-swirlit.local}" ]] || \
+[[ "$ZONE_NAME" != "${DEFAULT_INTERNAL_DNS_ZONE:-swirlit.internal}" ]] || \
     error "$ZONE_NAME is the cluster-only CoreDNS zone and must never be published through Cloudflare."
 [[ "$ZONE_NAME" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
     error "Invalid zone name: $ZONE_NAME"
@@ -843,7 +843,7 @@ set_zone_setting ipv6 on "IPv6 compatibility"
 # This zone serves REST APIs, Git webhooks, CLIs, and CI agents in addition to
 # browsers. Browser Integrity Check challenges legitimate non-browser clients;
 # authentication and Cloudflare's network-level protections remain in place.
-# The cluster-only swirlit.local zone is resolved exclusively by CoreDNS and is
+# The cluster-only swirlit.internal zone is resolved exclusively by CoreDNS and is
 # intentionally absent from every Cloudflare DNS and edge rule.
 set_zone_setting browser_check off "Browser Integrity Check for API compatibility"
 # These HTML-rewriting/content-blocking features are a poor fit for dashboards

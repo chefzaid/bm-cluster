@@ -322,7 +322,7 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/jenkins >/dev
 EOF
 )"
   npmrc="$(cat <<EOF
-registry=http://nexus.swirlit.local:8081/repository/npm-group/
+registry=http://nexus.swirlit.internal:8081/repository/npm-group/
 _auth=$nexus_auth
 EOF
 )"
