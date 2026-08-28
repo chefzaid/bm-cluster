@@ -1,8 +1,48 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: odoo-secret
+  namespace: apps
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: odoo-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: ODOO_DB_USER
+      remoteRef:
+        key: infra/odoo
+        property: database_username
+    - secretKey: ODOO_DB_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: database_password
+    - secretKey: ODOO_ADMIN_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: admin_password
+    - secretKey: ODOO_DATABASE_MASTER_PASSWORD
+      remoteRef:
+        key: infra/odoo
+        property: database_master_password
+    - secretKey: POSTGRES_ADMIN_USER
+      remoteRef:
+        key: infra/postgres
+        property: username
+    - secretKey: POSTGRES_ADMIN_PASSWORD
+      remoteRef:
+        key: infra/postgres
+        property: password
+
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: odoo-data-pvc
-  namespace: infra
+  namespace: apps
   labels:
     app: odoo
 spec:
@@ -18,7 +58,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: odoo
-  namespace: infra
+  namespace: apps
   labels:
     app: odoo
 spec:
@@ -38,7 +78,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: odoo
-  namespace: infra
+  namespace: apps
   labels:
     app: odoo
 spec:
@@ -212,13 +252,13 @@ spec:
             - name: POSTGRES_ADMIN_USER
               valueFrom:
                 secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_USER
+                  name: odoo-secret
+                  key: POSTGRES_ADMIN_USER
             - name: POSTGRES_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-secret
-                  key: POSTGRES_PASSWORD
+                  name: odoo-secret
+                  key: POSTGRES_ADMIN_PASSWORD
             - name: ODOO_DB_USER
               valueFrom:
                 secretKeyRef:
@@ -295,3 +335,63 @@ spec:
         - name: odoo-data
           persistentVolumeClaim:
             claimName: odoo-data-pvc
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-odoo-ingress
+  namespace: apps
+spec:
+  podSelector:
+    matchLabels:
+      app: odoo
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8069
+        - protocol: TCP
+          port: 8072
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: odoo
+  namespace: apps
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - odoo.swirlit.dev
+      secretName: swirlit-dev-tls
+  rules:
+    - host: odoo.swirlit.dev
+      http:
+        paths:
+          - path: /websocket
+            pathType: Prefix
+            backend:
+              service:
+                name: odoo
+                port:
+                  number: 8072
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: odoo
+                port:
+                  number: 8069

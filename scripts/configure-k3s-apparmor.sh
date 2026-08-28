@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROFILE_SOURCE="$SCRIPT_DIR/../apparmor/cri-containerd.apparmor.d"
+PROFILE_SOURCE="$SCRIPT_DIR/../config/apparmor/cri-containerd.apparmor.d"
 PROFILE_TARGET="/etc/apparmor.d/cri-containerd.apparmor.d"
 
 if [[ ! -r "$PROFILE_SOURCE" ]]; then

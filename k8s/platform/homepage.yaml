@@ -20,7 +20,10 @@ metadata:
     app.kubernetes.io/part-of: bm-cluster
 rules:
 - apiGroups: [""]
-  resources: ["namespaces", "nodes", "pods"]
+  resources: ["namespaces", "nodes", "pods", "services"]
+  verbs: ["get", "list"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
   verbs: ["get", "list"]
 - apiGroups: ["metrics.k8s.io"]
   resources: ["nodes", "pods"]
@@ -57,7 +60,7 @@ metadata:
 data:
   kubernetes.yaml: |
     mode: cluster
-    ingress: false
+    ingress: true
 
   settings.yaml: |
     title: Swirlit BM Cluster
@@ -113,27 +116,11 @@ data:
 
   services.yaml: |
     - Applications & Identity:
-        - DevApp:
-            icon: mdi-application-braces-outline
-            href: https://devapp.swirlit.dev
-            description: Public development application
-            namespace: devapp
-            podSelector: app=devapp-web
-        - DevApp User API:
-            icon: mdi-account-cog-outline
-            description: Internal user microservice
-            namespace: devapp
-            podSelector: app=user-app
-        - DevApp Order API:
-            icon: mdi-cart-outline
-            description: Internal order microservice
-            namespace: devapp
-            podSelector: app=order-app
         - Odoo:
             icon: odoo.png
             href: https://odoo.swirlit.dev
             description: ERP and CRM application
-            namespace: infra
+            namespace: apps
             podSelector: app=odoo
         - Keycloak:
             icon: keycloak.png

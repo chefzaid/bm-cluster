@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_SOURCE="$SCRIPT_DIR/../system/multipath-longhorn.conf"
+CONFIG_SOURCE="$SCRIPT_DIR/../config/multipath/multipath-longhorn.conf"
 CONFIG_TARGET="/etc/multipath.conf"
 
 [[ -f "$CONFIG_SOURCE" ]] || { echo "Missing $CONFIG_SOURCE" >&2; exit 1; }

@@ -49,9 +49,9 @@ install_host_unseal_service() {
   sudo install -o root -g root -m 0750 \
     "$REPO_ROOT/scripts/vault-unseal.sh" /usr/local/sbin/bm-vault-unseal
   sudo install -o root -g root -m 0644 \
-    "$REPO_ROOT/systemd/bm-vault-unseal.service" /etc/systemd/system/bm-vault-unseal.service
+    "$REPO_ROOT/config/systemd/bm-vault-unseal.service" /etc/systemd/system/bm-vault-unseal.service
   sudo install -o root -g root -m 0644 \
-    "$REPO_ROOT/systemd/bm-vault-unseal.timer" /etc/systemd/system/bm-vault-unseal.timer
+    "$REPO_ROOT/config/systemd/bm-vault-unseal.timer" /etc/systemd/system/bm-vault-unseal.timer
   sudo systemctl daemon-reload
   sudo systemctl enable --now bm-vault-unseal.timer >/dev/null
 }
@@ -139,11 +139,11 @@ path "secret/metadata/infra/*" {
   capabilities = ["read", "list"]
 }
 
-path "secret/data/devapp/ci" {
+path "secret/data/apps/*" {
   capabilities = ["read"]
 }
 
-path "secret/metadata/devapp/ci" {
+path "secret/metadata/apps/*" {
   capabilities = ["read"]
 }
 EOF

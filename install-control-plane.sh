@@ -30,7 +30,7 @@ fi
 # shellcheck source=scripts/lib/transport-guide.sh
 source "$TRANSPORT_GUIDE_LIBRARY"
 
-DEPLOY_DIR="$SCRIPT_DIR/deployments"
+K8S_DIR="$SCRIPT_DIR/k8s"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
@@ -44,6 +44,7 @@ K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
 TAILSCALE_SCRIPT="$SCRIPT_DIR/scripts/configure-tailscale.sh"
 OVH_VRACK_SCRIPT="$SCRIPT_DIR/scripts/configure-ovh-vrack.sh"
 AUTO_APPROVE=false
+INSTALL_SCOPE="${INSTALL_SCOPE:-apps}"
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 K3S_NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
@@ -92,11 +93,6 @@ IFS=',' read -r -a EXTERNAL_SECRET_NAME_ARRAY <<< "$EXTERNAL_SECRET_NAMES"
 IFS=',' read -r -a DATASTORE_WAIT_APP_ARRAY <<< "$DATASTORE_WAIT_APPS"
 IFS=',' read -r -a PLATFORM_WAIT_APP_ARRAY <<< "$PLATFORM_WAIT_APPS"
 IFS=',' read -r -a PLATFORM_WAIT_DAEMONSET_ARRAY <<< "$PLATFORM_WAIT_DAEMONSETS"
-if [[ -n "${CLOUDFLARE_HOST_LABELS:-}" ]]; then
-    read -r -a CLOUDFLARE_HOST_LABEL_ARRAY <<< "$CLOUDFLARE_HOST_LABELS"
-else
-    IFS=',' read -r -a CLOUDFLARE_HOST_LABEL_ARRAY <<< "$DEFAULT_CLOUDFLARE_HOST_LABELS"
-fi
 
 for arg in "$@"; do
     case "$arg" in
@@ -160,6 +156,45 @@ ask_server_exposure() {
             return 0
         fi
         warn "Please answer 'internet' or 'local'."
+    done
+}
+
+normalize_install_scope() {
+    case "${1,,}" in
+        1|infra|infrastructure|infra-only)
+            printf 'infra\n'
+            ;;
+        2|apps|all|infra+apps)
+            printf 'apps\n'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+select_install_scope() {
+    local default_scope raw_answer normalized
+    default_scope="$(normalize_install_scope "$1")" || error "INSTALL_SCOPE must be infra or apps."
+
+    if [[ "$AUTO_APPROVE" == "true" ]]; then
+        printf '%s\n' "$default_scope"
+        return 0
+    fi
+
+    printf '%s\n' \
+        "Select the deployment scope:" \
+        "  1) infra only" \
+        "  2) infra + apps" \
+        "     - Odoo (ERP/CRM)" >&2
+    while true; do
+        read -rp "Select 1 or 2 [$([[ "$default_scope" == "infra" ]] && printf 1 || printf 2)]: " raw_answer
+        raw_answer="${raw_answer:-$default_scope}"
+        if normalized="$(normalize_install_scope "$raw_answer")"; then
+            printf '%s\n' "$normalized"
+            return 0
+        fi
+        warn "Enter 1 for infra only or 2 for infra + apps." >&2
     done
 }
 
@@ -303,6 +338,16 @@ if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
 else
     info "Local-only mode selected: enabling UFW and control-plane Lynis; skipping Fail2ban and CrowdSec."
 fi
+INSTALL_SCOPE="$(select_install_scope "$INSTALL_SCOPE")"
+if [[ "$INSTALL_SCOPE" == "apps" ]]; then
+    INSTALL_APPS=true
+    DEPLOY_ODOO=true
+    info "Infrastructure and apps selected: deploying Odoo."
+else
+    INSTALL_APPS=false
+    DEPLOY_ODOO=false
+    info "Infrastructure-only installation selected."
+fi
 
 if command -v k3s &>/dev/null; then
     warn "K3s detected: $(k3s --version | head -1)"
@@ -412,7 +457,6 @@ fi
 ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
 ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
 ask_with_default "Deploy/upgrade platform services from the shared inventory?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
-ask_with_default "Deploy/upgrade Odoo (ERP/CRM)?" "Y" && DEPLOY_ODOO=true || DEPLOY_ODOO=false
 ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
 ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
 
@@ -601,22 +645,26 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     step "Creating infra namespace..."
     kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    if [[ "$INSTALL_APPS" == "true" ]]; then
+        step "Creating the shared application namespace..."
+        kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
+    fi
     step "Configuring the cluster-only $DEFAULT_INTERNAL_DNS_ZONE service aliases..."
     for manifest in "${FOUNDATION_MANIFEST_ARRAY[@]}"; do
-        kubectl apply -f "$DEPLOY_DIR/$manifest"
+        kubectl apply -f "$K8S_DIR/$manifest"
     done
-    kubectl apply -f "$DEPLOY_DIR/security-baseline.yaml"
+    kubectl apply -f "$K8S_DIR/base/security-baseline.yaml"
 
     step "Publishing host security policy record..."
-    kubectl apply -f "$DEPLOY_DIR/host-security-config.yaml"
+    kubectl apply -f "$K8S_DIR/base/host-security-config.yaml"
 
     if [[ "$CONFIGURE_CLOUDFLARE" != "true" && ( "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ) ]]; then
         step "Ensuring HTTPS TLS secret..."
-        tls_domains=("$CLOUDFLARE_ZONE")
-        for label in "${CLOUDFLARE_HOST_LABEL_ARRAY[@]}"; do
-            tls_domains+=("$label.$CLOUDFLARE_ZONE")
-        done
+        tls_domains=("$CLOUDFLARE_ZONE" "*.$CLOUDFLARE_ZONE")
         ensure_tls_secret infra swirlit-dev-tls "${tls_domains[@]}"
+        if [[ "$INSTALL_APPS" == "true" ]]; then
+            ensure_tls_secret apps swirlit-dev-tls "${tls_domains[@]}"
+        fi
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
@@ -691,7 +739,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --wait --timeout "$EXTERNAL_SECRETS_HELM_TIMEOUT"
 
         step "Applying unified Vault manifests (ingress, RBAC, and secret sync)..."
-        kubectl apply -f "$DEPLOY_DIR/vault.yaml"
+        kubectl apply -f "$K8S_DIR/platform/vault.yaml"
 
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout="$VAULT_WAIT_TIMEOUT"
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout="$VAULT_WAIT_TIMEOUT"
@@ -709,7 +757,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$DEPLOY_DATA_STORES" == "true" ]]; then
         step "Deploying core data stores..."
         for manifest in "${DATASTORE_MANIFEST_ARRAY[@]}"; do
-            kubectl apply -f "$DEPLOY_DIR/$manifest"
+            kubectl apply -f "$K8S_DIR/$manifest"
         done
 
         for app in "${DATASTORE_WAIT_APP_ARRAY[@]}"; do
@@ -721,14 +769,15 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         step "Deploying platform services..."
         for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
-            kubectl apply -f "$DEPLOY_DIR/$manifest"
+            kubectl apply -f "$K8S_DIR/$manifest"
         done
 
         kubectl rollout status deployment/nexus -n infra --timeout="$NEXUS_WAIT_TIMEOUT"
         [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || error "Nexus registry configurator is not executable: $NEXUS_REGISTRY_SCRIPT"
         step "Configuring the private Nexus image registry and service accounts..."
         "$NEXUS_REGISTRY_SCRIPT"
-        for registry_secret in jenkins-builds/jenkins-registry-auth devapp/devapp-registry-auth; do
+        registry_secrets=(jenkins-builds/jenkins-registry-auth)
+        for registry_secret in "${registry_secrets[@]}"; do
             registry_namespace="${registry_secret%%/*}"
             registry_name="${registry_secret##*/}"
             kubectl wait --for=condition=Ready externalsecret/"$registry_name" \
@@ -744,23 +793,24 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
                 --timeout="$PLATFORM_WAIT_TIMEOUT"
         done
         for manifest in "${POST_DEPLOY_CREATE_MANIFEST_ARRAY[@]}"; do
-            created_resource="$(kubectl create -f "$DEPLOY_DIR/$manifest" -o name)"
+            created_resource="$(kubectl create -f "$K8S_DIR/$manifest" -o name)"
             kubectl wait --for=condition=complete "$created_resource" -n infra \
                 --timeout="$POST_DEPLOY_JOB_WAIT_TIMEOUT"
         done
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
-        step "Deploying Odoo..."
-        kubectl apply -f "$DEPLOY_DIR/odoo.yaml"
-        kubectl apply -f "$DEPLOY_DIR/ingress.yaml"
-        kubectl wait --for=condition=ready pod -l app=odoo -n infra \
+        step "Deploying Odoo in the apps namespace..."
+        kubectl apply -f "$K8S_DIR/apps/odoo.yaml"
+        kubectl wait --for=condition=Ready externalsecret/odoo-secret -n apps \
+            --timeout="$EXTERNAL_SECRET_WAIT_TIMEOUT"
+        kubectl wait --for=condition=ready pod -l app=odoo -n apps \
             --timeout="$PLATFORM_WAIT_TIMEOUT"
     fi
 
     if [[ "$INSTALL_DESCHEDULER" == "true" ]]; then
         step "Installing Descheduler addon resources (manual-run mode)..."
-        kubectl apply -f "$DEPLOY_DIR/descheduler.yaml"
+        kubectl apply -f "$K8S_DIR/addons/descheduler.yaml"
     fi
 
     if [[ "$INSTALL_ARGOCD" == "true" ]]; then
@@ -782,7 +832,7 @@ fi
 
 info ""
 info "============================================="
-info " Infrastructure installation complete!"
+info " Installation complete!"
 info "============================================="
 
 echo ""
@@ -813,9 +863,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo "  Kafka UI: kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_NAME\" | base64decode)}}:{{printf \"%s\" (index .data \"SPRING_SECURITY_USER_PASSWORD\" | base64decode)}}'"
     echo "  Portainer: username admin; password: kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' | base64 -d"
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
-        echo "  Odoo:     username admin; password: kubectl get secret -n infra odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
+        echo "  Odoo:     username admin; password: kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
     fi
-    echo "  Descheduler trigger: kubectl create -f deployments/descheduler-run-job.yaml"
+    echo "  Descheduler trigger: kubectl create -f k8s/addons/descheduler-run-job.yaml"
     echo "  Add workers:          ./install-worker.sh"
     echo "  Worker join token:    sudo cat /var/lib/rancher/k3s/server/node-token"
     echo ""
@@ -825,4 +875,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     echo ""
     echo "Pod status:"
     kubectl get pods -n infra --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
+    if [[ "$INSTALL_APPS" == "true" ]]; then
+        echo ""
+        echo "App pod status:"
+        kubectl get pods -n apps --no-headers 2>&1 | awk '{printf "  %-50s %s\n", $1, $2}'
+    fi
 fi

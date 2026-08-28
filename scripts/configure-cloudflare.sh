@@ -809,8 +809,8 @@ while IFS= read -r namespace; do
     append_unique_namespace "$namespace"
 done < <(kubectl get ingress -A -o json 2>/dev/null | jq -r --arg secret "$TLS_SECRET_NAME" \
     '.items[] | select(any(.spec.tls[]?; .secretName == $secret)) | .metadata.namespace' | sort -u)
-if kubectl get namespace devapp >/dev/null 2>&1; then
-    append_unique_namespace devapp
+if kubectl get namespace apps >/dev/null 2>&1; then
+    append_unique_namespace apps
 fi
 
 for namespace in "${TLS_NAMESPACES[@]}"; do

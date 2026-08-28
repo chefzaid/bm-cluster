@@ -5,6 +5,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLATFORM_CONFIG="$REPOSITORY_ROOT/config/platform.env"
+K8S_ROOT="$REPOSITORY_ROOT/k8s"
 LIVE_VALIDATION=false
 FAILURES=0
 CHECKS=0
@@ -45,6 +46,10 @@ done
 [[ -r "$PLATFORM_CONFIG" ]] || { printf 'Missing platform contract: %s\n' "$PLATFORM_CONFIG" >&2; exit 1; }
 # shellcheck source=../config/platform.env
 source "$PLATFORM_CONFIG"
+
+mapfile -d '' -t kubernetes_manifests < <(
+    find "$K8S_ROOT" -type f -name '*.yaml' -print0 | LC_ALL=C sort -z
+)
 
 csv_to_file() {
     local value="$1" destination="$2"
@@ -158,7 +163,7 @@ fi
 if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
    [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus.swirlit.internal:5000" ]] &&
    grep -Fq 'name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto' \
-       "$REPOSITORY_ROOT/deployments/coredns-custom.yaml" &&
+       "$K8S_ROOT/base/coredns-custom.yaml" &&
    [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
     pass "cluster-only internal DNS and node registry alias contracts are complete"
 else
@@ -198,7 +203,7 @@ manifest_inventory_failed=false
 for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS"; do
     IFS=',' read -r -a manifests <<< "$manifest_csv"
     for manifest in "${manifests[@]}"; do
-        if [[ ! -f "$REPOSITORY_ROOT/deployments/$manifest" ]]; then
+        if [[ ! -f "$K8S_ROOT/$manifest" ]]; then
             printf 'Contract references missing manifest: %s\n' "$manifest" >&2
             manifest_inventory_failed=true
         fi
@@ -261,7 +266,6 @@ fi
 info "Checking public service inventories"
 csv_to_file "$DEFAULT_CLOUDFLARE_HOST_LABELS" "$TEMP_DIR/public-hosts"
 csv_to_file "$DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS" "$TEMP_DIR/access-hosts"
-csv_to_file "$EXTERNALLY_MANAGED_HOST_LABELS" "$TEMP_DIR/external-hosts"
 
 if [[ -s "$TEMP_DIR/access-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/access-hosts" "$TEMP_DIR/public-hosts")" ]]; then
     fail "Cloudflare Access hosts are a subset of published hosts"
@@ -269,16 +273,15 @@ else
     pass "Cloudflare Access hosts are a subset of published hosts"
 fi
 
-sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$REPOSITORY_ROOT/deployments/homepage.yaml" |
+sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
     awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" 'index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"
 compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every published cluster hostname"
 
-comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/external-hosts" > "$TEMP_DIR/local-public-hosts"
-sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "$REPOSITORY_ROOT"/deployments/*.yaml |
+sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "${kubernetes_manifests[@]}" |
     awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" '$0 != zone && index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/ingress-hosts"
-compare_sets "$TEMP_DIR/local-public-hosts" "$TEMP_DIR/ingress-hosts" "repository-owned public hosts have matching Ingress resources"
+compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/ingress-hosts" "repository-owned public hosts have matching Ingress resources"
 
 info "Checking Kubernetes workload policy"
 image_failed=false
@@ -287,7 +290,7 @@ while read -r location image; do
         printf 'Unpinned workload image at %s: %s\n' "$location" "$image" >&2
         image_failed=true
     fi
-done < <(awk '$1 == "image:" {print FILENAME ":" FNR, $2}' "$REPOSITORY_ROOT"/deployments/*.yaml)
+done < <(awk '$1 == "image:" {print FILENAME ":" FNR, $2}' "${kubernetes_manifests[@]}")
 if [[ "$image_failed" == "true" ]]; then
     fail "every manifest image is immutable by digest"
 else
@@ -308,17 +311,17 @@ if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&
         pass "all repository YAML documents parse"
     fi
 
-    if python3 - "$REPOSITORY_ROOT/deployments" > "$TEMP_DIR/workload-policy" <<'PY'
+    if python3 - "$K8S_ROOT" > "$TEMP_DIR/workload-policy" <<'PY'
 from pathlib import Path
 import sys
 
 import yaml
 
-deployments = Path(sys.argv[1])
+k8s_root = Path(sys.argv[1])
 workload_kinds = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 failures = []
 
-for manifest in sorted(deployments.glob("*.yaml")):
+for manifest in sorted(k8s_root.rglob("*.yaml")):
     for document_index, resource in enumerate(yaml.safe_load_all(manifest.read_text(encoding="utf-8")), 1):
         if not isinstance(resource, dict) or resource.get("kind") not in workload_kinds:
             continue
@@ -326,7 +329,7 @@ for manifest in sorted(deployments.glob("*.yaml")):
         kind = resource["kind"]
         metadata = resource.get("metadata") or {}
         name = metadata.get("name", f"document-{document_index}")
-        identity = f"{manifest.name}:{kind}/{name}"
+        identity = f"{manifest.relative_to(k8s_root)}:{kind}/{name}"
         spec = resource.get("spec") or {}
         if kind == "CronJob":
             pod_spec = (((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
@@ -401,7 +404,7 @@ if [[ "$LIVE_VALIDATION" == "true" ]]; then
             else
                 kubectl apply --dry-run=server -f "$manifest" >/dev/null || live_failed=true
             fi
-        done < <(find "$REPOSITORY_ROOT/deployments" -maxdepth 1 -type f -name '*.yaml' -print | LC_ALL=C sort)
+        done < <(printf '%s\n' "${kubernetes_manifests[@]}")
         if [[ "$live_failed" == "true" ]]; then
             fail "all manifests pass Kubernetes server-side dry-run"
         else

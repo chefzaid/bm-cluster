@@ -8,7 +8,7 @@ VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
 REGISTRY_REPOSITORY="${REGISTRY_REPOSITORY:-docker-hosted}"
 PUSH_USERNAME="${PUSH_USERNAME:-jenkins-registry}"
-PULL_USERNAME="${PULL_USERNAME:-devapp-registry}"
+PULL_USERNAME="${PULL_USERNAME:-cluster-registry}"
 DEPENDENCY_USERNAME="${DEPENDENCY_USERNAME:-jenkins-dependencies}"
 
 info() { printf '[INFO] %s\n' "$*"; }
@@ -172,12 +172,12 @@ configure_role() {
   expect_status "$status" "role $role_id"
 }
 
-configure_role nx-devapp-registry-push "Push only to the DevApp private registry" \
+configure_role nx-registry-push "Publish images to the private registry" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-add" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-browse" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-edit" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-read"
-configure_role nx-devapp-registry-pull "Pull only from the DevApp private registry" \
+configure_role nx-registry-pull "Pull images from the private registry" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-browse" \
   "nx-repository-view-docker-$REGISTRY_REPOSITORY-read"
 configure_role nx-jenkins-dependency-read "Read build dependencies through Nexus groups" \
@@ -213,8 +213,8 @@ configure_user() {
   expect_status "$status" "password for service account $user_id"
 }
 
-configure_user "$PUSH_USERNAME" "$push_password" nx-devapp-registry-push
-configure_user "$PULL_USERNAME" "$pull_password" nx-devapp-registry-pull
+configure_user "$PUSH_USERNAME" "$push_password" nx-registry-push
+configure_user "$PULL_USERNAME" "$pull_password" nx-registry-pull
 configure_user "$DEPENDENCY_USERNAME" "$dependency_password" nx-jenkins-dependency-read
 
 nexus_get security/realms/active | jq 'if index("DockerToken") then . else .+["DockerToken"] end' > "$work_dir/realms.json"

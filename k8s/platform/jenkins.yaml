@@ -120,32 +120,6 @@ subjects:
     namespace: infra
 
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: jenkins-devapp-argocd
-  namespace: infra
-rules:
-  - apiGroups: ["argoproj.io"]
-    resources: ["applications"]
-    resourceNames: ["devapp"]
-    verbs: ["get", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: jenkins-devapp-argocd
-  namespace: infra
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: jenkins-devapp-argocd
-subjects:
-  - kind: ServiceAccount
-    name: jenkins-agent
-    namespace: jenkins-builds
-
----
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  swirlit.override: |
+    # Cluster services outside Infra require exact aliases before the suffix rule.
+    rewrite stop name exact longhorn.swirlit.internal. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
+    rewrite stop name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto

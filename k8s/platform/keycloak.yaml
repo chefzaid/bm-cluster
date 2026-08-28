@@ -79,7 +79,7 @@ spec:
               name: postgres-secret
               key: POSTGRES_PASSWORD
         - name: KC_HOSTNAME
-          value: "https://devapp.swirlit.dev/auth"
+          value: "https://keycloak.swirlit.dev/auth"
         - name: KC_HOSTNAME_ADMIN
           value: "https://keycloak.swirlit.dev/auth"
         - name: KC_HTTP_RELATIVE_PATH

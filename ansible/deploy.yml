@@ -6,8 +6,9 @@
 
   vars:
     infra_namespace: infra
+    apps_namespace: apps
     repository_root: "{{ playbook_dir }}/.."
-    k8s_dir: "{{ repository_root }}/deployments"
+    k8s_dir: "{{ repository_root }}/k8s"
     platform_config_file: "{{ repository_root }}/config/platform.env"
 
     platform_contract_version: >-
@@ -108,7 +109,8 @@
     vault_stack_enabled: "{{ install_vault_stack | default(true) | bool }}"
     data_stores_enabled: "{{ deploy_data_stores | default(true) | bool }}"
     platform_services_enabled: "{{ deploy_platform_services | default(true) | bool }}"
-    odoo_enabled: "{{ install_odoo | default(true) | bool }}"
+    apps_enabled: "{{ install_apps | default(true) | bool }}"
+    odoo_enabled: "{{ apps_enabled and (install_odoo | default(true) | bool) }}"
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
     argocd_enabled: "{{ install_argocd | default(true) | bool }}"
 
@@ -123,7 +125,7 @@
     - name: Validate the shared platform contract
       ansible.builtin.assert:
         that:
-          - platform_contract_version == '1'
+          - platform_contract_version == '3'
           - server_exposure_mode in ['internet', 'local']
         fail_msg: "The platform contract or server_exposure value is invalid."
 
@@ -251,6 +253,12 @@
       register: namespace_apply
       changed_when: "'created' in namespace_apply.stdout or 'configured' in namespace_apply.stdout"
 
+    - name: Ensure the shared application namespace exists
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/apps-namespace.yaml
+      register: apps_namespace_apply
+      changed_when: "'created' in apps_namespace_apply.stdout or 'configured' in apps_namespace_apply.stdout"
+      when: apps_enabled
+
     - name: Configure K3s containerd for the internal registry alias
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-registry-mirror.sh"
 
@@ -272,7 +280,7 @@
       changed_when: "'not labeled' not in node_labels.stdout"
 
     - name: Apply Kubernetes admission and namespace security baseline
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/security-baseline.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/security-baseline.yaml
       register: security_baseline_apply
       changed_when: "'created' in security_baseline_apply.stdout or 'configured' in security_baseline_apply.stdout"
 
@@ -293,7 +301,7 @@
       when: host_security_enabled
 
     - name: Publish host security policy record to Kubernetes
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/host-security-config.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/host-security-config.yaml
       register: host_security_config_apply
       changed_when: "'created' in host_security_config_apply.stdout or 'configured' in host_security_config_apply.stdout"
 
@@ -402,7 +410,7 @@
       when: vault_stack_effective
 
     - name: Apply unified Vault resources
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/vault.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/platform/vault.yaml
       register: vault_resources_apply
       changed_when: "'created' in vault_resources_apply.stdout or 'configured' in vault_resources_apply.stdout"
       when: vault_stack_effective
@@ -473,7 +481,6 @@
         -n {{ item.namespace }} --timeout={{ external_secret_wait_timeout }}
       loop:
         - {namespace: jenkins-builds, name: jenkins-registry-auth}
-        - {namespace: devapp, name: devapp-registry-auth}
       changed_when: false
       when: platform_services_enabled
 
@@ -508,23 +515,27 @@
       when: platform_services_enabled
 
     - name: Deploy Odoo and its ingress
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
-      loop:
-        - odoo.yaml
-        - ingress.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/odoo.yaml
       register: odoo_apply
       changed_when: "'created' in odoo_apply.stdout or 'configured' in odoo_apply.stdout"
+      when: odoo_enabled
+
+    - name: Wait for Odoo secrets
+      ansible.builtin.command: >-
+        kubectl wait --for=condition=Ready externalsecret/odoo-secret
+        -n {{ apps_namespace }} --timeout={{ external_secret_wait_timeout }}
+      changed_when: false
       when: odoo_enabled
 
     - name: Wait for Odoo
       ansible.builtin.command: >-
         kubectl wait --for=condition=ready pod -l app=odoo
-        -n {{ infra_namespace }} --timeout={{ platform_wait_timeout }}
+        -n {{ apps_namespace }} --timeout={{ platform_wait_timeout }}
       changed_when: false
       when: odoo_enabled
 
     - name: Install Descheduler resources
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/descheduler.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/addons/descheduler.yaml
       register: descheduler_apply
       changed_when: "'created' in descheduler_apply.stdout or 'configured' in descheduler_apply.stdout"
       when: descheduler_enabled

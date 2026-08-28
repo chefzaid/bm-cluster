@@ -14,8 +14,8 @@ fi
 
 sudo install -d -o root -g root -m 0700 /var/backups/bm-cluster/k3s
 sudo install -o root -g root -m 0750 "$REPO_ROOT/scripts/backup-k3s.sh" /usr/local/sbin/bm-k3s-backup
-sudo install -o root -g root -m 0644 "$REPO_ROOT/systemd/bm-k3s-backup.service" /etc/systemd/system/bm-k3s-backup.service
-sudo install -o root -g root -m 0644 "$REPO_ROOT/systemd/bm-k3s-backup.timer" /etc/systemd/system/bm-k3s-backup.timer
+sudo install -o root -g root -m 0644 "$REPO_ROOT/config/systemd/bm-k3s-backup.service" /etc/systemd/system/bm-k3s-backup.service
+sudo install -o root -g root -m 0644 "$REPO_ROOT/config/systemd/bm-k3s-backup.timer" /etc/systemd/system/bm-k3s-backup.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now bm-k3s-backup.timer >/dev/null
 sudo systemctl start bm-k3s-backup.service
