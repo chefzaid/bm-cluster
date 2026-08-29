@@ -44,8 +44,6 @@
       {{ lookup('ansible.builtin.ini', 'DEFAULT_DATASTORE_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
     platform_wait_timeout: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_PLATFORM_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
-    nexus_wait_timeout: >-
-      {{ lookup('ansible.builtin.ini', 'DEFAULT_NEXUS_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
     post_deploy_job_wait_timeout: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
 
@@ -57,6 +55,8 @@
       {{ lookup('ansible.builtin.ini', 'PLATFORM_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
     post_deploy_create_manifests: >-
       {{ lookup('ansible.builtin.ini', 'POST_DEPLOY_CREATE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+    post_argocd_manifests: >-
+      {{ lookup('ansible.builtin.ini', 'POST_ARGOCD_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
     external_secret_names: >-
       {{ lookup('ansible.builtin.ini', 'EXTERNAL_SECRET_NAMES type=properties file=' ~ platform_config_file) | split(',') }}
     datastore_wait_apps: >-
@@ -113,6 +113,7 @@
     odoo_enabled: "{{ apps_enabled and (install_odoo | default(true) | bool) }}"
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
     argocd_enabled: "{{ install_argocd | default(true) | bool }}"
+    gitlab_admin_token: "{{ lookup('ansible.builtin.env', 'GITLAB_ADMIN_TOKEN') }}"
 
     data_stores_effective: "{{ data_stores_enabled or platform_services_enabled or odoo_enabled }}"
     vault_stack_effective: "{{ vault_stack_enabled or data_stores_effective }}"
@@ -464,26 +465,6 @@
       changed_when: "'created' in platform_apply.stdout or 'configured' in platform_apply.stdout"
       when: platform_services_enabled
 
-    - name: Wait for Nexus before configuring the private registry
-      ansible.builtin.command: >-
-        kubectl rollout status deployment/nexus
-        -n {{ infra_namespace }} --timeout={{ nexus_wait_timeout }}
-      changed_when: false
-      when: platform_services_enabled
-
-    - name: Configure the private Nexus registry and service accounts
-      ansible.builtin.command: "{{ repository_root }}/scripts/configure-nexus-registry.sh"
-      when: platform_services_enabled
-
-    - name: Wait for registry credentials
-      ansible.builtin.command: >-
-        kubectl wait --for=condition=Ready externalsecret/{{ item.name }}
-        -n {{ item.namespace }} --timeout={{ external_secret_wait_timeout }}
-      loop:
-        - {namespace: jenkins-builds, name: jenkins-registry-auth}
-      changed_when: false
-      when: platform_services_enabled
-
     - name: Wait for platform pods
       ansible.builtin.command: >-
         kubectl wait --for=condition=ready pod -l app={{ item }}
@@ -513,6 +494,20 @@
       loop: "{{ post_deploy_jobs.results }}"
       changed_when: false
       when: platform_services_enabled
+
+    - name: Configure the bm-cluster GitLab project and Kubernetes runner
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-gitlab-ci.sh"
+      no_log: true
+      when:
+        - platform_services_enabled
+        - gitlab_admin_token | length > 0
+
+    - name: Explain deferred GitLab runner activation
+      ansible.builtin.debug:
+        msg: Set GITLAB_ADMIN_TOKEN and run scripts/configure-gitlab-ci.sh to activate the instance runner.
+      when:
+        - platform_services_enabled
+        - gitlab_admin_token | length == 0
 
     - name: Deploy Odoo and its ingress
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/odoo.yaml
@@ -550,6 +545,13 @@
         --set 'configs.params.server\.insecure=true'
         --set redis.enabled=true
         --wait --timeout {{ argocd_helm_timeout }}
+      when: argocd_enabled
+
+    - name: Apply GitLab-backed Argo CD applications
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
+      loop: "{{ post_argocd_manifests }}"
+      register: argocd_applications_apply
+      changed_when: "'created' in argocd_applications_apply.stdout or 'configured' in argocd_applications_apply.stdout"
       when: argocd_enabled
 
     - name: Read final infrastructure pod status

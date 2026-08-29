@@ -10,7 +10,7 @@ Odoo.
 - K3s, NGINX Ingress, Longhorn, and the Descheduler addon
 - Vault and External Secrets Operator
 - PostgreSQL, MongoDB, Redis, and Kafka in KRaft mode
-- Keycloak, GitLab, Jenkins, ArgoCD, Nexus, and SonarQube
+- Keycloak, GitLab CI/CD, GitLab Container and Package Registries, ArgoCD, and SonarQube
 - Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
 - Homepage service catalog and Kubernetes status dashboard
@@ -73,10 +73,51 @@ use their canonical Kubernetes DNS names.
 
 The zone is cluster-only: it is not published by Cloudflare and is not expected
 to resolve on the public Internet or from ordinary host tools. K3s/containerd
-uses `nexus.swirlit.internal:5000` through its node-local registry mirror,
-whose endpoint is the Nexus ClusterIP. Kubernetes API endpoints retain their
-canonical `kubernetes.default.svc` identity because that name is covered by the
-API server certificate.
+maps `registry.swirlit.dev` to a fixed internal Registry service endpoint. The
+Dependency Proxy retains its canonical `gitlab.swirlit.dev` HTTPS route because
+containerd's mirror query parameter interferes with GitLab Workhorse cache
+uploads. Kubernetes API endpoints retain their canonical
+`kubernetes.default.svc` identity because that name is covered by the API server
+certificate.
+
+Public Docker clients also use `registry.swirlit.dev`. Cloudflare reconciliation
+keeps the hostname proxied but prevents browser-only bot challenges from
+intercepting the Registry API: basic Bot Fight Mode is disabled because it has
+no hostname exceptions, while Super Bot Fight Mode is skipped only for the
+Registry hostname. Custom WAF rules, rate limiting, strict TLS, and Cloudflare
+DDoS protection remain enabled. The setup token therefore needs `Bot Management
+Read` and `Bot Management Edit` zone permissions in addition to the permissions
+printed by the configurator.
+
+### GitLab delivery
+
+The infrastructure repository lives at `infrastructure/bm-cluster` in GitLab.
+Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
+`gitlab-runners` namespace. The default branch is continuously reconciled by
+the `bm-cluster` Argo CD Application; application manifests under `k8s/apps`
+remain outside this infrastructure GitOps boundary.
+
+GitLab stores private OCI images at `registry.swirlit.dev` and private Maven,
+npm, and NuGet artifacts in each project's Package Registry. CI base images
+are pulled through the Infrastructure group's GitLab Dependency Proxy by using
+`CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX`. Public language dependencies resolve
+directly from Maven Central, npm, and NuGet.org and are retained in the runner's
+persistent 5 GiB build cache. This provides practical reuse without operating a
+separate repository manager.
+
+GitLab and the runner expose Prometheus metrics through pod annotations. The
+provisioned GitLab Delivery dashboard is loaded by Grafana, and Fluent Bit ships
+their JSON container logs into the existing Elasticsearch/Kibana pipeline.
+
+Create an administrator API token for the one-time project/runner bootstrap,
+then run:
+
+```bash
+GITLAB_ADMIN_TOKEN='...' ./scripts/configure-gitlab-ci.sh
+```
+
+The script creates or reconciles the group, project, Dependency Proxy, and
+instance runner, then stores only the runner authentication token in Vault.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `k8s/platform/homepage.yaml`. Both
@@ -234,10 +275,8 @@ repository:
 | DBGate | Secret value | `kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf "%s:%s" (index .data "LOGIN" \| base64decode) (index .data "PASSWORD" \| base64decode)}}'` |
 | GitLab | `root` | `kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` |
 | Grafana | `admin` | `kubectl get secret -n infra grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' \| base64 -d` |
-| Jenkins | `admin` | `kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword` |
 | Kafka UI | Secret value | `kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf "%s:%s" (index .data "SPRING_SECURITY_USER_NAME" \| base64decode) (index .data "SPRING_SECURITY_USER_PASSWORD" \| base64decode)}}'` |
 | Keycloak | Secret value | `kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' \| base64 -d` |
-| Nexus | `admin` | `kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password` |
 | Odoo | `admin` | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
 | Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
 | SonarQube | `admin` | Initial password: `admin` |
@@ -371,9 +410,10 @@ Ansible, YAML, immutable image references, and hostname inventories:
 ./scripts/validate-repository.sh --live # server-side dry-run; no mutation
 ```
 
-The same checks run on every pull request and push to `main`. EditorConfig and
-Git attributes keep text formatting portable, while Dependabot proposes updates
-to the workflow's immutable action pins.
+The same checks run in GitLab for every merge request and branch push; default
+branch pipelines also verify Argo CD reconciliation, GitLab Registry health,
+Prometheus targets, the Grafana dashboard, and GitLab logs in Elasticsearch.
+EditorConfig and Git attributes keep text formatting portable.
 
 ## Repository layout
 
@@ -395,8 +435,8 @@ to the workflow's immutable action pins.
 | `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
-| `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for `nexus.swirlit.internal` |
-| `scripts/configure-nexus-registry.sh` | Private image registry, roles, accounts, and Vault credentials |
+| `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for GitLab Container Registry |
+| `scripts/configure-gitlab-ci.sh` | GitLab group, project, Dependency Proxy, instance runner, and Vault token reconciliation |
 | `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
 | `scripts/lib/transport-guide.sh` | Shared guided vRack/Tailscale account prerequisites and verification |

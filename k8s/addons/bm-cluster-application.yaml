@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bm-cluster
+  namespace: infra
+spec:
+  project: default
+  source:
+    repoURL: http://gitlab.swirlit.internal/infrastructure/bm-cluster.git
+    targetRevision: main
+    path: k8s
+    directory:
+      recurse: true
+      exclude: '{apps/**,addons/descheduler-run-job.yaml,platform/portainer-bootstrap-job.yaml}'
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: infra
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+  revisionHistoryLimit: 10

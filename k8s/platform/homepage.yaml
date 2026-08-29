@@ -139,21 +139,15 @@ data:
         - GitLab:
             icon: gitlab.png
             href: https://gitlab.swirlit.dev
-            description: Git repositories and collaboration
+            description: Source control, CI/CD, and package artifacts
             namespace: infra
             podSelector: app=gitlab
-        - Jenkins:
-            icon: jenkins.png
-            href: https://jenkins.swirlit.dev
-            description: CI pipelines and build agents
+        - GitLab Container Registry:
+            icon: gitlab.png
+            href: https://registry.swirlit.dev/v2/
+            description: Private OCI image storage
             namespace: infra
-            podSelector: app=jenkins
-        - Nexus Repository:
-            icon: nexus.png
-            href: https://nexus.swirlit.dev
-            description: Package and container artifacts
-            namespace: infra
-            podSelector: app=nexus
+            podSelector: app=gitlab
         - SonarQube:
             icon: sonarqube.png
             href: https://sonarqube.swirlit.dev

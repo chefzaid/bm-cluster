@@ -36,7 +36,7 @@ SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
 WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
-NEXUS_REGISTRY_SCRIPT="$SCRIPT_DIR/scripts/configure-nexus-registry.sh"
+GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
@@ -81,7 +81,6 @@ EXTERNAL_SECRET_WAIT_TIMEOUT="${EXTERNAL_SECRET_WAIT_TIMEOUT:-$DEFAULT_EXTERNAL_
 ARGOCD_HELM_TIMEOUT="${ARGOCD_HELM_TIMEOUT:-$DEFAULT_ARGOCD_HELM_TIMEOUT}"
 DATASTORE_WAIT_TIMEOUT="${DATASTORE_WAIT_TIMEOUT:-$DEFAULT_DATASTORE_WAIT_TIMEOUT}"
 PLATFORM_WAIT_TIMEOUT="${PLATFORM_WAIT_TIMEOUT:-$DEFAULT_PLATFORM_WAIT_TIMEOUT}"
-NEXUS_WAIT_TIMEOUT="${NEXUS_WAIT_TIMEOUT:-$DEFAULT_NEXUS_WAIT_TIMEOUT}"
 POST_DEPLOY_JOB_WAIT_TIMEOUT="${POST_DEPLOY_JOB_WAIT_TIMEOUT:-$DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT}"
 CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
 
@@ -89,6 +88,7 @@ IFS=',' read -r -a FOUNDATION_MANIFEST_ARRAY <<< "$FOUNDATION_MANIFESTS"
 IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
 IFS=',' read -r -a PLATFORM_MANIFEST_ARRAY <<< "$PLATFORM_MANIFESTS"
 IFS=',' read -r -a POST_DEPLOY_CREATE_MANIFEST_ARRAY <<< "$POST_DEPLOY_CREATE_MANIFESTS"
+IFS=',' read -r -a POST_ARGOCD_MANIFEST_ARRAY <<< "$POST_ARGOCD_MANIFESTS"
 IFS=',' read -r -a EXTERNAL_SECRET_NAME_ARRAY <<< "$EXTERNAL_SECRET_NAMES"
 IFS=',' read -r -a DATASTORE_WAIT_APP_ARRAY <<< "$DATASTORE_WAIT_APPS"
 IFS=',' read -r -a PLATFORM_WAIT_APP_ARRAY <<< "$PLATFORM_WAIT_APPS"
@@ -772,18 +772,6 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             kubectl apply -f "$K8S_DIR/$manifest"
         done
 
-        kubectl rollout status deployment/nexus -n infra --timeout="$NEXUS_WAIT_TIMEOUT"
-        [[ -x "$NEXUS_REGISTRY_SCRIPT" ]] || error "Nexus registry configurator is not executable: $NEXUS_REGISTRY_SCRIPT"
-        step "Configuring the private Nexus image registry and service accounts..."
-        "$NEXUS_REGISTRY_SCRIPT"
-        registry_secrets=(jenkins-builds/jenkins-registry-auth)
-        for registry_secret in "${registry_secrets[@]}"; do
-            registry_namespace="${registry_secret%%/*}"
-            registry_name="${registry_secret##*/}"
-            kubectl wait --for=condition=Ready externalsecret/"$registry_name" \
-                -n "$registry_namespace" --timeout="$EXTERNAL_SECRET_WAIT_TIMEOUT"
-        done
-
         for app in "${PLATFORM_WAIT_APP_ARRAY[@]}"; do
             kubectl wait --for=condition=ready pod -l "app=$app" -n infra \
                 --timeout="$PLATFORM_WAIT_TIMEOUT"
@@ -797,6 +785,14 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             kubectl wait --for=condition=complete "$created_resource" -n infra \
                 --timeout="$POST_DEPLOY_JOB_WAIT_TIMEOUT"
         done
+
+        if [[ -n "${GITLAB_ADMIN_TOKEN:-}" ]]; then
+            [[ -x "$GITLAB_CI_SCRIPT" ]] || error "GitLab CI configurator is not executable: $GITLAB_CI_SCRIPT"
+            step "Configuring the bm-cluster GitLab project and Kubernetes runner..."
+            "$GITLAB_CI_SCRIPT"
+        else
+            warn "GITLAB_ADMIN_TOKEN is unset; run scripts/configure-gitlab-ci.sh after installation to activate the instance runner."
+        fi
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
@@ -825,6 +821,11 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set configs.params."server\\.insecure"=true \
             --set redis.enabled=true \
             --wait --timeout "$ARGOCD_HELM_TIMEOUT"
+
+        step "Applying GitLab-backed Argo CD applications..."
+        for manifest in "${POST_ARGOCD_MANIFEST_ARRAY[@]}"; do
+            kubectl apply -f "$K8S_DIR/$manifest"
+        done
     fi
 else
     warn "All Kubernetes feature groups were skipped."
@@ -853,9 +854,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     echo ""
     echo "Retrieve credentials:"
-    echo "  Jenkins:  kubectl exec -n infra deployment/jenkins -- cat /var/jenkins_home/secrets/initialAdminPassword"
     echo "  ArgoCD:   kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
-    echo "  Nexus:    kubectl exec -n infra deployment/nexus -- cat /nexus-data/admin.password"
     echo "  GitLab:   kubectl exec -n infra deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
     echo "  MongoDB:  kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"
     echo "  Vault:    sudo cat /var/lib/bm-cluster/vault-bootstrap-token"

@@ -8,9 +8,9 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
     source "$PLATFORM_CONFIG"
 fi
 
-REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-nexus.swirlit.internal:5000}}"
-REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.250:5000}}"
-LEGACY_REGISTRY_HOSTS="${K3S_LEGACY_REGISTRY_HOSTS:-${K3S_LEGACY_REGISTRY_HOST:-nexus-registry.infra.svc.cluster.local:5000}}"
+REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-registry.swirlit.dev}}"
+REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.251:5050}}"
+REMOVED_REGISTRY_HOSTS="${K3S_REMOVED_REGISTRY_HOSTS:-gitlab.swirlit.dev}"
 RETAIN_LEGACY_REGISTRY="${K3S_RETAIN_LEGACY_REGISTRY:-false}"
 REGISTRY_CONFIG="${K3S_REGISTRY_CONFIG:-/etc/rancher/k3s/registries.yaml}"
 sudo_command=()
@@ -58,7 +58,9 @@ elif ! "${sudo_command[@]}" grep -Fq "\"$REGISTRY_HOST\"" "$REGISTRY_CONFIG"; th
 fi
 
 if [[ "$RETAIN_LEGACY_REGISTRY" == "false" ]]; then
-    IFS=',' read -r -a legacy_registry_hosts <<< "$LEGACY_REGISTRY_HOSTS"
+    # Dependency Proxy requests must retain their canonical URL. A containerd
+    # mirror adds an ns= query parameter that breaks GitLab Workhorse uploads.
+    IFS=',' read -r -a legacy_registry_hosts <<< "$REMOVED_REGISTRY_HOSTS"
     for legacy_registry_host in "${legacy_registry_hosts[@]}"; do
         [[ -n "$legacy_registry_host" && "$legacy_registry_host" != "$REGISTRY_HOST" ]] || continue
         if "${sudo_command[@]}" grep -Fq "\"$legacy_registry_host\"" "$REGISTRY_CONFIG"; then
@@ -100,7 +102,7 @@ if [[ "$changed" == "true" ]]; then
             break
         fi
     done
-    info "Configured the K3s registry mirror for $REGISTRY_HOST"
+    info "Configured the K3s mirror for $REGISTRY_HOST"
 else
-    info "K3s registry mirror is already configured for $REGISTRY_HOST"
+    info "The K3s mirror is already configured for $REGISTRY_HOST"
 fi

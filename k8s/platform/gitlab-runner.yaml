@@ -1,0 +1,346 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-runner-manager
+  namespace: gitlab-runners
+automountServiceAccountToken: true
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-ci-job
+  namespace: gitlab-runners
+automountServiceAccountToken: true
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitlab-runner-manager
+  namespace: gitlab-runners
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "events", "pods", "pods/attach", "pods/exec", "pods/log", "secrets", "serviceaccounts", "services"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-runner-manager
+  namespace: gitlab-runners
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitlab-runner-manager
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-runner-manager
+    namespace: gitlab-runners
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gitlab-application-delivery
+  namespace: infra
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["create", "get", "list", "patch", "update", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-application-delivery
+  namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: gitlab-application-delivery
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-ci-job
+    namespace: gitlab-runners
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: gitlab-runner-token
+  namespace: gitlab-runners
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: gitlab-runner-token
+    creationPolicy: Owner
+  data:
+    - secretKey: runner-token
+      remoteRef:
+        key: infra/gitlab
+        property: runner_token
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-runner-cache
+  namespace: gitlab-runners
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-runner-config
+  namespace: gitlab-runners
+data:
+  config.template.toml: |
+    concurrent = 2
+    check_interval = 3
+    shutdown_timeout = 30
+    listen_address = ":9252"
+    log_format = "json"
+
+    [[runners]]
+      name = "bm-cluster-kubernetes"
+      url = "http://gitlab.swirlit.internal"
+      clone_url = "http://gitlab.swirlit.internal"
+      token = "__RUNNER_TOKEN__"
+      executor = "kubernetes"
+      request_concurrency = 2
+      environment = ["FF_USE_POD_ACTIVE_DEADLINE_SECONDS=true"]
+
+      [runners.kubernetes]
+        namespace = "gitlab-runners"
+        service_account = "gitlab-ci-job"
+        image = "docker.io/alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
+        pull_policy = ["if-not-present"]
+        privileged = false
+        poll_timeout = 600
+        cpu_request = "100m"
+        memory_request = "128Mi"
+        cpu_limit = "2"
+        memory_limit = "2Gi"
+        helper_cpu_request = "50m"
+        helper_memory_request = "64Mi"
+        helper_cpu_limit = "500m"
+        helper_memory_limit = "512Mi"
+        service_cpu_request = "50m"
+        service_memory_request = "64Mi"
+        service_cpu_limit = "1"
+        service_memory_limit = "1Gi"
+
+        [runners.kubernetes.pod_labels]
+          "app" = "gitlab-ci-job"
+          "app.kubernetes.io/managed-by" = "gitlab-runner"
+
+        [[runners.kubernetes.volumes.pvc]]
+          name = "gitlab-runner-cache"
+          mount_path = "/cache"
+          read_only = false
+          mount_propagation = "None"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab-runner
+  namespace: gitlab-runners
+  labels:
+    app: gitlab-runner
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gitlab-runner
+  template:
+    metadata:
+      labels:
+        app: gitlab-runner
+      annotations:
+        gitlab.swirlit.dev/config-version: "2"
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9252"
+    spec:
+      serviceAccountName: gitlab-runner-manager
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 100
+        fsGroup: 100
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gitlab-runner
+          image: docker.io/gitlab/gitlab-runner@sha256:058d98c08c777f216ee148d5b72215029202784774ec153b7c29b29651a7a444
+          command: ["/bin/sh", "-ceu"]
+          args:
+            - |
+              install -d -m 0700 /home/gitlab-runner/.gitlab-runner
+              sed "s|__RUNNER_TOKEN__|${RUNNER_TOKEN}|g" /config/config.template.toml > /home/gitlab-runner/.gitlab-runner/config.toml
+              exec gitlab-runner run --user=gitlab-runner --working-directory=/home/gitlab-runner
+          env:
+            - name: RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gitlab-runner-token
+                  key: runner-token
+          ports:
+            - name: metrics
+              containerPort: 9252
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: home
+              mountPath: /home/gitlab-runner
+      volumes:
+        - name: config
+          configMap:
+            name: gitlab-runner-config
+        - name: home
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-runner-metrics
+  namespace: gitlab-runners
+  labels:
+    app: gitlab-runner
+spec:
+  selector:
+    app: gitlab-runner
+  ports:
+    - name: metrics
+      port: 9252
+      targetPort: metrics
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-gitlab-delivery-dashboard
+  namespace: infra
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Applications
+data:
+  gitlab-delivery.json: |
+    {
+      "uid": "gitlab-delivery",
+      "title": "GitLab Delivery Platform",
+      "tags": ["gitlab", "ci", "registry", "provisioned"],
+      "timezone": "browser",
+      "schemaVersion": 41,
+      "version": 1,
+      "refresh": "30s",
+      "time": {"from": "now-6h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "GitLab Metrics Target",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "max(up{namespace=\"infra\",app=\"gitlab\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Runner Metrics Target",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "max(up{namespace=\"gitlab-runners\",app=\"gitlab-runner\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Running CI Jobs",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(gitlab_runner_jobs)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "CI Runner Errors (1h)",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(increase(gitlab_runner_errors_total[1h]))", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "GitLab and Runner CPU",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=~\"infra|gitlab-runners\",pod=~\"gitlab.*\",container!=\"\"}[5m]))", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "GitLab and Runner Memory",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~\"infra|gitlab-runners\",pod=~\"gitlab.*\",container!=\"\"})", "legendFormat": "{{namespace}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+        }
+      ]
+    }

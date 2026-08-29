@@ -14,7 +14,7 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: jenkins-builds
+  name: gitlab-runners
   labels:
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/enforce-version: v1.36

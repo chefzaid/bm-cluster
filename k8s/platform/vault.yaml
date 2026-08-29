@@ -199,46 +199,6 @@ spec:
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: jenkins-maven-settings
-  namespace: infra
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: jenkins-maven-settings
-    creationPolicy: Owner
-  data:
-    - secretKey: settings.xml
-      remoteRef:
-        key: infra/jenkins
-        property: settings_xml
-
----
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
-  name: jenkins-npm-config
-  namespace: infra
-spec:
-  refreshInterval: 1h
-  secretStoreRef:
-    name: vault-backend
-    kind: ClusterSecretStore
-  target:
-    name: jenkins-npm-config
-    creationPolicy: Owner
-  data:
-    - secretKey: .npmrc
-      remoteRef:
-        key: infra/jenkins
-        property: npmrc
-
----
-apiVersion: external-secrets.io/v1
-kind: ExternalSecret
-metadata:
   name: kafka-ui-auth-secret
   namespace: infra
 spec:

@@ -35,6 +35,7 @@ LOCK_ORIGIN="${CLOUDFLARE_LOCK_ORIGIN:-true}"
 ENABLE_WAF="${CLOUDFLARE_ENABLE_WAF:-true}"
 ENABLE_RATE_LIMIT="${CLOUDFLARE_ENABLE_RATE_LIMIT:-true}"
 ENABLE_CACHE_RULES="${CLOUDFLARE_ENABLE_CACHE_RULES:-true}"
+ENABLE_REGISTRY_API_COMPATIBILITY="${CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY:-true}"
 ENABLE_ACCESS="${CLOUDFLARE_ENABLE_ACCESS:-true}"
 PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
@@ -42,6 +43,7 @@ ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
 ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-}"
 INGRESS_CONFIGMAP="${INGRESS_CONFIGMAP:-$INGRESS_SERVICE}"
 ORIGIN_LOCK_STATUS="not requested"
+REGISTRY_BOT_STATUS="not requested"
 WORK_DIR=""
 CURL_CONFIG=""
 
@@ -93,6 +95,8 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_WAF            Default: true
   CLOUDFLARE_ENABLE_RATE_LIMIT     Default: true
   CLOUDFLARE_ENABLE_CACHE_RULES    Default: true
+  CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY
+                                      Prevent browser-only bot challenges on the Registry (default: true)
   CLOUDFLARE_ENABLE_ACCESS         Default: true
   CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
@@ -157,6 +161,8 @@ ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
 [[ "$ENABLE_WAF" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_WAF must be true or false."
 [[ "$ENABLE_RATE_LIMIT" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_RATE_LIMIT must be true or false."
 [[ "$ENABLE_CACHE_RULES" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_CACHE_RULES must be true or false."
+[[ "$ENABLE_REGISTRY_API_COMPATIBILITY" =~ ^(true|false)$ ]] || \
+    error "CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY must be true or false."
 [[ "$ENABLE_ACCESS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_ACCESS must be true or false."
 [[ "$PUBLISH_APEX" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_APEX must be true or false."
 [[ "$HSTS_MAX_AGE" =~ ^[0-9]+$ ]] || error "CLOUDFLARE_HSTS_MAX_AGE must be seconds as a whole number."
@@ -186,6 +192,8 @@ The custom user token must allow:
   Zone    -> SSL and Certificates     -> Edit
   Zone    -> WAF                      -> Edit
   Zone    -> Cache Rules              -> Edit
+  Zone    -> Bot Management           -> Read
+  Zone    -> Bot Management           -> Edit
   Account -> Access: Apps and Policies -> Edit
   Account -> Access: Organizations, Identity Providers, and Groups -> Edit
 
@@ -326,6 +334,94 @@ reconcile_ruleset_rule() {
     info "Updated Cloudflare rule: $rule_description"
 }
 
+configure_registry_bot_compatibility() {
+    local registry_host="${DEFAULT_K3S_REGISTRY_HOST:-registry.$ZONE_NAME}"
+    local registry_is_published=false
+    local bot_response bot_setting_file update_response
+    local fight_mode=false
+    local sbfm_active=false
+    local skip_rule_file skip_expression
+    local fqdn
+
+    if [[ "$ENABLE_REGISTRY_API_COMPATIBILITY" != "true" ]]; then
+        REGISTRY_BOT_STATUS="left unchanged"
+        warn "Registry bot compatibility reconciliation is disabled."
+        return 0
+    fi
+
+    for fqdn in "${DNS_HOSTS[@]}"; do
+        if [[ "$fqdn" == "$registry_host" ]]; then
+            registry_is_published=true
+            break
+        fi
+    done
+    if [[ "$registry_is_published" != "true" ]]; then
+        REGISTRY_BOT_STATUS="not applicable"
+        return 0
+    fi
+
+    step "Reconciling Cloudflare bot protection for Registry API clients"
+    bot_response="$(cf_request GET "/zones/$ZONE_ID/bot_management")"
+    if ! jq -e '.success == true' <<< "$bot_response" >/dev/null 2>&1; then
+        if jq -e 'any(.errors[]?; .code == 10000)' <<< "$bot_response" >/dev/null 2>&1; then
+            error "Reading Bot Management failed. Add Zone -> Bot Management -> Read and Edit to the Cloudflare token; Docker clients cannot complete browser challenges."
+        fi
+        require_success "$bot_response" "Reading Bot Management configuration"
+    fi
+
+    fight_mode="$(jq -r '(.result.fight_mode // .result.stale_zone_configuration.fight_mode // false)' <<< "$bot_response")"
+    if [[ "$fight_mode" == "true" ]]; then
+        # Basic Bot Fight Mode is zone-wide and cannot be skipped by hostname.
+        # Cloudflare's DDoS protection, custom WAF, and rate limits stay enabled.
+        bot_setting_file="$WORK_DIR/registry-bot-management.json"
+        jq -n '{fight_mode:false}' > "$bot_setting_file"
+        update_response="$(cf_request PUT "/zones/$ZONE_ID/bot_management" "$bot_setting_file")"
+        require_success "$update_response" "Disabling basic Bot Fight Mode for Registry API compatibility"
+        info "Disabled basic Bot Fight Mode; it cannot exempt Docker Registry clients by hostname."
+    fi
+
+    if jq -e '.result |
+        ((.sbfm_definitely_automated? // "allow") != "allow") or
+        ((.sbfm_likely_automated? // "allow") != "allow") or
+        ((.sbfm_verified_bots? // "allow") != "allow") or
+        (.sbfm_static_resource_protection? == true)' <<< "$bot_response" >/dev/null; then
+        sbfm_active=true
+    fi
+
+    if [[ "$sbfm_active" == "true" ]]; then
+        # Super Bot Fight Mode is Ruleset Engine based, so it supports a precise
+        # hostname exception without weakening protection on browser services.
+        skip_rule_file="$WORK_DIR/rule-registry-sbfm-skip.json"
+        skip_expression="(http.host eq \"$registry_host\")"
+        jq -n \
+            --arg expression "$skip_expression" \
+            '{
+                action:"skip",
+                action_parameters:{phases:["http_request_sbfm"]},
+                description:"bm-cluster: allow non-browser Registry clients",
+                enabled:true,
+                expression:$expression,
+                logging:{enabled:true}
+            }' > "$skip_rule_file"
+        reconcile_ruleset_rule \
+            http_request_firewall_custom \
+            "BM Cluster custom firewall rules" \
+            "bm-cluster: allow non-browser Registry clients" \
+            "$skip_rule_file"
+        REGISTRY_BOT_STATUS="Super Bot Fight Mode skipped for $registry_host"
+    elif [[ "$fight_mode" == "true" ]]; then
+        REGISTRY_BOT_STATUS="basic Bot Fight Mode disabled"
+    else
+        REGISTRY_BOT_STATUS="compatible"
+        info "Cloudflare bot protection already permits non-browser Registry clients."
+    fi
+
+    bot_response="$(cf_request GET "/zones/$ZONE_ID/bot_management")"
+    require_success "$bot_response" "Verifying Bot Management configuration"
+    jq -e '(.result.fight_mode // .result.stale_zone_configuration.fight_mode // false) == false' \
+        <<< "$bot_response" >/dev/null || error "Basic Bot Fight Mode still challenges Registry API clients."
+}
+
 configure_edge_rules() {
     local host_set=""
     local fqdn host_literal waf_expression cache_expression
@@ -394,11 +490,9 @@ access_app_name() {
         argocd) echo "Argo CD" ;;
         dbgate) echo "DBGate" ;;
         grafana) echo "Grafana" ;;
-        jenkins) echo "Jenkins" ;;
         kafka) echo "Kafka UI" ;;
         kibana) echo "Kibana" ;;
         longhorn) echo "Longhorn" ;;
-        nexus) echo "Nexus" ;;
         portainer) echo "Portainer" ;;
         sonarqube) echo "SonarQube" ;;
         vault) echo "Vault" ;;
@@ -409,7 +503,7 @@ access_app_name() {
 configure_access() {
     local organization_response organization_file idp_response idp_count otp_idp_id
     local idp_file policy_response policy_count policy_id policy_file update_response
-    local access_emails_json app_response app_count app_id app_file app_name fqdn label
+    local access_emails_json app_response app_count app_id app_file app_name fqdn label retired_label
     local current_fingerprint desired_fingerprint
     local configured_labels=" ${HOST_LABELS[*]} "
 
@@ -544,6 +638,22 @@ configure_access() {
                 info "Reconciled Access protection for $fqdn."
             fi
         fi
+    done
+
+    for retired_label in "${RETIRED_HOST_LABELS[@]}"; do
+        fqdn="$retired_label.$ZONE_NAME"
+        app_response="$(cf_request GET "/accounts/$ACCOUNT_ID/access/apps?per_page=100")"
+        require_success "$app_response" "Reading retired Access applications"
+        mapfile -t retired_app_ids < <(
+            jq -r --arg domain "$fqdn" \
+                '.result[] | select(.domain == $domain and .type == "self_hosted") | .id' \
+                <<< "$app_response"
+        )
+        for app_id in "${retired_app_ids[@]}"; do
+            update_response="$(cf_request DELETE "/accounts/$ACCOUNT_ID/access/apps/$app_id")"
+            require_success "$update_response" "Deleting the retired Access application for $fqdn"
+            info "Deleted the retired Access application for $fqdn."
+        done
     done
 }
 
@@ -733,6 +843,16 @@ else
     HOST_LABELS=("${DEFAULT_HOST_LABELS[@]}")
 fi
 (( ${#HOST_LABELS[@]} > 0 )) || error "At least one public hostname is required."
+IFS=',' read -r -a RETIRED_HOST_LABELS <<< "${CLOUDFLARE_RETIRED_HOST_LABELS:-${DEFAULT_CLOUDFLARE_RETIRED_HOST_LABELS:-}}"
+
+configured_host_labels=" $(printf '%s ' "${HOST_LABELS[@]}")"
+for retired_label in "${RETIRED_HOST_LABELS[@]}"; do
+    [[ -n "$retired_label" ]] || continue
+    [[ "$retired_label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
+        error "Invalid retired hostname label: $retired_label"
+    [[ "$configured_host_labels" != *" $retired_label "* ]] || \
+        error "Retired hostname $retired_label is also present in CLOUDFLARE_HOST_LABELS."
+done
 
 DNS_HOSTS=()
 if [[ "$PUBLISH_APEX" == "true" ]]; then
@@ -744,6 +864,22 @@ for label in "${HOST_LABELS[@]}"; do
 done
 
 step "Reconciling proxied DNS records"
+for retired_label in "${RETIRED_HOST_LABELS[@]}"; do
+    [[ -n "$retired_label" ]] || continue
+    fqdn="$retired_label.$ZONE_NAME"
+    record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$fqdn&per_page=100")"
+    require_success "$record_response" "DNS lookup for retired hostname $fqdn"
+    mapfile -t retired_record_ids < <(
+        jq -r '.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME") | .id' \
+            <<< "$record_response"
+    )
+    for record_id in "${retired_record_ids[@]}"; do
+        update_response="$(cf_request DELETE "/zones/$ZONE_ID/dns_records/$record_id")"
+        require_success "$update_response" "Deleting retired DNS record $fqdn"
+        info "Deleted retired DNS record $fqdn."
+    done
+done
+
 for fqdn in "${DNS_HOSTS[@]}"; do
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$fqdn&per_page=100")"
     require_success "$record_response" "DNS lookup for $fqdn"
@@ -865,6 +1001,7 @@ else
     info "HSTS is disabled by configuration."
 fi
 
+configure_registry_bot_compatibility
 configure_edge_rules
 configure_access
 
@@ -940,6 +1077,7 @@ echo "  HTTP/3/Brotli: enabled"
 echo "  WAF baseline:  $([[ "$ENABLE_WAF" == "true" ]] && echo enabled || echo disabled)"
 echo "  Login limit:   $([[ "$ENABLE_RATE_LIMIT" == "true" ]] && echo enabled || echo disabled)"
 echo "  Cache safety:  $([[ "$ENABLE_CACHE_RULES" == "true" ]] && echo enabled || echo disabled)"
+echo "  Registry bots: $REGISTRY_BOT_STATUS"
 echo "  Admin Access:  $([[ "$ENABLE_ACCESS" == "true" ]] && echo "email OTP ($ACCESS_SESSION_DURATION sessions)" || echo disabled)"
 echo "  DNSSEC:        $dnssec_status"
 echo "  Origin access: $ORIGIN_LOCK_STATUS"

@@ -286,51 +286,6 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak >/de
     realm_export_json="$realm_export_json" >/dev/null
 fi
 
-if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/jenkins >/dev/null 2>&1; then
-  info "Seeding Vault secret: infra/jenkins"
-  nexus_password="$(kubectl exec -n "$NAMESPACE" deployment/nexus -- cat /nexus-data/admin.password 2>/dev/null || true)"
-  if [[ -z "$nexus_password" ]]; then
-    warn "Unable to read Nexus admin password; seeding Jenkins config with generated placeholder password."
-    nexus_password="$(generate_secret)"
-  fi
-  nexus_auth="$(printf 'admin:%s' "$nexus_password" | base64 | tr -d '\n')"
-  settings_xml="$(cat <<EOF
-<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
-  <servers>
-    <server>
-      <id>central</id>
-      <username>admin</username>
-      <password>$nexus_password</password>
-    </server>
-    <server>
-      <id>snapshots</id>
-      <username>admin</username>
-      <password>$nexus_password</password>
-    </server>
-    <server>
-      <id>nexus-releases</id>
-      <username>admin</username>
-      <password>$nexus_password</password>
-    </server>
-    <server>
-      <id>nexus-snapshots</id>
-      <username>admin</username>
-      <password>$nexus_password</password>
-    </server>
-  </servers>
-</settings>
-EOF
-)"
-  npmrc="$(cat <<EOF
-registry=http://nexus.swirlit.internal:8081/repository/npm-group/
-_auth=$nexus_auth
-EOF
-)"
-  vault_cmd_auth "$root_token" kv put secret/infra/jenkins \
-    settings_xml="$settings_xml" \
-    npmrc="$npmrc" >/dev/null
-fi
-
 if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/dbgate >/dev/null 2>&1; then
   info "Seeding Vault secret: infra/dbgate"
   vault_cmd_auth "$root_token" kv put secret/infra/dbgate \

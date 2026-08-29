@@ -161,13 +161,18 @@ else
 fi
 
 if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
-   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "nexus.swirlit.internal:5000" ]] &&
+   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "registry.swirlit.dev" ]] &&
+   [[ "${DEFAULT_K3S_REGISTRY_ENDPOINT:-}" == "http://10.43.255.251:5050" ]] &&
    grep -Fq 'name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto' \
        "$K8S_ROOT/base/coredns-custom.yaml" &&
+   grep -Fq 'clusterIP: 10.43.255.251' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'clusterIP: 10.43.255.252' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'K3S_REMOVED_REGISTRY_HOSTS:-gitlab.swirlit.dev' \
+       "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" &&
    [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
-    pass "cluster-only internal DNS and node registry alias contracts are complete"
+    pass "cluster DNS, GitLab registry mirror, and canonical Dependency Proxy contracts are complete"
 else
-    fail "cluster-only internal DNS and node registry alias contracts are complete"
+    fail "cluster DNS, GitLab registry mirror, and canonical Dependency Proxy contracts are complete"
 fi
 
 legacy_internal_references="$({
@@ -200,7 +205,7 @@ else
 fi
 
 manifest_inventory_failed=false
-for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS"; do
+for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS" "$POST_ARGOCD_MANIFESTS"; do
     IFS=',' read -r -a manifests <<< "$manifest_csv"
     for manifest in "${manifests[@]}"; do
         if [[ ! -f "$K8S_ROOT/$manifest" ]]; then
@@ -209,7 +214,7 @@ for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MA
         fi
     done
 done
-for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS; do
+for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS POST_ARGOCD_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS; do
     value="${!inventory}"
     if [[ "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | wc -l)" -ne "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | sort -u | wc -l)" ]]; then
         printf 'Contract list contains duplicates: %s\n' "$inventory" >&2
@@ -271,6 +276,14 @@ if [[ -s "$TEMP_DIR/access-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/access-host
     fail "Cloudflare Access hosts are a subset of published hosts"
 else
     pass "Cloudflare Access hosts are a subset of published hosts"
+fi
+
+if grep -Fq 'configure_registry_bot_compatibility' "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh" &&
+   grep -Fq 'Zone    -> Bot Management           -> Read' "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh" &&
+   grep -Fq 'action_parameters:{phases:["http_request_sbfm"]}' "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh"; then
+    pass "Cloudflare reconciliation preserves non-browser Registry API access"
+else
+    fail "Cloudflare reconciliation preserves non-browser Registry API access"
 fi
 
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
