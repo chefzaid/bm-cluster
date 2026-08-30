@@ -317,6 +317,37 @@ else
     fail "GitLab package and container registries declare three-year retention"
 fi
 
+if grep -Fq 'GITLAB_CANONICAL_ADMIN_USERNAME' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'identity.user = canonical_user' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'Users::DestroyService.new(canonical_user)' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'value: root' "$K8S_ROOT/platform/gitlab.yaml"; then
+    pass "GitLab Keycloak sign-in reconciles to the canonical root administrator"
+else
+    fail "GitLab Keycloak sign-in reconciles to the canonical root administrator"
+fi
+
+if grep -Fq 'name: portainer-cluster-admin' "$K8S_ROOT/platform/portainer.yaml" &&
+   grep -Fq 'name: cluster-admin' "$K8S_ROOT/platform/portainer.yaml" &&
+   ! grep -Fq 'portainer-read-only' "$K8S_ROOT/platform/portainer.yaml"; then
+    pass "Portainer administrators receive unrestricted Kubernetes cluster access"
+else
+    fail "Portainer administrators receive unrestricted Kubernetes cluster access"
+fi
+
+if grep -Fq 'roles/realm-admin' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
+   grep -Fq "'GrafanaAdmin'" "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'g, platform-admins, role:admin' "$REPOSITORY_ROOT/config/argocd-values.yaml" &&
+   grep -Fq 'capabilities = ["create", "read", "update", "patch", "delete", "list", "sudo"]' "$REPOSITORY_ROOT/scripts/configure-vault.sh" &&
+   grep -Fq 'permission=admin' "$K8S_ROOT/platform/sonarqube.yaml" &&
+   grep -Fq "put_user admin \"\$ADMIN_PASSWORD\" '[\"superuser\"]'" "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq '"Role": 1' "$K8S_ROOT/platform/portainer-bootstrap-job.yaml" &&
+   grep -Fq 'value: "false"' "$K8S_ROOT/platform/kafka-ui.yaml" &&
+   grep -Fq "self.env.ref('base.user_admin')" "$K8S_ROOT/apps/odoo.yaml"; then
+    pass "the shared Keycloak administrator maps to every product's maximum supported role"
+else
+    fail "the shared Keycloak administrator maps to every product's maximum supported role"
+fi
+
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
     awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" 'index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"

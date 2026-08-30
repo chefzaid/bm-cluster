@@ -57,17 +57,32 @@ spec:
             - name: KAFKA_CLUSTERS_0_READONLY
               value: "false"
             - name: AUTH_TYPE
-              value: LOGIN_FORM
-            - name: SPRING_SECURITY_USER_NAME
+              value: OAUTH2
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CLIENTID
+              value: kafka-ui
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CLIENTSECRET
               valueFrom:
                 secretKeyRef:
-                  name: kafka-ui-auth-secret
-                  key: SPRING_SECURITY_USER_NAME
-            - name: SPRING_SECURITY_USER_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: kafka-ui-auth-secret
-                  key: SPRING_SECURITY_USER_PASSWORD
+                  name: keycloak-sso-credentials
+                  key: KAFKA_UI_CLIENT_SECRET
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_SCOPE
+              value: openid,profile,email,groups
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_ISSUERURI
+              value: https://keycloak.swirlit.dev/auth/realms/swirlit
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_USERNAMEATTRIBUTE
+              value: preferred_username
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CLIENTNAME
+              value: Keycloak
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_PROVIDER
+              value: keycloak
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_REDIRECTURI
+              value: https://kafka.swirlit.dev/login/oauth2/code/keycloak
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_AUTHORIZATIONGRANTTYPE
+              value: authorization_code
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CUSTOMPARAMS_TYPE
+              value: keycloak
+            - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CUSTOMPARAMS_ROLESFIELD
+              value: groups
             - name: SERVER_FORWARD_HEADERS_STRATEGY
               value: framework
           readinessProbe:

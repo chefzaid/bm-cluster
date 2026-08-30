@@ -6,7 +6,7 @@ REPOSITORY_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-topl
 REPOSITORY_NAME="${REPOSITORY_NAME:-$(basename "$REPOSITORY_ROOT")}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-swirlit/$REPOSITORY_NAME}"
 GITLAB_URL="${GITLAB_URL:-https://gitlab.swirlit.dev}"
-GITHUB_OWNER="${GITHUB_OWNER:-chefzaid}"
+GITHUB_OWNER="${GITHUB_OWNER:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-$REPOSITORY_NAME}"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
 SYNC_TOKEN_NAME="${SYNC_TOKEN_NAME:-github-actions-sync}"
@@ -23,7 +23,7 @@ for command_name in curl date git jq python3; do
 done
 
 [[ -n "${GITLAB_ADMIN_TOKEN:-}" ]] ||   fail "Set GITLAB_ADMIN_TOKEN to an API token that can manage $GITLAB_PROJECT_PATH"
-[[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] ||   fail "Set GITHUB_ADMIN_TOKEN to a token that can manage actions secrets and dispatch workflows for $GITHUB_OWNER/$GITHUB_REPOSITORY"
+[[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] ||   fail "Set GITHUB_ADMIN_TOKEN to a token that can manage Actions secrets and dispatch workflows for the GitHub repository"
 
 work_dir="$(mktemp -d "/tmp/$REPOSITORY_NAME-repository-sync.XXXXXX")"
 trap 'rm -r -- "$work_dir"; unset GITLAB_ADMIN_TOKEN GITHUB_ADMIN_TOKEN sync_token' EXIT
@@ -43,6 +43,11 @@ github_api() {
   shift 2
   curl --config "$github_config" --fail-with-body --request "$method"     "$GITHUB_API_URL/$path" "$@"
 }
+
+if [[ -z "$GITHUB_OWNER" ]]; then
+  GITHUB_OWNER="$(github_api GET user | jq -er '.login')"
+  info "Using authenticated GitHub account '$GITHUB_OWNER' as the repository owner"
+fi
 
 encrypt_github_secret() {
   local public_key="$1" secret_value="$2"

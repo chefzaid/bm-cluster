@@ -1,5 +1,81 @@
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-sso-admin-bootstrap
+  namespace: infra
+data:
+  bootstrap.sh: |
+    #!/bin/bash
+    set -u
+
+    while true; do
+      if curl --fail --silent --show-error http://127.0.0.1/users/sign_in >/dev/null; then
+        if gitlab-rails runner '
+          sso_username = ENV.fetch("SSO_BOOTSTRAP_USERNAME")
+          canonical_username = ENV.fetch("GITLAB_CANONICAL_ADMIN_USERNAME")
+          primary_email = ENV.fetch("SSO_PRIMARY_EMAIL")
+          display_name = ENV.fetch("SSO_DISPLAY_NAME")
+
+          canonical_user = User.find_by_username(canonical_username)
+          exit 2 unless canonical_user
+
+          duplicate_user = User.find_by_username(sso_username)
+          duplicate_user = nil if duplicate_user&.id == canonical_user.id
+          identity = Identity.find_or_initialize_by(
+            provider: "openid_connect",
+            extern_uid: sso_username
+          )
+
+          ApplicationRecord.transaction do
+            if duplicate_user
+              duplicate_user.emails.order(:id).each_with_index do |email, index|
+                email.update_columns(
+                  email: "retired-gitlab-user-#{duplicate_user.id}-#{index}@example.invalid"
+                )
+              end
+              duplicate_user.update_columns(
+                email: "retired-gitlab-user-#{duplicate_user.id}@example.invalid",
+                unconfirmed_email: nil
+              )
+            end
+
+            identity.user = canonical_user
+            identity.save!
+
+            canonical_user.update_columns(
+              email: primary_email,
+              name: display_name,
+              admin: true,
+              confirmed_at: canonical_user.confirmed_at || Time.current,
+              unconfirmed_email: nil
+            )
+
+            email = canonical_user.emails.find_or_initialize_by(email: primary_email)
+            email.confirmed_at ||= Time.current
+            email.save!
+            canonical_user.emails.where.not(email: primary_email).delete_all
+          end
+
+          if duplicate_user && !Users::GhostUserMigration.exists?(user_id: duplicate_user.id)
+            Users::DestroyService.new(canonical_user).execute(
+              duplicate_user,
+              hard_delete: true
+            )
+            raise duplicate_user.errors.full_messages.join(", ") if duplicate_user.errors.any?
+          end
+
+          puts "Linked Keycloak #{sso_username} to canonical GitLab administrator #{canonical_username}."
+        '; then
+          exit 0
+        fi
+      fi
+
+      sleep 30
+    done
+
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: gitlab-config
@@ -73,6 +149,28 @@ spec:
       - name: gitlab
         image: docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f
         env:
+        - name: KEYCLOAK_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-sso-credentials
+              key: GITLAB_CLIENT_SECRET
+        - name: SSO_BOOTSTRAP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-sso-credentials
+              key: SSO_BOOTSTRAP_USERNAME
+        - name: GITLAB_CANONICAL_ADMIN_USERNAME
+          value: root
+        - name: SSO_PRIMARY_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-sso-credentials
+              key: SSO_PRIMARY_EMAIL
+        - name: SSO_DISPLAY_NAME
+          valueFrom:
+            secretKeyRef:
+              name: keycloak-sso-credentials
+              key: SSO_DISPLAY_NAME
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
             external_url 'https://gitlab.swirlit.dev'
@@ -82,6 +180,34 @@ spec:
             gitlab_rails['gitlab_shell_ssh_port'] = 22
             gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '10.42.0.0/16']
             gitlab_rails['dependency_proxy_enabled'] = true
+            gitlab_rails['omniauth_enabled'] = true
+            gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+            gitlab_rails['omniauth_block_auto_created_users'] = false
+            gitlab_rails['omniauth_auto_link_user'] = ['openid_connect']
+            gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'openid_connect'
+            gitlab_rails['omniauth_sync_email_from_provider'] = 'openid_connect'
+            gitlab_rails['omniauth_sync_profile_from_provider'] = ['openid_connect']
+            gitlab_rails['omniauth_providers'] = [
+              {
+                name: 'openid_connect',
+                label: 'Keycloak',
+                args: {
+                  name: 'openid_connect',
+                  scope: ['openid', 'profile', 'email', 'groups'],
+                  response_type: 'code',
+                  issuer: 'https://keycloak.swirlit.dev/auth/realms/swirlit',
+                  discovery: true,
+                  client_auth_method: 'query',
+                  uid_field: 'preferred_username',
+                  pkce: true,
+                  client_options: {
+                    identifier: 'gitlab',
+                    secret: ENV['KEYCLOAK_CLIENT_SECRET'],
+                    redirect_uri: 'https://gitlab.swirlit.dev/users/auth/openid_connect/callback'
+                  }
+                }
+              }
+            ]
             registry_external_url 'https://registry.swirlit.dev'
             registry_nginx['listen_port'] = 5050
             registry_nginx['listen_https'] = false
@@ -122,6 +248,13 @@ spec:
           periodSeconds: 60
           timeoutSeconds: 10
           failureThreshold: 10
+        lifecycle:
+          postStart:
+            exec:
+              command:
+                - /bin/bash
+                - -lc
+                - nohup /opt/swirlit/bootstrap-sso-admin >>/var/log/gitlab/sso-admin-bootstrap.log 2>&1 </dev/null &
         volumeMounts:
         - name: gitlab-config
           mountPath: /etc/gitlab
@@ -129,6 +262,10 @@ spec:
           mountPath: /var/log/gitlab
         - name: gitlab-data
           mountPath: /var/opt/gitlab
+        - name: sso-admin-bootstrap
+          mountPath: /opt/swirlit/bootstrap-sso-admin
+          subPath: bootstrap.sh
+          readOnly: true
       volumes:
       - name: gitlab-config
         persistentVolumeClaim:
@@ -139,6 +276,10 @@ spec:
       - name: gitlab-data
         persistentVolumeClaim:
           claimName: gitlab-data
+      - name: sso-admin-bootstrap
+        configMap:
+          name: gitlab-sso-admin-bootstrap
+          defaultMode: 0555
 
 ---
 apiVersion: v1

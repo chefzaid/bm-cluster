@@ -36,6 +36,91 @@ spec:
       remoteRef:
         key: infra/postgres
         property: password
+    - secretKey: SSO_PRIMARY_EMAIL
+      remoteRef:
+        key: infra/keycloak
+        property: sso_primary_email
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odoo-keycloak-sso-addon
+  namespace: apps
+data:
+  __init__.py: |
+    from . import controllers
+    from . import models
+  __manifest__.py: |
+    {
+        "name": "SwirlIT Keycloak SSO",
+        "version": "19.0.1.0.0",
+        "author": "SwirlIT",
+        "license": "LGPL-3",
+        "depends": ["auth_oauth"],
+        "installable": True,
+        "application": False,
+    }
+  controllers.py: |
+    from urllib.parse import urlencode
+
+    from odoo import http
+    from odoo.http import request
+    from odoo.addons.auth_oauth.controllers.main import OAuthLogin
+
+
+    class KeycloakAutoLogin(OAuthLogin):
+        @http.route('/web/login', type='http', auth='none')
+        def web_login(self, *args, **kwargs):
+            local_login = kwargs.get('local') == '1'
+            oauth_error = kwargs.get('oauth_error')
+            if request.httprequest.method == 'GET' and not request.session.uid and not local_login and not oauth_error:
+                providers = self.list_providers()
+                if providers:
+                    # Odoo's redirect helper treats destinations as local by
+                    # default and strips the Keycloak origin. OAuth providers
+                    # are explicitly external destinations.
+                    return request.redirect(providers[0]['auth_link'], 303, local=False)
+            return super().web_login(*args, **kwargs)
+
+        @http.route('/web/session/logout', type='http', auth='none')
+        def logout(self, redirect='/web', **kwargs):
+            request.session.logout(keep_db=True)
+            query = urlencode({
+                'client_id': 'odoo',
+                'post_logout_redirect_uri': 'https://odoo.swirlit.dev/',
+            })
+            return request.redirect(
+                'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/logout?' + query,
+                303,
+                local=False,
+            )
+  models.py: |
+    import os
+
+    from odoo import api, models
+
+
+    class ResUsers(models.Model):
+        _inherit = 'res.users'
+
+        @api.model
+        def _auth_oauth_signin(self, provider, validation, params):
+            # Keep one administrator identity: attach the verified bootstrap
+            # email to Odoo's existing administrator instead of signing up a
+            # second, unprivileged user.
+            sso_primary_email = os.environ['SSO_PRIMARY_EMAIL']
+            if validation.get('email') == sso_primary_email:
+                administrator = self.env.ref('base.user_admin').sudo()
+                administrator.write({
+                    'login': sso_primary_email,
+                    'email': sso_primary_email,
+                    'oauth_provider_id': provider,
+                    'oauth_uid': validation['user_id'],
+                    'oauth_access_token': params['access_token'],
+                })
+                return administrator.login
+            return super()._auth_oauth_signin(provider, validation, params)
 
 ---
 apiVersion: v1
@@ -92,6 +177,8 @@ spec:
     metadata:
       labels:
         app: odoo
+      annotations:
+        identity.swirlit.dev/config-revision: "2"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -117,6 +204,7 @@ spec:
                 printf '[options]\n'
                 printf 'admin_passwd = %s\n' "$ODOO_DATABASE_MASTER_PASSWORD"
                 printf 'data_dir = /var/lib/odoo\n'
+                printf 'addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons\n'
                 printf 'db_host = postgres.swirlit.internal\n'
                 printf 'db_port = 5432\n'
                 printf 'db_user = %s\n' "$ODOO_DB_USER"
@@ -227,6 +315,14 @@ spec:
                   --stop-after-init
               fi
 
+              echo "Installing the managed Keycloak OAuth integration..."
+              odoo \
+                --config=/etc/odoo-generated/odoo.conf \
+                --database=odoo \
+                --init=auth_oauth,odoo_keycloak_sso \
+                --without-demo \
+                --stop-after-init
+
               # The managed Secret is authoritative. Reconcile this on every pod
               # start so a Secret rotation cannot leave Odoo with stale credentials.
               echo "Reconciling the Odoo administrator and base URL configuration..."
@@ -241,7 +337,25 @@ spec:
               params = env['ir.config_parameter'].sudo()
               params.set_param('web.base.url', 'https://odoo.swirlit.dev')
               params.set_param('web.base.url.freeze', 'True')
+              params.set_param('auth_oauth.authorization_header', 'True')
               params.set_param('bm_cluster.bootstrap_complete', 'true')
+              provider_values = {
+                  'name': 'Keycloak',
+                  'client_id': 'odoo',
+                  'auth_endpoint': 'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth',
+                  'validation_endpoint': 'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/userinfo',
+                  'data_endpoint': '',
+                  'scope': 'openid profile email',
+                  'enabled': True,
+                  'body': 'Sign in with Keycloak',
+                  'css_class': 'fa fa-fw fa-sign-in text-primary',
+                  'sequence': 1,
+              }
+              provider = env['auth.oauth.provider'].sudo().search([('name', '=', 'Keycloak')], limit=1)
+              if provider:
+                  provider.write(provider_values)
+              else:
+                  env['auth.oauth.provider'].sudo().create(provider_values)
               env.cr.commit()
               PY
           env:
@@ -286,9 +400,18 @@ spec:
               mountPath: /etc/odoo-generated
             - name: odoo-data
               mountPath: /var/lib/odoo
+            - name: odoo-keycloak-sso-addon
+              mountPath: /mnt/extra-addons/odoo_keycloak_sso
+              readOnly: true
       containers:
         - name: odoo
           image: odoo@sha256:7fcd40c8638205f4844240397712ebbaa07918eb54f734f09e2c61274c3ae83f
+          env:
+            - name: SSO_PRIMARY_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: SSO_PRIMARY_EMAIL
           ports:
             - name: http
               containerPort: 8069
@@ -300,19 +423,19 @@ spec:
               drop: ["ALL"]
           startupProbe:
             httpGet:
-              path: /web/login
+              path: /web/login?local=1
               port: http
             periodSeconds: 10
             failureThreshold: 60
           readinessProbe:
             httpGet:
-              path: /web/login
+              path: /web/login?local=1
               port: http
             periodSeconds: 10
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /web/login
+              path: /web/login?local=1
               port: http
             periodSeconds: 20
             failureThreshold: 6
@@ -328,6 +451,9 @@ spec:
               mountPath: /etc/odoo
             - name: odoo-data
               mountPath: /var/lib/odoo
+            - name: odoo-keycloak-sso-addon
+              mountPath: /mnt/extra-addons/odoo_keycloak_sso
+              readOnly: true
       terminationGracePeriodSeconds: 60
       volumes:
         - name: odoo-config
@@ -335,6 +461,9 @@ spec:
         - name: odoo-data
           persistentVolumeClaim:
             claimName: odoo-data-pvc
+        - name: odoo-keycloak-sso-addon
+          configMap:
+            name: odoo-keycloak-sso-addon
 
 ---
 apiVersion: networking.k8s.io/v1

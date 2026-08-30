@@ -265,7 +265,7 @@ data:
     - Security & Identity:
         - Keycloak:
             icon: keycloak.png
-            href: https://keycloak.swirlit.dev/auth
+            href: https://keycloak.swirlit.dev/auth/admin/master/console/
             description: Identity and access management
             namespace: infra
             podSelector: app=keycloak
@@ -563,6 +563,9 @@ metadata:
     nginx.ingress.kubernetes.io/session-cookie-samesite: Lax
     nginx.ingress.kubernetes.io/session-cookie-secure: "true"
     nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:

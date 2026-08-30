@@ -1,0 +1,29 @@
+server:
+  service:
+    type: ClusterIP
+
+redis:
+  enabled: true
+
+configs:
+  params:
+    server.insecure: true
+  cm:
+    url: https://argocd.swirlit.dev
+    admin.enabled: false
+    oidc.config: |
+      name: Keycloak
+      issuer: https://keycloak.swirlit.dev/auth/realms/swirlit
+      clientID: argocd
+      enablePKCEAuthentication: true
+      requestedScopes:
+        - openid
+        - profile
+        - email
+        - groups
+        - offline_access
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      g, platform-admins, role:admin
+    scopes: '[groups]'

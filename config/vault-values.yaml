@@ -1,0 +1,91 @@
+# Vault audit logs use a dedicated volume and an in-pod rotator. Process
+# namespace sharing is required only so the unprivileged sidecar can send
+# Vault SIGHUP after atomically renaming the active audit file.
+server:
+  shareProcessNamespace: true
+  volumes:
+    - name: audit
+      persistentVolumeClaim:
+        claimName: vault-audit
+  volumeMounts:
+    - name: audit
+      mountPath: /vault/audit
+  extraContainers:
+    - name: audit-log-rotate
+      image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
+      command: ["/bin/sh", "-ceu"]
+      args:
+        - |
+          umask 077
+          audit_file=/vault/audit/vault-audit.log
+          max_bytes="${AUDIT_MAX_BYTES:-268435456}"
+          keep_files="${AUDIT_KEEP_FILES:-8}"
+          interval="${AUDIT_ROTATION_INTERVAL_SECONDS:-300}"
+
+          rotate_audit_log() {
+            stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            rotated_file="$audit_file.$stamp"
+            mv "$audit_file" "$rotated_file"
+
+            vault_pid="$(pidof vault | awk '{print $1}')"
+            if [ -z "$vault_pid" ] || ! kill -HUP "$vault_pid"; then
+              echo "Unable to signal Vault; restoring the active audit filename" >&2
+              mv "$rotated_file" "$audit_file"
+              return 1
+            fi
+
+            attempts=0
+            while [ ! -f "$audit_file" ] && [ "$attempts" -lt 30 ]; do
+              attempts=$((attempts + 1))
+              sleep 1
+            done
+            if [ ! -f "$audit_file" ]; then
+              echo "Vault did not reopen the audit file after SIGHUP" >&2
+              [ -e "$audit_file" ] || mv "$rotated_file" "$audit_file"
+              return 1
+            fi
+
+            gzip "$rotated_file"
+            archive_count=0
+            for archive in $(ls -1t "$audit_file".*.gz 2>/dev/null || true); do
+              archive_count=$((archive_count + 1))
+              [ "$archive_count" -le "$keep_files" ] || rm -f -- "$archive"
+            done
+            echo "Rotated Vault audit log to $rotated_file.gz"
+          }
+
+          while true; do
+            sleep "$interval"
+            [ -f "$audit_file" ] || continue
+            audit_size="$(wc -c < "$audit_file")"
+            if [ "$audit_size" -ge "$max_bytes" ]; then
+              rotate_audit_log || true
+            fi
+          done
+      env:
+        - name: AUDIT_MAX_BYTES
+          value: "268435456"
+        - name: AUDIT_KEEP_FILES
+          value: "8"
+        - name: AUDIT_ROTATION_INTERVAL_SECONDS
+          value: "300"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 5m
+          memory: 8Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+      volumeMounts:
+        - name: audit
+          mountPath: /vault/audit

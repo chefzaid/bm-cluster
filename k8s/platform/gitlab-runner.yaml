@@ -135,7 +135,7 @@ data:
         cpu_request = "100m"
         memory_request = "128Mi"
         cpu_limit = "2"
-        memory_limit = "2Gi"
+        memory_limit = "3Gi"
         helper_cpu_request = "50m"
         helper_memory_request = "64Mi"
         helper_cpu_limit = "500m"
@@ -175,7 +175,7 @@ spec:
       labels:
         app: gitlab-runner
       annotations:
-        gitlab.swirlit.dev/config-version: "2"
+        gitlab.swirlit.dev/config-version: "3"
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
         prometheus.io/port: "9252"

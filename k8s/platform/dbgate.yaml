@@ -58,16 +58,6 @@ spec:
           ports:
             - containerPort: 3000
           env:
-            - name: LOGIN
-              valueFrom:
-                secretKeyRef:
-                  name: dbgate-auth-secret
-                  key: LOGIN
-            - name: PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: dbgate-auth-secret
-                  key: PASSWORD
             - name: CONNECTIONS
               value: "postgres,mongodb,redis"
             - name: LABEL_postgres

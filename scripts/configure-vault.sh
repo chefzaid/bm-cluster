@@ -6,6 +6,7 @@ VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_ADDR="http://127.0.0.1:8200"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SSO_ADMIN_LIBRARY="$SCRIPT_DIR/lib/sso-admin.sh"
 VAULT_STATE_DIR="${VAULT_STATE_DIR:-/var/lib/bm-cluster}"
 VAULT_UNSEAL_KEY_FILE="$VAULT_STATE_DIR/vault-unseal-key"
 VAULT_BOOTSTRAP_TOKEN_FILE="$VAULT_STATE_DIR/vault-bootstrap-token"
@@ -25,7 +26,23 @@ vault_cmd() {
 vault_cmd_auth() {
   local token="$1"
   shift
-  kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$token" vault "$@"
+  { printf '%s\n' "$token"; } | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
+    IFS= read -r VAULT_TOKEN
+    export VAULT_TOKEN VAULT_ADDR="$1"
+    shift
+    exec vault "$@"
+  ' sh "$VAULT_ADDR" "$@"
+}
+
+vault_stdin_auth() {
+  local token="$1"
+  shift
+  { printf '%s\n' "$token"; cat; } | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
+    IFS= read -r VAULT_TOKEN
+    export VAULT_TOKEN VAULT_ADDR="$1"
+    shift
+    exec vault "$@" -
+  ' sh "$VAULT_ADDR" "$@"
 }
 
 generate_secret() {
@@ -61,6 +78,9 @@ require_cmd jq
 require_cmd openssl
 require_cmd sudo
 require_cmd systemctl
+[[ -r "$SSO_ADMIN_LIBRARY" ]] || error "Shared SSO administrator library not found: $SSO_ADMIN_LIBRARY"
+# shellcheck source=scripts/lib/sso-admin.sh
+source "$SSO_ADMIN_LIBRARY"
 
 sudo install -d -o root -g root -m 0700 "$VAULT_STATE_DIR"
 
@@ -111,6 +131,29 @@ status_json="$(vault_cmd status -format=json 2>/dev/null || true)"
 sealed="$(echo "$status_json" | jq -r '.sealed')"
 [[ "$sealed" == "false" ]] || error "Vault remains sealed after unseal attempt."
 
+if ! vault_cmd_auth "$root_token" audit list -format=json | jq -e '."stdout/"' >/dev/null 2>&1; then
+  info "Enabling the Vault stdout audit device..."
+  vault_cmd_auth "$root_token" audit enable -path=stdout file \
+    file_path=stdout \
+    format=json \
+    elide_list_responses=true \
+    hmac_accessor=false >/dev/null
+fi
+
+if ! vault_cmd_auth "$root_token" audit list -format=json | jq -e '."file/"' >/dev/null 2>&1; then
+  if kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- test -w /vault/audit; then
+    info "Enabling the persistent Vault file audit device..."
+    vault_cmd_auth "$root_token" audit enable -path=file file \
+      file_path=/vault/audit/vault-audit.log \
+      mode=0600 \
+      format=json \
+      elide_list_responses=true \
+      hmac_accessor=false >/dev/null
+  else
+    warn "Persistent audit storage is not writable at /vault/audit; stdout auditing remains active."
+  fi
+fi
+
 if ! vault_cmd_auth "$root_token" secrets list -format=json | jq -e '."secret/"' >/dev/null 2>&1; then
   info "Enabling Vault KV v2 engine at path 'secret/'..."
   vault_cmd_auth "$root_token" secrets enable -path=secret kv-v2 >/dev/null
@@ -130,7 +173,7 @@ vault_cmd_auth "$root_token" write auth/kubernetes/config \
   token_reviewer_jwt="" \
   kubernetes_ca_cert="" >/dev/null
 
-cat <<'EOF' | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- env VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$root_token" vault policy write external-secrets-policy - >/dev/null
+cat <<'EOF' | vault_stdin_auth "$root_token" policy write external-secrets-policy >/dev/null
 path "secret/data/infra/*" {
   capabilities = ["read"]
 }
@@ -285,6 +328,116 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak >/de
     admin_password="$keycloak_admin_password" \
     realm_export_json="$realm_export_json" >/dev/null
 fi
+
+# The shared SSO realm is reconciled after Keycloak starts, rather than relying
+# on startup import (which Keycloak intentionally ignores for an existing
+# realm/database). Installer-provided administrator credentials are
+# authoritative and may be updated on a reconciliation run. Generated OIDC
+# client secrets remain stable once they have been seeded.
+keycloak_sso_secret_json="$(vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak)"
+requested_sso_username="${KEYCLOAK_SSO_BOOTSTRAP_USERNAME:-}"
+requested_sso_password="${KEYCLOAK_SSO_BOOTSTRAP_PASSWORD:-}"
+
+if [[ -n "$requested_sso_username" || -n "$requested_sso_password" ]]; then
+  [[ -n "$requested_sso_username" && -n "$requested_sso_password" ]] || \
+    error "KEYCLOAK_SSO_BOOTSTRAP_USERNAME and KEYCLOAK_SSO_BOOTSTRAP_PASSWORD must be supplied together."
+  sso_admin_validate_username "$requested_sso_username" || error "$SSO_ADMIN_VALIDATION_ERROR"
+  sso_admin_validate_password "$requested_sso_password" "$requested_sso_username" || \
+    error "$SSO_ADMIN_VALIDATION_ERROR"
+  requested_sso_email="$(sso_admin_primary_email "$requested_sso_username")"
+  requested_sso_display_name="Platform Administrator"
+
+  if ! jq -e \
+      --arg username "$requested_sso_username" \
+      --arg password "$requested_sso_password" \
+      --arg email "$requested_sso_email" \
+      --arg display_name "$requested_sso_display_name" \
+      '.data.data.sso_bootstrap_username == $username and
+       .data.data.sso_bootstrap_password == $password and
+       .data.data.sso_primary_email == $email and
+       .data.data.sso_display_name == $display_name' \
+      <<<"$keycloak_sso_secret_json" >/dev/null; then
+    info "Updating the managed Keycloak platform administrator in Vault"
+    vault_cmd_auth "$root_token" kv patch secret/infra/keycloak \
+      sso_bootstrap_username="$requested_sso_username" \
+      sso_bootstrap_password="$requested_sso_password" \
+      sso_primary_email="$requested_sso_email" \
+      sso_display_name="$requested_sso_display_name" >/dev/null
+    keycloak_sso_secret_json="$(vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak)"
+  fi
+fi
+
+existing_sso_username="$(jq -r '.data.data.sso_bootstrap_username // empty' <<<"$keycloak_sso_secret_json")"
+default_sso_username="${requested_sso_username:-${existing_sso_username:-platform-admin}}"
+default_sso_password="${requested_sso_password:-$(generate_secret)}"
+default_sso_email="$(sso_admin_primary_email "$default_sso_username")"
+declare -A keycloak_sso_defaults=(
+  [sso_bootstrap_username]="$default_sso_username"
+  [sso_bootstrap_password]="$default_sso_password"
+  [sso_primary_email]="$default_sso_email"
+  [sso_display_name]="Platform Administrator"
+  [oauth2_proxy_client_secret]="$(generate_secret)"
+  [oauth2_proxy_cookie_secret]="$(generate_secret)"
+  [gitlab_client_secret]="$(generate_secret)"
+  [cloudflare_access_client_secret]="$(generate_secret)"
+  [grafana_client_secret]="$(generate_secret)"
+  [vault_client_secret]="$(generate_secret)"
+  [kafka_ui_client_secret]="$(generate_secret)"
+  [portainer_client_secret]="$(generate_secret)"
+  [odoo_client_secret]="$(generate_secret)"
+)
+for keycloak_sso_field in "${!keycloak_sso_defaults[@]}"; do
+  if ! jq -e --arg field "$keycloak_sso_field" '.data.data[$field] | strings | length > 0' \
+    <<<"$keycloak_sso_secret_json" >/dev/null; then
+    info "Adding Keycloak SSO secret field: $keycloak_sso_field"
+    vault_cmd_auth "$root_token" kv patch secret/infra/keycloak \
+      "$keycloak_sso_field=${keycloak_sso_defaults[$keycloak_sso_field]}" >/dev/null
+  fi
+done
+
+keycloak_sso_secret_json="$(vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak)"
+vault_oidc_client_secret="$(jq -r '.data.data.vault_client_secret' <<<"$keycloak_sso_secret_json")"
+
+if ! vault_cmd_auth "$root_token" auth list -format=json | jq -e '."oidc/"' >/dev/null 2>&1; then
+  info "Enabling Vault OIDC authentication..."
+  vault_cmd_auth "$root_token" auth enable oidc >/dev/null
+fi
+
+info "Configuring Vault OIDC authentication against the SwirlIT Keycloak realm..."
+vault_cmd_auth "$root_token" write auth/oidc/config \
+  oidc_discovery_url="https://keycloak.swirlit.dev/auth/realms/swirlit" \
+  oidc_client_id="vault" \
+  oidc_client_secret="$vault_oidc_client_secret" \
+  default_role="platform-admin" >/dev/null
+
+cat <<'EOF' | vault_stdin_auth "$root_token" policy write platform-admin >/dev/null
+path "*" {
+  capabilities = ["create", "read", "update", "patch", "delete", "list", "sudo"]
+}
+EOF
+
+cat <<'EOF' | vault_stdin_auth "$root_token" write auth/oidc/role/platform-admin >/dev/null
+{
+  "role_type": "oidc",
+  "bound_audiences": ["vault"],
+  "allowed_redirect_uris": [
+    "https://vault.swirlit.dev/ui/vault/auth/oidc/oidc/callback",
+    "http://localhost:8250/oidc/callback"
+  ],
+  "user_claim": "preferred_username",
+  "groups_claim": "groups",
+  "oidc_scopes": ["openid", "profile", "email", "groups"],
+  "bound_claims": {"groups": "platform-admins"},
+  "policies": ["platform-admin"],
+  "ttl": "1h",
+  "max_ttl": "8h"
+}
+EOF
+
+unset vault_oidc_client_secret
+unset keycloak_sso_secret_json keycloak_sso_defaults keycloak_sso_field
+unset requested_sso_username requested_sso_password requested_sso_email requested_sso_display_name
+unset existing_sso_username default_sso_username default_sso_password default_sso_email
 
 if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/dbgate >/dev/null 2>&1; then
   info "Seeding Vault secret: infra/dbgate"

@@ -49,6 +49,21 @@ spec:
                 secretKeyRef:
                   name: portainer-auth-secret
                   key: ADMIN_PASSWORD
+            - name: PORTAINER_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-sso-credentials
+                  key: PORTAINER_CLIENT_SECRET
+            - name: SSO_BOOTSTRAP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-sso-credentials
+                  key: SSO_BOOTSTRAP_USERNAME
+            - name: SSO_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-sso-credentials
+                  key: SSO_BOOTSTRAP_PASSWORD
           command:
             - python3
             - -c
@@ -63,6 +78,8 @@ spec:
               base_url = "http://portainer.swirlit.internal:9000/api"
               username = os.environ["PORTAINER_USERNAME"]
               password = os.environ["PORTAINER_PASSWORD"]
+              sso_username = os.environ["SSO_BOOTSTRAP_USERNAME"]
+              sso_password = os.environ["SSO_BOOTSTRAP_PASSWORD"]
 
               for attempt in range(60):
                   try:
@@ -80,6 +97,54 @@ spec:
                       time.sleep(5)
 
               headers = {"Authorization": "Bearer " + token}
+
+              # Pre-create the bootstrap identity as an administrator. Portainer
+              # links the matching preferred_username after the OAuth callback.
+              user_body = json.dumps({
+                  "Username": sso_username,
+                  "Password": sso_password,
+                  "Role": 1,
+              }).encode()
+              request = urllib.request.Request(
+                  base_url + "/users",
+                  data=user_body,
+                  headers={**headers, "Content-Type": "application/json"},
+              )
+              try:
+                  urllib.request.urlopen(request, timeout=10).read()
+                  print("Created the Portainer SSO administrator.")
+              except urllib.error.HTTPError as error:
+                  if error.code != 409:
+                      raise
+
+              oauth_body = json.dumps({
+                  "AuthenticationMethod": 3,
+                  "OAuthSettings": {
+                      "ClientID": "portainer",
+                      "ClientSecret": os.environ["PORTAINER_OIDC_CLIENT_SECRET"],
+                      "AuthorizationURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth",
+                      "AccessTokenURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/token",
+                      "ResourceURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/userinfo",
+                      "RedirectURI": "https://portainer.swirlit.dev",
+                      "LogoutURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/logout",
+                      "UserIdentifier": "preferred_username",
+                      "Scopes": "openid profile email groups",
+                      "OAuthAutoCreateUsers": True,
+                      "DefaultTeamID": 0,
+                      "SSO": True,
+                      "KubeSecretKey": None,
+                      "AuthStyle": 0,
+                  },
+              }).encode()
+              request = urllib.request.Request(
+                  base_url + "/settings",
+                  data=oauth_body,
+                  headers={**headers, "Content-Type": "application/json"},
+                  method="PUT",
+              )
+              urllib.request.urlopen(request, timeout=10).read()
+              print("Configured Portainer Keycloak OAuth SSO.")
+
               request = urllib.request.Request(base_url + "/endpoints", headers=headers)
               environments = json.load(urllib.request.urlopen(request, timeout=10))
               local = next((item for item in environments if item["Type"] == 5), None)

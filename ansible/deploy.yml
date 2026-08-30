@@ -10,6 +10,7 @@
     repository_root: "{{ playbook_dir }}/.."
     k8s_dir: "{{ repository_root }}/k8s"
     platform_config_file: "{{ repository_root }}/config/platform.env"
+    vault_values_file: "{{ repository_root }}/config/vault-values.yaml"
 
     platform_contract_version: >-
       {{ lookup('ansible.builtin.ini', 'PLATFORM_CONTRACT_VERSION type=properties file=' ~ platform_config_file) }}
@@ -114,6 +115,8 @@
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
     argocd_enabled: "{{ install_argocd | default(true) | bool }}"
     gitlab_admin_token: "{{ lookup('ansible.builtin.env', 'GITLAB_ADMIN_TOKEN') }}"
+    keycloak_sso_bootstrap_username: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_USERNAME') }}"
+    keycloak_sso_bootstrap_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_PASSWORD') }}"
 
     data_stores_effective: "{{ data_stores_enabled or platform_services_enabled or odoo_enabled }}"
     vault_stack_effective: "{{ vault_stack_enabled or data_stores_effective }}"
@@ -140,6 +143,18 @@
           Cloudflare automation requires internet exposure, CLOUDFLARE_API_TOKEN,
           and CLOUDFLARE_ACCESS_ALLOWED_EMAILS when Access is enabled.
       when: cloudflare_enabled
+
+    - name: Validate non-interactive platform administrator inputs
+      ansible.builtin.assert:
+        that:
+          - keycloak_sso_bootstrap_username | length > 0
+          - keycloak_sso_bootstrap_password | length > 0
+        fail_msg: >-
+          Platform deployment requires KEYCLOAK_SSO_BOOTSTRAP_USERNAME and
+          KEYCLOAK_SSO_BOOTSTRAP_PASSWORD. The Vault bootstrap performs the
+          detailed username and password-policy validation.
+      no_log: true
+      when: platform_services_enabled
 
     - name: Validate private transport inputs
       ansible.builtin.assert:
@@ -381,11 +396,11 @@
         --wait --timeout {{ ingress_helm_timeout }}
       when: ingress_effective
 
-    - name: Configure Cloudflare DNS, TLS, Access, and edge policies
+    - name: Configure Cloudflare DNS, TLS, and edge policies
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-cloudflare.sh"
       environment:
         CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
-        CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "{{ cloudflare_access_emails }}"
+        CLOUDFLARE_ENABLE_ACCESS: "false"
       no_log: true
       when: cloudflare_enabled
 
@@ -394,11 +409,19 @@
         helm upgrade --install vault hashicorp/vault
         --namespace {{ infra_namespace }}
         --version {{ vault_chart_version }}
+        --values {{ vault_values_file }}
         --set injector.enabled=false
         --set server.ha.enabled=true
         --set server.ha.raft.enabled=true
         --set server.ha.replicas=1
         --set server.dataStorage.storageClass=longhorn
+        --set server.statefulSet.securityContext.pod.runAsNonRoot=true
+        --set server.statefulSet.securityContext.pod.runAsUser=100
+        --set server.statefulSet.securityContext.pod.runAsGroup=1000
+        --set server.statefulSet.securityContext.pod.fsGroup=1000
+        --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault
+        --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false
+        --set server.statefulSet.securityContext.container.capabilities.drop[0]=ALL
       when: vault_stack_effective
 
     - name: Install or upgrade External Secrets Operator
@@ -433,6 +456,10 @@
 
     - name: Bootstrap Vault auth, policies, and secrets
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-vault.sh {{ infra_namespace }}"
+      environment:
+        KEYCLOAK_SSO_BOOTSTRAP_USERNAME: "{{ keycloak_sso_bootstrap_username }}"
+        KEYCLOAK_SSO_BOOTSTRAP_PASSWORD: "{{ keycloak_sso_bootstrap_password }}"
+      no_log: true
       when: vault_stack_effective
 
     - name: Wait for infrastructure secrets
@@ -495,6 +522,16 @@
       changed_when: false
       when: platform_services_enabled
 
+    - name: Connect Cloudflare Access to Keycloak
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-cloudflare.sh"
+      environment:
+        CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
+        CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "{{ cloudflare_access_emails }}"
+      no_log: true
+      when:
+        - cloudflare_enabled
+        - platform_services_enabled
+
     - name: Configure the bm-cluster GitLab project and Kubernetes runner
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-gitlab-ci.sh"
       no_log: true
@@ -540,10 +577,8 @@
         helm upgrade --install argocd argo/argo-cd
         --namespace {{ infra_namespace }}
         --version {{ argocd_chart_version }}
+        --values {{ repository_root }}/config/argocd-values.yaml
         --set-string global.image.tag={{ argocd_image_tag }}
-        --set server.service.type=ClusterIP
-        --set 'configs.params.server\.insecure=true'
-        --set redis.enabled=true
         --wait --timeout {{ argocd_helm_timeout }}
       when: argocd_enabled
 

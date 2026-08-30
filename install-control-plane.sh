@@ -29,14 +29,23 @@ if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
 fi
 # shellcheck source=scripts/lib/transport-guide.sh
 source "$TRANSPORT_GUIDE_LIBRARY"
+SSO_ADMIN_LIBRARY="$SCRIPT_DIR/scripts/lib/sso-admin.sh"
+if [[ ! -r "$SSO_ADMIN_LIBRARY" ]]; then
+    echo "[ERROR] Shared SSO administrator library not found: $SSO_ADMIN_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=scripts/lib/sso-admin.sh
+source "$SSO_ADMIN_LIBRARY"
 
 K8S_DIR="$SCRIPT_DIR/k8s"
+VAULT_VALUES_FILE="$SCRIPT_DIR/config/vault-values.yaml"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
 WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
+LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT="$SCRIPT_DIR/scripts/rotate-local-admin-passwords.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
@@ -59,6 +68,10 @@ OVH_APPLICATION_SECRET="${OVH_APPLICATION_SECRET:-}"
 OVH_CONSUMER_KEY="${OVH_CONSUMER_KEY:-}"
 OVH_VRACK_SERVICE_NAME="${OVH_VRACK_SERVICE_NAME:-}"
 OVH_CONTROL_PLANE_SERVICE_NAME="${OVH_CONTROL_PLANE_SERVICE_NAME:-}"
+KEYCLOAK_SSO_BOOTSTRAP_USERNAME="${KEYCLOAK_SSO_BOOTSTRAP_USERNAME:-}"
+KEYCLOAK_SSO_BOOTSTRAP_PASSWORD="${KEYCLOAK_SSO_BOOTSTRAP_PASSWORD:-}"
+ROTATE_LOCAL_ADMIN_PASSWORDS="${ROTATE_LOCAL_ADMIN_PASSWORDS:-}"
+LOCAL_ADMIN_PASSWORD="${LOCAL_ADMIN_PASSWORD:-}"
 INSTALLER_TEMP_DIR=""
 nodesource_installer=""
 k3s_installer=""
@@ -137,6 +150,71 @@ ask_with_default() {
     read -rp "$(echo -e "${YELLOW}$prompt $suffix${NC} ")" answer
     answer="${answer:-$default_choice}"
     [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+validate_local_admin_password() {
+    LOCAL_ADMIN_PASSWORD_ERROR=""
+    if (( ${#LOCAL_ADMIN_PASSWORD} < 12 )); then
+        LOCAL_ADMIN_PASSWORD_ERROR="The local administrator password must contain at least 12 characters."
+        return 1
+    fi
+    if [[ "$LOCAL_ADMIN_PASSWORD" =~ [[:cntrl:]] ]]; then
+        LOCAL_ADMIN_PASSWORD_ERROR="The local administrator password cannot contain control characters."
+        return 1
+    fi
+    if [[ ! "$LOCAL_ADMIN_PASSWORD" =~ [[:lower:]] ||
+          ! "$LOCAL_ADMIN_PASSWORD" =~ [[:upper:]] ||
+          ! "$LOCAL_ADMIN_PASSWORD" =~ [[:digit:]] ||
+          ! "$LOCAL_ADMIN_PASSWORD" =~ [^[:alnum:]] ]]; then
+        LOCAL_ADMIN_PASSWORD_ERROR="The local administrator password must include lowercase, uppercase, numeric, and special characters."
+        return 1
+    fi
+}
+
+configure_local_admin_password_rotation() {
+    local password_confirmation=""
+
+    if [[ -z "$ROTATE_LOCAL_ADMIN_PASSWORDS" ]]; then
+        if ask_with_default "Use one password for all local infrastructure superusers?" "N"; then
+            ROTATE_LOCAL_ADMIN_PASSWORDS=true
+        else
+            ROTATE_LOCAL_ADMIN_PASSWORDS=false
+        fi
+    else
+        case "${ROTATE_LOCAL_ADMIN_PASSWORDS,,}" in
+            1|true|yes|y) ROTATE_LOCAL_ADMIN_PASSWORDS=true ;;
+            0|false|no|n) ROTATE_LOCAL_ADMIN_PASSWORDS=false ;;
+            *) error "ROTATE_LOCAL_ADMIN_PASSWORDS must be true or false." ;;
+        esac
+    fi
+
+    if [[ "$ROTATE_LOCAL_ADMIN_PASSWORDS" != "true" ]]; then
+        LOCAL_ADMIN_PASSWORD=""
+        unset LOCAL_ADMIN_PASSWORD
+        return
+    fi
+
+    while ! validate_local_admin_password; do
+        if [[ "$AUTO_APPROVE" == "true" ]]; then
+            error "Set LOCAL_ADMIN_PASSWORD when ROTATE_LOCAL_ADMIN_PASSWORDS=true. $LOCAL_ADMIN_PASSWORD_ERROR"
+        fi
+        [[ -z "$LOCAL_ADMIN_PASSWORD" ]] || warn "$LOCAL_ADMIN_PASSWORD_ERROR"
+        LOCAL_ADMIN_PASSWORD=""
+        IFS= read -rsp "Local infrastructure administrator password (input hidden): " \
+            LOCAL_ADMIN_PASSWORD
+        echo >&2
+        IFS= read -rsp "Confirm local infrastructure administrator password: " \
+            password_confirmation
+        echo >&2
+        if [[ "$LOCAL_ADMIN_PASSWORD" != "$password_confirmation" ]]; then
+            warn "The passwords do not match."
+            LOCAL_ADMIN_PASSWORD=""
+        fi
+        password_confirmation=""
+    done
+
+    unset password_confirmation LOCAL_ADMIN_PASSWORD_ERROR
+    info "The installer will align supported local infrastructure superusers after platform deployment."
 }
 
 ask_server_exposure() {
@@ -236,12 +314,52 @@ select_node_transport() {
     done
 }
 
+prompt_platform_admin_credentials() {
+    local password_confirmation=""
+
+    while ! sso_admin_validate_username "$KEYCLOAK_SSO_BOOTSTRAP_USERNAME"; do
+        if [[ "$AUTO_APPROVE" == "true" ]]; then
+            error "Set a valid KEYCLOAK_SSO_BOOTSTRAP_USERNAME for a non-interactive platform installation. $SSO_ADMIN_VALIDATION_ERROR"
+        fi
+        [[ -z "$KEYCLOAK_SSO_BOOTSTRAP_USERNAME" ]] || warn "$SSO_ADMIN_VALIDATION_ERROR"
+        read -rp "$(echo -e "${YELLOW}Platform administrator login (username or email):${NC} ")" \
+            KEYCLOAK_SSO_BOOTSTRAP_USERNAME
+    done
+
+    while ! sso_admin_validate_password "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" \
+        "$KEYCLOAK_SSO_BOOTSTRAP_USERNAME"; do
+        if [[ "$AUTO_APPROVE" == "true" ]]; then
+            error "Set a valid KEYCLOAK_SSO_BOOTSTRAP_PASSWORD for a non-interactive platform installation. $SSO_ADMIN_VALIDATION_ERROR"
+        fi
+        [[ -z "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" ]] || warn "$SSO_ADMIN_VALIDATION_ERROR"
+        KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
+        IFS= read -rsp "Platform administrator password (input hidden): " \
+            KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
+        echo >&2
+        IFS= read -rsp "Confirm platform administrator password: " password_confirmation
+        echo >&2
+        if [[ "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" != "$password_confirmation" ]]; then
+            warn "The passwords do not match."
+            KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
+        fi
+    done
+
+    password_confirmation=""
+    unset password_confirmation
+    export KEYCLOAK_SSO_BOOTSTRAP_USERNAME KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
+    info "Keycloak will provision '$KEYCLOAK_SSO_BOOTSTRAP_USERNAME' as the shared platform administrator."
+}
+
 cleanup_private_credentials() {
     TAILSCALE_API_TOKEN=""
     OVH_APPLICATION_KEY=""
     OVH_APPLICATION_SECRET=""
     OVH_CONSUMER_KEY=""
+    KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
+    LOCAL_ADMIN_PASSWORD=""
     unset TAILSCALE_API_TOKEN OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY 2>/dev/null || true
+    unset KEYCLOAK_SSO_BOOTSTRAP_USERNAME KEYCLOAK_SSO_BOOTSTRAP_PASSWORD 2>/dev/null || true
+    unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_PASSWORD_ERROR 2>/dev/null || true
     if [[ -n "$INSTALLER_TEMP_DIR" && "$INSTALLER_TEMP_DIR" == /tmp/bm-cluster-installers.* && -d "$INSTALLER_TEMP_DIR" ]]; then
         rm -r -- "$INSTALLER_TEMP_DIR"
     fi
@@ -325,6 +443,7 @@ info "============================================="
 echo ""
 echo "This script will:"
 echo "  - Prompt you for each install feature group one by one"
+echo "  - Provision the login you choose as administrator through Keycloak SSO"
 echo "  - Install only selected components"
 echo "  - Apply UFW everywhere and add intrusion prevention only when internet-exposed"
 echo ""
@@ -468,6 +587,25 @@ fi
 if [[ "$DEPLOY_ODOO" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
     warn "Odoo depends on PostgreSQL; enabling data store deployment."
     DEPLOY_DATA_STORES=true
+fi
+
+if [[ "$DEPLOY_ODOO" == "true" && "$DEPLOY_PLATFORM_SERVICES" != "true" ]]; then
+    warn "Odoo SSO depends on Keycloak; enabling platform service deployment."
+    DEPLOY_PLATFORM_SERVICES=true
+fi
+
+if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+    step "Configure the shared Keycloak platform administrator"
+    prompt_platform_admin_credentials
+fi
+
+if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+    step "Configure optional local administrator password alignment"
+    configure_local_admin_password_rotation
+else
+    ROTATE_LOCAL_ADMIN_PASSWORDS=false
+    LOCAL_ADMIN_PASSWORD=""
+    unset LOCAL_ADMIN_PASSWORD
 fi
 
 if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; then
@@ -712,8 +850,13 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
         [[ -x "$CLOUDFLARE_SCRIPT" ]] || error "Cloudflare configurator is not executable: $CLOUDFLARE_SCRIPT"
+        if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            read -rsp "Cloudflare User API Token (cfut_...): " CLOUDFLARE_API_TOKEN
+            echo >&2
+            export CLOUDFLARE_API_TOKEN
+        fi
         step "Configuring Cloudflare DNS and Origin TLS..."
-        "$CLOUDFLARE_SCRIPT"
+        CLOUDFLARE_ENABLE_ACCESS=false "$CLOUDFLARE_SCRIPT"
     fi
 
     if [[ "$INSTALL_VAULT_STACK" == "true" ]]; then
@@ -723,11 +866,19 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install vault hashicorp/vault \
             --namespace infra \
             --version "$VAULT_CHART_VERSION" \
+            --values "$VAULT_VALUES_FILE" \
             --set injector.enabled=false \
             --set server.ha.enabled=true \
             --set server.ha.raft.enabled=true \
             --set server.ha.replicas=1 \
-            --set server.dataStorage.storageClass=longhorn
+            --set server.dataStorage.storageClass=longhorn \
+            --set server.statefulSet.securityContext.pod.runAsNonRoot=true \
+            --set server.statefulSet.securityContext.pod.runAsUser=100 \
+            --set server.statefulSet.securityContext.pod.runAsGroup=1000 \
+            --set server.statefulSet.securityContext.pod.fsGroup=1000 \
+            --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault \
+            --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false \
+            --set 'server.statefulSet.securityContext.container.capabilities.drop[0]=ALL'
 
         step "Installing External Secrets Operator..."
         helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
@@ -786,6 +937,21 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
                 --timeout="$POST_DEPLOY_JOB_WAIT_TIMEOUT"
         done
 
+        if [[ "$ROTATE_LOCAL_ADMIN_PASSWORDS" == "true" ]]; then
+            [[ -x "$LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT" ]] || \
+                error "Local administrator password rotation script is not executable: $LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT"
+            step "Aligning local infrastructure superuser passwords..."
+            printf '%s\n' "$LOCAL_ADMIN_PASSWORD" | \
+                "$LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT" --password-stdin
+            LOCAL_ADMIN_PASSWORD=""
+            unset LOCAL_ADMIN_PASSWORD
+        fi
+
+        if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
+            step "Connecting Cloudflare Access to Keycloak..."
+            "$CLOUDFLARE_SCRIPT"
+        fi
+
         if [[ -n "${GITLAB_ADMIN_TOKEN:-}" ]]; then
             [[ -x "$GITLAB_CI_SCRIPT" ]] || error "GitLab CI configurator is not executable: $GITLAB_CI_SCRIPT"
             step "Configuring the bm-cluster GitLab project and Kubernetes runner..."
@@ -816,10 +982,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install argocd argo/argo-cd \
             --namespace infra \
             --version "$ARGOCD_CHART_VERSION" \
+            --values "$SCRIPT_DIR/config/argocd-values.yaml" \
             --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
-            --set server.service.type=ClusterIP \
-            --set configs.params."server\\.insecure"=true \
-            --set redis.enabled=true \
             --wait --timeout "$ARGOCD_HELM_TIMEOUT"
 
         step "Applying GitLab-backed Argo CD applications..."
@@ -854,6 +1018,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     echo ""
     echo "Retrieve credentials:"
+    echo "  Keycloak SSO administrator: kubectl get secret -n infra keycloak-sso-credentials -o go-template='{{printf \"%s:%s\" (index .data \"SSO_BOOTSTRAP_USERNAME\" | base64decode) (index .data \"SSO_BOOTSTRAP_PASSWORD\" | base64decode)}}'"
     echo "  ArgoCD:   kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
     echo "  GitLab:   kubectl exec -n infra deployment/gitlab -- grep 'Password:' /etc/gitlab/initial_root_password"
     echo "  MongoDB:  kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' | base64 -d"

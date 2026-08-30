@@ -189,14 +189,20 @@ For a new cluster, run the guided installer on the future control-plane host:
 
 It first asks whether to install `infra` only or `infra + apps`. The apps choice
 deploys Odoo, the repository-owned ERP/CRM workload.
+When platform services are selected, it asks for a platform administrator
+login and a confirmed hidden password. That identity is provisioned through
+Keycloak as administrator for every integrated service and application. The
+password must contain at least 12 characters with lowercase, uppercase,
+numeric, and special characters.
 It then asks which infrastructure features to install and, when workers are
 selected, starts the vRack or Tailscale prerequisite wizard before any UFW
 change. Each wizard shows the exact account page, pauses while you complete the
 manual account step, collects secrets with hidden input, checks the account
 read-only, and resumes. Nothing is persisted. `./install-control-plane.sh --yes`
 defaults to `infra + apps`; set `INSTALL_SCOPE=infra` for an infrastructure-only
-non-interactive run. Selected transport secrets and settings are supplied as
-environment variables.
+non-interactive run. Non-interactive platform installation also requires
+`KEYCLOAK_SSO_BOOTSTRAP_USERNAME` and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`.
+Selected identity and transport secrets are supplied as environment variables.
 
 ## Adding worker nodes
 
@@ -312,32 +318,113 @@ root audit through passwordless `sudo`, retrieves the reports under
 targets can be supplied with `--targets user@host,user@host`; run
 `bm-cluster-audit-nodes --help` for automation options.
 
-## Initial credentials
+## Identity and recovery credentials
 
-Retrieve bootstrap credentials from the cluster rather than storing them in the
-repository:
+Normal browser access uses the administrator login entered during cluster
+installation. Because Keycloak realms are hard identity boundaries, the
+reconciler maintains matching local identities in both `master` and `swirlit`
+with the same managed password. If the login is a username, its primary email
+is derived as `<username>@swirlit.dev`; an email login is used unchanged.
+Membership in `platform-admins` supplies the application administrative role.
+The `master` identity receives Keycloak's composite `admin` role and can
+therefore administer the complete Keycloak instance from
+`https://keycloak.swirlit.dev/auth/admin/master/console/`.
+Retrieve the managed login and password from the cluster rather than storing
+them in the repository:
+
+```bash
+kubectl get secret -n infra keycloak-sso-credentials \
+  -o go-template='{{printf "%s:%s\n" (index .data "SSO_BOOTSTRAP_USERNAME" | base64decode) (index .data "SSO_BOOTSTRAP_PASSWORD" | base64decode)}}'
+```
+
+GitLab attaches this identity to its canonical `root` administrator, including
+the projects, ownership, activity, and permissions already visible to the
+break-glass root login. Its bootstrap removes any duplicate account matching
+the selected login, so Keycloak and local root authentication do not create
+separate GitLab users. Grafana maps the identity to Grafana Admin,
+Argo CD to its admin role, Vault to `platform-admin`, and Portainer to role `1`
+with Kubernetes `cluster-admin`. Odoo maps it to its existing administrator,
+and SonarQube synchronizes the Keycloak
+group to its global `admin` permission. The application dashboards and services
+without native OIDC use the same Keycloak session at their proxy boundary, so
+they do not introduce another user or password.
+
+The effective authorization contract for that identity is deliberately
+unrestricted:
+
+| Target | Effective maximum access |
+|---|---|
+| Keycloak | Master-realm composite `admin` for every realm, plus `realm-admin` in `swirlit` |
+| GitLab | Canonical `root` instance administrator and project owner |
+| Grafana | Server-wide `GrafanaAdmin` and organization `Admin` |
+| Argo CD | Built-in `role:admin` |
+| Vault | Wildcard create/read/update/patch/delete/list/`sudo` policy |
+| Portainer | Application role `1` and Kubernetes `cluster-admin` |
+| Odoo | Existing Settings administrator (`base.user_admin`) |
+| SonarQube | Global administration, provisioning, and scan permissions |
+| Kibana / Elasticsearch | Managed origin user with `superuser` |
+| Kafka UI | Full cluster write mode; read-only mode is disabled |
+| DBGate | Keycloak-gated access to PostgreSQL superuser, MongoDB `root`, and unrestricted Redis connections |
+| Longhorn / Homepage | Full product UI behind the `platform-admins` gate; neither product has an internal user-role hierarchy |
+| DevApp / Thoughty / Indezy | All authenticated application functionality; these applications do not define a higher administrator role |
+
+The following local credentials are break-glass or automation credentials, not
+the normal browser sign-in path. Argo CD's local `admin` is disabled; DBGate and
+Kafka UI use the Keycloak/proxy boundary; Longhorn and Homepage have no internal
+user hierarchy; Vault uses tokens rather than a password.
 
 | Service | Username | Password or token command |
 |---|---|---|
-| ArgoCD | `admin` | `kubectl -n infra get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' \| base64 -d` |
-| DBGate | Secret value | `kubectl get secret -n infra dbgate-auth-secret -o go-template='{{printf "%s:%s" (index .data "LOGIN" \| base64decode) (index .data "PASSWORD" \| base64decode)}}'` |
-| GitLab | `root` | `kubectl exec -n infra deployment/gitlab -- awk '/Password:/ {print $2}' /etc/gitlab/initial_root_password` |
+| GitLab | `root` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=root_password secret/infra/gitlab` |
 | Grafana | `admin` | `kubectl get secret -n infra grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' \| base64 -d` |
-| Kafka UI | Secret value | `kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf "%s:%s" (index .data "SPRING_SECURITY_USER_NAME" \| base64decode) (index .data "SPRING_SECURITY_USER_PASSWORD" \| base64decode)}}'` |
 | Keycloak | Secret value | `kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' \| base64 -d` |
-| Kibana | `admin` | `kubectl get secret -n infra elasticsearch-security-bootstrap -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
+| Elasticsearch / Kibana | `admin` | `kubectl get secret -n infra elasticsearch-security-bootstrap -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
+| Elasticsearch | `elastic` | `kubectl get secret -n infra elasticsearch-security-bootstrap -o jsonpath='{.data.ELASTIC_PASSWORD}' \| base64 -d` |
+| MongoDB | `admin` | `kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' \| base64 -d` |
+| PostgreSQL | `admin` | `kubectl get secret -n infra postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}' \| base64 -d` |
 | Longhorn origin login | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=password secret/infra/platform-ui` |
 | Odoo | `admin` | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
 | Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
-| SonarQube | `admin` | Initial password: `admin` |
+| SonarQube | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_password secret/infra/sonarqube` |
+| SonarQube automation | `admin` token | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_token secret/infra/sonarqube` |
 | Vault | Token login | `sudo cat /var/lib/bm-cluster/vault-bootstrap-token` |
 
-Change bootstrap credentials immediately after onboarding.
+Vault records every API request and response to two audit devices. The stdout
+device is collected by Fluent Bit, while the file device writes to the
+dedicated `vault-audit` PVC. An unprivileged sidecar rotates the file at 256
+MiB by atomically renaming it and sending Vault `SIGHUP`; it compresses closed
+files and retains the eight newest archives. The rotation sidecar never
+receives a Vault token and does not change Vault authentication or policies.
 
-Kibana and Longhorn retain Cloudflare Access at the public edge. Kibana uses
-Elastic's native login, users, and roles at the origin. Longhorn has no native
-authentication provider, so only Longhorn retains the Vault-managed NGINX Basic
-Auth boundary for direct-IP and internal ingress access.
+To align every genuine infrastructure-local superuser password, supply the
+password without placing it on the command line:
+
+```bash
+read -rsp 'Local administrator password: ' LOCAL_ADMIN_PASSWORD; echo
+printf '%s\n' "$LOCAL_ADMIN_PASSWORD" | \
+  scripts/rotate-local-admin-passwords.sh --password-stdin
+unset LOCAL_ADMIN_PASSWORD
+```
+
+When platform services are selected, the interactive installer offers this as
+an optional `[y/N]` step and reads the password and confirmation with terminal
+echo disabled. Non-interactive `--yes` runs never enable it implicitly; opt in
+with `ROTATE_LOCAL_ADMIN_PASSWORDS=true` and provide `LOCAL_ADMIN_PASSWORD`
+through the automation secret environment.
+
+The rotation updates each service's internal credential first, persists the
+matching value in Vault, refreshes External Secrets, restarts affected password
+consumers, and verifies service availability. It deliberately does not modify
+application users, Keycloak SSO identities, API tokens, the Longhorn ingress
+password, or services without an internal administrator.
+
+Cloudflare Access delegates its protected hosts to the same Keycloak realm.
+Native OIDC integrations then establish the service session where supported.
+SonarQube consumes the authenticated identity and groups as trusted SSO
+headers. Kibana receives a managed `kibana_admin` origin identity after the
+Keycloak gate, while Longhorn relies on the gate because it has no native
+authentication provider. Scanner, registry, and internal automation endpoints
+retain their non-interactive token interfaces.
 
 ## Operations
 
@@ -391,6 +478,8 @@ disk or host loss.
 Run Ansible from the control-plane repository checkout with its local inventory:
 
 ```bash
+export KEYCLOAK_SSO_BOOTSTRAP_USERNAME='platform-admin'
+export KEYCLOAK_SSO_BOOTSTRAP_PASSWORD='Replace-With-A-Strong-Password-1!'
 ansible-playbook -i ansible/inventory ansible/deploy.yml
 ansible-playbook -i ansible/inventory ansible/deploy.yml -e server_exposure=local
 ansible-playbook -i ansible/inventory ansible/deploy.yml -e install_apps=false
@@ -519,6 +608,7 @@ EditorConfig and Git attributes keep text formatting portable.
 - Keep PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and Prometheus internal.
 - Keep `swirlit.internal` in CoreDNS only; never publish it through Cloudflare or public DNS.
 - Keep administrative UI hostnames behind Cloudflare Access.
+- Keep both Vault audit devices enabled and alert on audit-write failures or audit-volume pressure.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.
 - Workers accept no public traffic: never publish, forward, or load-balance traffic to them.

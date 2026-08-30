@@ -11,35 +11,12 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - keycloak.swirlit.dev
-    - sonarqube.swirlit.dev
     - argocd.swirlit.dev
     - grafana.swirlit.dev
-    - dbgate.swirlit.dev
     - kafka.swirlit.dev
     - portainer.swirlit.dev
     secretName: swirlit-dev-tls
   rules:
-  - host: keycloak.swirlit.dev
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: keycloak
-            port:
-              number: 8080
-  - host: sonarqube.swirlit.dev
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: sonarqube
-            port:
-              number: 9000
   - host: argocd.swirlit.dev
     http:
       paths:
@@ -58,16 +35,6 @@ spec:
         backend:
           service:
             name: grafana
-            port:
-              number: 3000
-  - host: dbgate.swirlit.dev
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: dbgate
             port:
               number: 3000
   - host: kafka.swirlit.dev
@@ -95,12 +62,105 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: sonarqube-ingress
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [sonarqube.swirlit.dev]
+      secretName: swirlit-dev-tls
+  rules:
+    - host: sonarqube.swirlit.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarqube
+                port:
+                  number: 9000
+
+---
+# Sonar scanners authenticate with project tokens and cannot follow an
+# interactive browser redirect. The longer /api path preserves that machine
+# interface while the UI and header-SSO entry point remain Keycloak protected.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarqube-api-ingress
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [sonarqube.swirlit.dev]
+      secretName: swirlit-dev-tls
+  rules:
+    - host: sonarqube.swirlit.dev
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarqube
+                port:
+                  number: 9000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dbgate-ingress
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [dbgate.swirlit.dev]
+      secretName: swirlit-dev-tls
+  rules:
+    - host: dbgate.swirlit.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dbgate
+                port:
+                  number: 3000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
   name: kibana-ingress
   namespace: infra
   annotations:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
@@ -117,7 +177,7 @@ spec:
               service:
                 name: kibana
                 port:
-                  number: 5601
+                  number: 5602
 
 ---
 apiVersion: networking.k8s.io/v1
@@ -129,9 +189,9 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-type: basic
-    nginx.ingress.kubernetes.io/auth-secret: platform-ui-basic-auth
-    nginx.ingress.kubernetes.io/auth-realm: "Longhorn login"
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:

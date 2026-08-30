@@ -41,6 +41,7 @@ PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
 ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
 ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-}"
+ACCESS_OIDC_CLIENT_SECRET="${CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET:-}"
 INGRESS_CONFIGMAP="${INGRESS_CONFIGMAP:-$INGRESS_SERVICE}"
 ORIGIN_LOCK_STATUS="not requested"
 REGISTRY_BOT_STATUS="not requested"
@@ -72,7 +73,7 @@ Usage: scripts/configure-cloudflare.sh [options]
 Configures a fresh or existing Cloudflare account for the cluster. The script
 creates or finds the zone, reconciles proxied DNS records, installs a wildcard
 Cloudflare Origin CA certificate in Kubernetes, and applies a secure/performance
-baseline, scoped WAF/cache rules, and email-OTP Access for administrative UIs.
+baseline, scoped WAF/cache rules, and Keycloak-backed Access for administrative UIs.
 
 Options:
   --zone DOMAIN       Cloudflare zone (default: config/platform.env)
@@ -147,7 +148,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 ZONE_NAME="${ZONE_NAME,,}"
-ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
+ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}}"
 [[ "$ZONE_NAME" != "${DEFAULT_INTERNAL_DNS_ZONE:-swirlit.internal}" ]] || \
     error "$ZONE_NAME is the cluster-only CoreDNS zone and must never be published through Cloudflare."
 [[ "$ZONE_NAME" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
@@ -501,7 +502,8 @@ access_app_name() {
 }
 
 configure_access() {
-    local organization_response organization_file idp_response idp_count otp_idp_id
+    local organization_response organization_file organization_auth_domain callback_url
+    local idp_response idp_count oidc_idp_id oidc_client_secret
     local idp_file policy_response policy_count policy_id policy_file update_response
     local access_emails_json app_response app_count app_id app_file app_name fqdn label retired_label
     local current_fingerprint desired_fingerprint
@@ -509,6 +511,14 @@ configure_access() {
 
     [[ "$ENABLE_ACCESS" == "true" ]] || return 0
     step "Reconciling Zero Trust Access for BM Cluster admin interfaces"
+
+    oidc_client_secret="$ACCESS_OIDC_CLIENT_SECRET"
+    if [[ -z "$oidc_client_secret" ]]; then
+        oidc_client_secret="$(kubectl get secret keycloak-sso-credentials -n "$INGRESS_NAMESPACE" \
+            -o jsonpath='{.data.CLOUDFLARE_ACCESS_CLIENT_SECRET}' 2>/dev/null | base64 -d)"
+    fi
+    [[ -n "$oidc_client_secret" ]] || \
+        error "Keycloak SSO credentials are not ready; apply platform/keycloak-sso.yaml before enabling Cloudflare Access."
 
     organization_response="$(cf_request GET "/accounts/$ACCOUNT_ID/access/organizations")"
     if ! jq -e '.success == true' <<< "$organization_response" >/dev/null 2>&1; then
@@ -525,27 +535,67 @@ configure_access() {
         info "Using the existing Cloudflare Zero Trust organization without changing its account-wide settings."
     fi
 
+    if ! jq -e '.result.auto_redirect_to_identity == true' <<< "$organization_response" >/dev/null; then
+        organization_file="$WORK_DIR/access-organization-redirect.json"
+        jq '{
+                auth_domain:.result.auth_domain,
+                name:.result.name,
+                auto_redirect_to_identity:true,
+                deny_unmatched_requests:(.result.deny_unmatched_requests // false)
+            }' <<< "$organization_response" > "$organization_file"
+        organization_response="$(cf_request PUT "/accounts/$ACCOUNT_ID/access/organizations" "$organization_file")"
+        require_success "$organization_response" "Enabling automatic redirect to the Keycloak identity provider"
+        info "Enabled automatic redirect from Cloudflare Access to Keycloak."
+    fi
+
+    organization_auth_domain="$(jq -r '.result.auth_domain // empty' <<< "$organization_response")"
+    [[ -n "$organization_auth_domain" ]] || error "Cloudflare returned no Zero Trust organization auth domain."
+    [[ "$organization_auth_domain" == "$ACCESS_TEAM_NAME.cloudflareaccess.com" ]] || \
+        error "The live Cloudflare Access team is $organization_auth_domain; set CLOUDFLARE_ACCESS_TEAM_NAME to its first label."
+    callback_url="https://$organization_auth_domain/cdn-cgi/access/callback"
+    info "Using the Keycloak callback registered for $callback_url."
+
     idp_response="$(cf_request GET "/accounts/$ACCOUNT_ID/access/identity_providers")"
     require_success "$idp_response" "Reading Access identity providers"
-    idp_count="$(jq '[.result[] | select(.type == "onetimepin")] | length' <<< "$idp_response")"
+    idp_count="$(jq '[.result[] | select(.type == "oidc" and .name == "SwirlIT Keycloak")] | length' <<< "$idp_response")"
+    ((idp_count <= 1)) || error "More than one Access identity provider is named SwirlIT Keycloak."
+    idp_file="$WORK_DIR/access-keycloak-idp.json"
+    jq -n \
+        --arg client_secret "$oidc_client_secret" \
+        '{
+            name:"SwirlIT Keycloak",
+            type:"oidc",
+            config:{
+                client_id:"cloudflare-access",
+                client_secret:$client_secret,
+                auth_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth",
+                token_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/token",
+                certs_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/certs",
+                pkce_enabled:true,
+                email_claim_name:"email",
+                claims:["groups", "preferred_username"],
+                scopes:["openid", "email", "profile", "groups"]
+            }
+        }' > "$idp_file"
     if ((idp_count == 0)); then
-        idp_file="$WORK_DIR/access-otp-idp.json"
-        printf '{"name":"BM Cluster one-time PIN","type":"onetimepin","config":{}}\n' > "$idp_file"
         update_response="$(cf_request POST "/accounts/$ACCOUNT_ID/access/identity_providers" "$idp_file")"
-        require_success "$update_response" "Creating the Access one-time PIN identity provider"
-        otp_idp_id="$(jq -r '.result.id' <<< "$update_response")"
-        info "Created the one-time PIN identity provider."
+        require_success "$update_response" "Creating the Access Keycloak identity provider"
+        oidc_idp_id="$(jq -r '.result.id' <<< "$update_response")"
+        info "Created the Keycloak OIDC identity provider for Cloudflare Access."
     else
-        otp_idp_id="$(jq -r '[.result[] | select(.type == "onetimepin")][0].id' <<< "$idp_response")"
-        info "Using the existing one-time PIN identity provider."
+        oidc_idp_id="$(jq -r '.result[] | select(.type == "oidc" and .name == "SwirlIT Keycloak") | .id' <<< "$idp_response")"
+        update_response="$(cf_request PUT "/accounts/$ACCOUNT_ID/access/identity_providers/$oidc_idp_id" "$idp_file")"
+        require_success "$update_response" "Updating the Access Keycloak identity provider"
+        info "Reconciled the Keycloak OIDC identity provider for Cloudflare Access."
     fi
+    unset oidc_client_secret
 
     access_emails_json="$(printf '%s\n' "${ACCESS_EMAILS[@]}" | jq -R . | jq -s .)"
     policy_file="$WORK_DIR/access-policy.json"
     jq -n \
         --arg name "BM Cluster administrators" \
         --arg duration "$ACCESS_SESSION_DURATION" \
-        --arg idp_id "$otp_idp_id" \
+        --arg idp_id "$oidc_idp_id" \
         --argjson emails "$access_emails_json" \
         '{
             name:$name,
@@ -598,7 +648,7 @@ configure_access() {
             --arg name "$app_name" \
             --arg domain "$fqdn" \
             --arg duration "$ACCESS_SESSION_DURATION" \
-            --arg idp_id "$otp_idp_id" \
+            --arg idp_id "$oidc_idp_id" \
             --arg policy_id "$policy_id" \
             '{
                 name:$name,
@@ -619,7 +669,7 @@ configure_access() {
         if ((app_count == 0)); then
             update_response="$(cf_request POST "/accounts/$ACCOUNT_ID/access/apps" "$app_file")"
             require_success "$update_response" "Creating the Access application for $fqdn"
-            info "Protected $fqdn with email OTP Access."
+            info "Protected $fqdn with Keycloak-backed Access."
         else
             app_id="$(jq -r --arg domain "$fqdn" '.result[] | select(.domain == $domain and .type == "self_hosted") | .id' <<< "$app_response")"
             current_fingerprint="$(jq -Sc --arg domain "$fqdn" \
@@ -1078,7 +1128,7 @@ echo "  WAF baseline:  $([[ "$ENABLE_WAF" == "true" ]] && echo enabled || echo d
 echo "  Login limit:   $([[ "$ENABLE_RATE_LIMIT" == "true" ]] && echo enabled || echo disabled)"
 echo "  Cache safety:  $([[ "$ENABLE_CACHE_RULES" == "true" ]] && echo enabled || echo disabled)"
 echo "  Registry bots: $REGISTRY_BOT_STATUS"
-echo "  Admin Access:  $([[ "$ENABLE_ACCESS" == "true" ]] && echo "email OTP ($ACCESS_SESSION_DURATION sessions)" || echo disabled)"
+echo "  Admin Access:  $([[ "$ENABLE_ACCESS" == "true" ]] && echo "Keycloak OIDC ($ACCESS_SESSION_DURATION sessions)" || echo disabled)"
 echo "  DNSSEC:        $dnssec_status"
 echo "  Origin access: $ORIGIN_LOCK_STATUS"
 echo "  Origin cert:   $([[ "$certificate_created" == "true" ]] && echo created || echo reused)"
