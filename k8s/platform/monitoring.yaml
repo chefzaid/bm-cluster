@@ -547,12 +547,16 @@ data:
         access: proxy
         url: http://elasticsearch.swirlit.internal:9200
         database: kubernetes-logs-*
+        basicAuth: true
+        basicAuthUser: $ELASTICSEARCH_USERNAME
         editable: false
         jsonData:
           timeField: "@timestamp"
-          esVersion: 7.17.25
+          esVersion: 9.4.2
           logMessageField: message
           logLevelField: level
+        secureJsonData:
+          basicAuthPassword: $ELASTICSEARCH_PASSWORD
 
 ---
 apiVersion: v1
@@ -774,6 +778,8 @@ kind: Deployment
 metadata:
   name: grafana
   namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   replicas: 1
   strategy:
@@ -810,6 +816,16 @@ spec:
                 secretKeyRef:
                   name: grafana-admin-secret
                   key: GF_SECURITY_ADMIN_PASSWORD
+            - name: ELASTICSEARCH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-elasticsearch-credentials
+                  key: ELASTICSEARCH_USERNAME
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-elasticsearch-credentials
+                  key: ELASTICSEARCH_PASSWORD
           readinessProbe:
             httpGet:
               path: /api/health

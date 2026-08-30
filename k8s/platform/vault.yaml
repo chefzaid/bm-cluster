@@ -266,3 +266,243 @@ spec:
       remoteRef:
         key: infra/portainer
         property: password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: platform-ui-basic-auth
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: platform-ui-basic-auth
+    creationPolicy: Owner
+  data:
+    - secretKey: auth
+      remoteRef:
+        key: infra/platform-ui
+        property: htpasswd
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: elasticsearch-security-bootstrap
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: elasticsearch-security-bootstrap
+    creationPolicy: Owner
+  data:
+    - secretKey: ELASTIC_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: elastic_password
+    - secretKey: KIBANA_SYSTEM_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_system_password
+    - secretKey: ADMIN_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: admin_password
+    - secretKey: LOGSTASH_WRITER_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: logstash_writer_password
+    - secretKey: FLUENT_BIT_WRITER_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: fluent_bit_writer_password
+    - secretKey: GRAFANA_READER_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: grafana_reader_password
+    - secretKey: KIBANA_BOOTSTRAP_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_bootstrap_password
+    - secretKey: CI_OBSERVER_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: ci_observer_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: kibana-system-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: kibana-system-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: ELASTICSEARCH_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_system_username
+    - secretKey: ELASTICSEARCH_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_system_password
+    - secretKey: XPACK_SECURITY_ENCRYPTIONKEY
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_security_encryption_key
+    - secretKey: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_saved_objects_encryption_key
+    - secretKey: XPACK_REPORTING_ENCRYPTIONKEY
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_reporting_encryption_key
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: logstash-elasticsearch-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: logstash-elasticsearch-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: ELASTICSEARCH_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: logstash_writer_username
+    - secretKey: ELASTICSEARCH_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: logstash_writer_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: fluent-bit-elasticsearch-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: fluent-bit-elasticsearch-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: ELASTICSEARCH_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: fluent_bit_writer_username
+    - secretKey: ELASTICSEARCH_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: fluent_bit_writer_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: grafana-elasticsearch-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: grafana-elasticsearch-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: ELASTICSEARCH_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: grafana_reader_username
+    - secretKey: ELASTICSEARCH_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: grafana_reader_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: kibana-bootstrap-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: kibana-bootstrap-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: KIBANA_BOOTSTRAP_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_bootstrap_username
+    - secretKey: KIBANA_BOOTSTRAP_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_bootstrap_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: kibana-bootstrap-credentials
+  namespace: apps
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: kibana-bootstrap-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: KIBANA_BOOTSTRAP_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_bootstrap_username
+    - secretKey: KIBANA_BOOTSTRAP_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_bootstrap_password

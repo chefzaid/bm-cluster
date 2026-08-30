@@ -1,0 +1,195 @@
+name: Sync GitHub and GitLab
+
+on:
+  push:
+  repository_dispatch:
+    types:
+      - gitlab_push
+  schedule:
+    - cron: '17 4 1 * *'
+  workflow_dispatch:
+    inputs:
+      rotate_sync_token:
+        description: Rotate the managed GitLab credential now
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-gitlab-repository-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-repository:
+    name: Reconcile branches and tags
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_ADMIN_TOKEN: ${{ secrets.REPOSITORY_SYNC_ADMIN_TOKEN }}
+      GITLAB_API_URL: https://gitlab.swirlit.dev/api/v4
+      GITLAB_PROJECT_ID: '2'
+      GITLAB_REPOSITORY: https://gitlab.swirlit.dev/swirlit/bm-cluster.git
+      GITLAB_USERNAME: ${{ secrets.GITLAB_SYNC_USERNAME }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_SYNC_TOKEN }}
+    steps:
+      - name: Reconcile GitHub and GitLab
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ -n "${GITLAB_USERNAME:-}" ]] || {
+            echo "GITLAB_SYNC_USERNAME is not configured" >&2
+            exit 1
+          }
+          [[ -n "${GITLAB_TOKEN:-}" ]] || {
+            echo "GITLAB_SYNC_TOKEN is not configured" >&2
+            exit 1
+          }
+          [[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] || {
+            echo "REPOSITORY_SYNC_ADMIN_TOKEN is not configured" >&2
+            exit 1
+          }
+
+          askpass="$RUNNER_TEMP/git-askpass"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*github.com*|*github.com*Username*) printf '%s\n' 'x-access-token' ;;
+            *github.com*) printf '%s\n' "$GITHUB_TOKEN" ;;
+            *Username*gitlab.swirlit.dev*|*gitlab.swirlit.dev*Username*) printf '%s\n' "$GITLAB_USERNAME" ;;
+            *gitlab.swirlit.dev*) printf '%s\n' "$GITLAB_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          trap 'rm -f "$askpass"' EXIT
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+
+          repository="$RUNNER_TEMP/repository-sync"
+          git init --quiet "$repository"
+          cd "$repository"
+          git config user.name 'SwirlIT repository sync'
+          git config user.email 'repository-sync@swirlit.dev'
+          git remote add github "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote add gitlab "$GITLAB_REPOSITORY"
+
+          fetch_repositories() {
+            git fetch --quiet --prune --no-tags github               '+refs/heads/*:refs/remotes/github/*'               '+refs/tags/*:refs/github-tags/*'
+            git fetch --quiet --prune --no-tags gitlab               '+refs/heads/*:refs/remotes/gitlab/*'               '+refs/tags/*:refs/gitlab-tags/*'
+          }
+
+          fetch_repositories
+
+          mapfile -t branches < <(
+            {
+              git for-each-ref --format='%(refname:strip=3)' refs/remotes/github
+              git for-each-ref --format='%(refname:strip=3)' refs/remotes/gitlab
+            } | sort -u
+          )
+          for branch in "${branches[@]}"; do
+            github_ref="refs/remotes/github/$branch"
+            gitlab_ref="refs/remotes/gitlab/$branch"
+            github_head="$(git rev-parse --verify "$github_ref" 2>/dev/null || true)"
+            gitlab_head="$(git rev-parse --verify "$gitlab_ref" 2>/dev/null || true)"
+
+            if [[ -z "$gitlab_head" ]]; then
+              echo "Creating GitLab branch $branch at $github_head"
+              git push gitlab "$github_head:refs/heads/$branch"
+            elif [[ -z "$github_head" ]]; then
+              echo "Creating GitHub branch $branch at $gitlab_head"
+              git push github "$gitlab_head:refs/heads/$branch"
+            elif [[ "$github_head" == "$gitlab_head" ]]; then
+              echo "Branch $branch already matches at $github_head"
+            elif git merge-base --is-ancestor "$gitlab_head" "$github_head"; then
+              echo "Fast-forwarding GitLab branch $branch to $github_head"
+              git push gitlab "$github_head:refs/heads/$branch"
+            elif git merge-base --is-ancestor "$github_head" "$gitlab_head"; then
+              echo "Fast-forwarding GitHub branch $branch to $gitlab_head"
+              git push github "$gitlab_head:refs/heads/$branch"
+            else
+              echo "Merging divergent branch $branch without force pushing"
+              git checkout --quiet --detach "$github_head"
+              git merge --no-ff -m "sync: merge GitLab $branch into GitHub" "$gitlab_head"
+              merged_head="$(git rev-parse HEAD)"
+              git push gitlab "$merged_head:refs/heads/$branch"
+              git push github "$merged_head:refs/heads/$branch"
+            fi
+          done
+
+          mapfile -t tags < <(
+            {
+              git for-each-ref --format='%(refname:strip=2)' refs/github-tags
+              git for-each-ref --format='%(refname:strip=2)' refs/gitlab-tags
+            } | sort -u
+          )
+          for tag in "${tags[@]}"; do
+            github_ref="refs/github-tags/$tag"
+            gitlab_ref="refs/gitlab-tags/$tag"
+            github_object="$(git rev-parse --verify "$github_ref" 2>/dev/null || true)"
+            gitlab_object="$(git rev-parse --verify "$gitlab_ref" 2>/dev/null || true)"
+
+            if [[ -z "$gitlab_object" ]]; then
+              echo "Creating GitLab tag $tag"
+              git push gitlab "$github_ref:refs/tags/$tag"
+            elif [[ -z "$github_object" ]]; then
+              echo "Creating GitHub tag $tag"
+              git push github "$gitlab_ref:refs/tags/$tag"
+            elif [[ "$github_object" != "$gitlab_object" ]]; then
+              echo "Tag $tag points to different objects; refusing to rewrite it" >&2
+              exit 1
+            else
+              echo "Tag $tag already matches"
+            fi
+          done
+
+          fetch_repositories
+          github_refs="$(
+            {
+              git for-each-ref --format='heads/%(refname:strip=3) %(objectname)' refs/remotes/github
+              git for-each-ref --format='tags/%(refname:strip=2) %(objectname)' refs/github-tags
+            } | sort
+          )"
+          gitlab_refs="$(
+            {
+              git for-each-ref --format='heads/%(refname:strip=3) %(objectname)' refs/remotes/gitlab
+              git for-each-ref --format='tags/%(refname:strip=2) %(objectname)' refs/gitlab-tags
+            } | sort
+          )"
+          [[ "$github_refs" == "$gitlab_refs" ]] || {
+            echo "GitHub and GitLab refs differ after reconciliation" >&2
+            diff -u <(printf '%s\n' "$github_refs") <(printf '%s\n' "$gitlab_refs") || true
+            exit 1
+          }
+          echo "GitHub and GitLab branches and tags match"
+
+          rotation_requested="$(jq -r '.inputs.rotate_sync_token // false' "$GITHUB_EVENT_PATH")"
+          rotation_threshold="$(date -u -d '+90 days' +%F)"
+          token_metadata="$(
+            curl --fail-with-body --silent --show-error \
+              --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+              "$GITLAB_API_URL/personal_access_tokens/self"
+          )"
+          token_expires_at="$(printf '%s\n' "$token_metadata" | jq -r '.expires_at')"
+          if [[ "$rotation_requested" == "true" || "$token_expires_at" < "$rotation_threshold" ]]; then
+            new_expiration="$(date -u -d '+364 days' +%F)"
+            rotated_token="$(
+              curl --fail-with-body --silent --show-error \
+                --request POST \
+                --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                --form-string "expires_at=$new_expiration" \
+                "$GITLAB_API_URL/projects/$GITLAB_PROJECT_ID/access_tokens/self/rotate"
+            )"
+            new_token="$(printf '%s\n' "$rotated_token" | jq -er '.token')"
+            printf '%s' "$new_token" |
+              GH_TOKEN="$GITHUB_ADMIN_TOKEN" gh secret set GITLAB_SYNC_TOKEN \
+                --repo "$GITHUB_REPOSITORY"
+            unset new_token rotated_token
+            echo "Rotated the GitLab sync token through $new_expiration"
+          else
+            echo "GitLab sync token is current through $token_expires_at"
+          fi

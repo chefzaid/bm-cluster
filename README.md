@@ -48,9 +48,11 @@ Homepage is the single entry point for every installed application, platform
 tool, internal data service, observability component, security tool, and
 Kubernetes system service. Public entries are clickable; internal-only entries
 show their purpose and live Kubernetes status without exposing them publicly.
-This repository owns Odoo in the shared `apps` namespace. Independently owned
-applications can publish dashboard entries through Kubernetes Ingress
-annotations without adding application-specific resources to this repository.
+This repository owns Odoo in the shared `apps` namespace. DevApp, Thoughty, and
+Indezy publish their dashboard entries from their own Kubernetes Ingress
+annotations, without adding application-specific runtime resources here. Their
+public hostnames remain part of the central Cloudflare inventory so DNS and edge
+configuration are reproducible from this repository.
 
 ## Service dashboard
 
@@ -91,33 +93,79 @@ printed by the configurator.
 
 ### GitLab delivery
 
-The infrastructure repository lives at `infrastructure/bm-cluster` in GitLab.
+The infrastructure repository lives at `swirlit/bm-cluster` in GitLab.
 Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
 `gitlab-runners` namespace. The default branch is continuously reconciled by
 the `bm-cluster` Argo CD Application; application manifests under `k8s/apps`
 remain outside this infrastructure GitOps boundary.
 
-GitLab stores private OCI images at `registry.swirlit.dev` and private Maven,
-npm, and NuGet artifacts in each project's Package Registry. CI base images
-are pulled through the Infrastructure group's GitLab Dependency Proxy by using
-`CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX`. Public language dependencies resolve
-directly from Maven Central, npm, and NuGet.org and are retained in the runner's
-persistent 5 GiB build cache. This provides practical reuse without operating a
-separate repository manager.
+GitHub and GitLab branches and tags are synchronized after every push. GitHub
+pushes start `.github/workflows/sync-gitlab.yml` directly; GitLab push and tag
+webhooks call GitHub's repository-dispatch endpoint and start the same
+reconciler, even when a commit skips CI. It fast-forwards the lagging side,
+merges divergent branches without force pushing, and refuses conflicting tag
+rewrites. A monthly schedule self-rotates the managed GitLab credential into
+the encrypted GitHub secret before expiry.
+
+GitLab stores private OCI images at `registry.swirlit.dev`. Application
+pipelines retain downloadable job artifacts for seven days and publish
+immutable release outputs through each project's Generic Package Registry:
+DevApp publishes two JARs and its SPA archive, Thoughty publishes server and web
+archives, and Indezy publishes its JAR and SPA archive. Every package version
+also contains `SHA256SUMS`. These are visible under **Deploy > Package Registry**;
+the Container Registry UI intentionally shows only images and Kaniko cache
+repositories.
+
+The infrastructure pipeline pins its Alpine base by Docker Hub digest; the
+K3s/containerd `IfNotPresent` policy reuses the node-local copy without relying
+on mutable Dependency Proxy cache metadata. The group Dependency Proxy remains
+available for non-critical upstream image acceleration. Application Maven/npm
+dependencies resolve from their public upstreams and use the runner's persistent
+5 GiB build cache. Application image jobs can rebuild their disposable Kaniko
+layers as needed. A cold pipeline must still compile, test, upload immutable
+outputs, and roll out workloads, while later pipelines avoid most unchanged
+dependency work. This provides practical reuse without operating a separate
+repository manager.
+
+The three application repositories use one bootstrap contract:
+
+| Project | Argo CD bootstrap | Desired state |
+|---|---|---|
+| `swirlit/devapp` | `infra/argocd/application.yaml` | `infra/k8s` |
+| `swirlit/thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` |
+| `swirlit/indezy` | `infra/argocd/application.yaml` | `infra/k8s` |
+
+Their pipelines use the internal `gitlab.swirlit.internal` API/clone route and
+the internal Registry service for cluster traffic, while user-facing GitLab and
+Registry URLs remain `gitlab.swirlit.dev` and `registry.swirlit.dev`. Each app
+repository owns its GitLab bootstrap, Vault contracts, Argo CD Application, and
+runtime manifests; `bm-cluster` owns only the generic runner and shared platform.
+
+Registry retention is declared in `k8s/platform/gitlab-registry-retention.yaml`.
+Every day it reconciles GitLab's native container-image cleanup policy for all
+projects in the SwirlIT group and removes Package Registry versions created more
+than 1,095 days ago. GitLab continues to protect protected container tags and
+the literal `latest` tag. The group-scoped API token is stored in Vault at
+`secret/infra/gitlab`, projected by External Secrets, and never committed.
 
 GitLab and the runner expose Prometheus metrics through pod annotations. The
 provisioned GitLab Delivery dashboard is loaded by Grafana, and Fluent Bit ships
 their JSON container logs into the existing Elasticsearch/Kibana pipeline.
 
-Create an administrator API token for the one-time project/runner bootstrap,
-then run:
+Create administrator tokens for the one-time GitLab and GitHub bootstrap, then
+run:
 
 ```bash
-GITLAB_ADMIN_TOKEN='...' ./scripts/configure-gitlab-ci.sh
+GITLAB_ADMIN_TOKEN='...' \
+GITHUB_ADMIN_TOKEN='...' \
+  ./scripts/configure-gitlab-ci.sh
 ```
 
-The script creates or reconciles the group, project, Dependency Proxy, and
-instance runner, then stores only the runner authentication token in Vault.
+The script creates or reconciles the group, project, Dependency Proxy, image
+retention policy, instance runner, encrypted repository-sync credentials, and
+GitLab repository-dispatch webhook. It stores the runner authentication token
+and a group-scoped registry-retention API token in Vault; no credential is
+committed.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `k8s/platform/homepage.yaml`. Both
@@ -128,7 +176,7 @@ the interactive installer and `ansible/deploy.yml` apply it automatically.
 Requirements:
 
 - Ubuntu 22.04 or newer
-- 8 or more CPUs, 16 GB or more RAM, and 100 GB or more disk
+- 8 or more CPUs, 32 GB or more RAM, and 250 GB or more disk
 - A sudo-capable non-root user
 - A domain registered for public deployments
 - SSH keys and passwordless `sudo` from the control plane to every worker
@@ -277,12 +325,19 @@ repository:
 | Grafana | `admin` | `kubectl get secret -n infra grafana-admin-secret -o jsonpath='{.data.GF_SECURITY_ADMIN_PASSWORD}' \| base64 -d` |
 | Kafka UI | Secret value | `kubectl get secret -n infra kafka-ui-auth-secret -o go-template='{{printf "%s:%s" (index .data "SPRING_SECURITY_USER_NAME" \| base64decode) (index .data "SPRING_SECURITY_USER_PASSWORD" \| base64decode)}}'` |
 | Keycloak | Secret value | `kubectl get secret -n infra keycloak-admin-secret -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' \| base64 -d` |
+| Kibana | `admin` | `kubectl get secret -n infra elasticsearch-security-bootstrap -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
+| Longhorn origin login | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=password secret/infra/platform-ui` |
 | Odoo | `admin` | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
 | Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
 | SonarQube | `admin` | Initial password: `admin` |
 | Vault | Token login | `sudo cat /var/lib/bm-cluster/vault-bootstrap-token` |
 
 Change bootstrap credentials immediately after onboarding.
+
+Kibana and Longhorn retain Cloudflare Access at the public edge. Kibana uses
+Elastic's native login, users, and roles at the origin. Longhorn has no native
+authentication provider, so only Longhorn retains the Vault-managed NGINX Basic
+Auth boundary for direct-IP and internal ingress access.
 
 ## Operations
 
@@ -294,13 +349,21 @@ kubectl get ingress -A
 kubectl get pvc -A
 ```
 
-Applications opt into metrics from their own repository by adding
-`prometheus.io/scrape`, `prometheus.io/path`, and `prometheus.io/port` pod
-annotations. Application Grafana dashboards remain application-owned: publish a
-ConfigMap labeled `grafana_dashboard: "1"` containing dashboard JSON. Kubernetes
-logs are collected automatically into `kubernetes-logs-*` and can be filtered in
-Kibana by `kubernetes.namespace_name` and `kubernetes.labels.app`. The logging
-bootstrap applies a seven-day Elasticsearch lifecycle policy to bound disk use.
+Prometheus discovers metrics from any pod carrying `prometheus.io/scrape`,
+`prometheus.io/path`, and `prometheus.io/port` annotations. Grafana discovers
+application-owned dashboard ConfigMaps labeled `grafana_dashboard: "1"` in any
+namespace, while its generic **Applications Namespace Overview** requires no
+application inventory. Fluent Bit collects every container log, enriches records
+from the `apps` namespace with a stable `observability_scope=application` field,
+and copies the Kubernetes `app` label to a keyword field. Kibana provisions an
+**Applications Namespace Logs** dashboard filtered only by namespace. This keeps
+platform discovery independent of application names; app repositories own their
+metrics endpoints, structured stdout format, and optional detailed dashboards.
+The logging bootstrap applies a seven-day Elasticsearch lifecycle policy to
+bound disk use. Elasticsearch security is enabled: Kibana uses its reserved
+system account, ingestion and Grafana use dedicated least-privilege users, and
+dashboard import hooks use a dedicated account with the `kibana_admin` role. All credentials
+and Kibana encryption keys are synchronized from Vault.
 
 Trigger the Descheduler manually:
 
@@ -310,7 +373,10 @@ kubectl get jobs -n infra -l app=descheduler -w
 ```
 
 K3s creates a consistent root-only recovery archive every day and retains the
-latest seven under `/var/backups/bm-cluster/k3s`. Run one immediately with
+latest seven under `/var/backups/bm-cluster/k3s`. The transactionally consistent
+staging database is reduced to current Kubernetes state before archiving, so
+superseded Kine revisions, tombstones, previous values, and SQLite free pages
+are not retained. Run one immediately with
 `sudo systemctl start bm-k3s-backup.service`, then copy the resulting archive to
 encrypted off-node storage; a backup that remains on this server does not cover
 disk or host loss.

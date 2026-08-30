@@ -160,6 +160,14 @@ else
     pass "platform contract uses source-safe properties"
 fi
 
+if grep -Fq 'DELETE FROM kine' "$REPOSITORY_ROOT/scripts/backup-k3s.sh" &&
+   grep -Fq "SET prev_revision = 0, old_value = X''" "$REPOSITORY_ROOT/scripts/backup-k3s.sh" &&
+   grep -Fq 'Never run these statements against the live K3s database' "$REPOSITORY_ROOT/scripts/backup-k3s.sh"; then
+    pass "K3s recovery archives exclude deleted SQLite free-page data"
+else
+    fail "K3s recovery archives exclude deleted SQLite free-page data"
+fi
+
 if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
    [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "registry.swirlit.dev" ]] &&
    [[ "${DEFAULT_K3S_REGISTRY_ENDPOINT:-}" == "http://10.43.255.251:5050" ]] &&
@@ -214,7 +222,7 @@ for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MA
         fi
     done
 done
-for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS POST_ARGOCD_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS; do
+for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS POST_ARGOCD_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS DEFAULT_CLOUDFLARE_NON_BROWSER_HOST_LABELS DEFAULT_CLOUDFLARE_EXTERNAL_INGRESS_HOST_LABELS; do
     value="${!inventory}"
     if [[ "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | wc -l)" -ne "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | sort -u | wc -l)" ]]; then
         printf 'Contract list contains duplicates: %s\n' "$inventory" >&2
@@ -271,11 +279,25 @@ fi
 info "Checking public service inventories"
 csv_to_file "$DEFAULT_CLOUDFLARE_HOST_LABELS" "$TEMP_DIR/public-hosts"
 csv_to_file "$DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS" "$TEMP_DIR/access-hosts"
+csv_to_file "$DEFAULT_CLOUDFLARE_NON_BROWSER_HOST_LABELS" "$TEMP_DIR/non-browser-hosts"
+csv_to_file "$DEFAULT_CLOUDFLARE_EXTERNAL_INGRESS_HOST_LABELS" "$TEMP_DIR/external-ingress-hosts"
 
 if [[ -s "$TEMP_DIR/access-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/access-hosts" "$TEMP_DIR/public-hosts")" ]]; then
     fail "Cloudflare Access hosts are a subset of published hosts"
 else
     pass "Cloudflare Access hosts are a subset of published hosts"
+fi
+
+if [[ -s "$TEMP_DIR/non-browser-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/non-browser-hosts" "$TEMP_DIR/public-hosts")" ]]; then
+    fail "non-browser hosts are a subset of published hosts"
+else
+    pass "non-browser hosts are a subset of published hosts"
+fi
+
+if [[ -s "$TEMP_DIR/external-ingress-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/external-ingress-hosts" "$TEMP_DIR/public-hosts")" ]]; then
+    fail "application-owned Ingress hosts are a subset of published hosts"
+else
+    pass "application-owned Ingress hosts are a subset of published hosts"
 fi
 
 if grep -Fq 'configure_registry_bot_compatibility' "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh" &&
@@ -286,15 +308,27 @@ else
     fail "Cloudflare reconciliation preserves non-browser Registry API access"
 fi
 
+if grep -Fq 'older_than:"1095d"' "$REPOSITORY_ROOT/scripts/configure-gitlab-ci.sh" &&
+   grep -Fq 'value: "1095"' "$K8S_ROOT/platform/gitlab-registry-retention.yaml" &&
+   grep -Fq 'property: retention_api_token' "$K8S_ROOT/platform/gitlab-registry-retention.yaml" &&
+   grep -Fq 'platform/gitlab-registry-retention.yaml' "$REPOSITORY_ROOT/config/platform.env"; then
+    pass "GitLab package and container registries declare three-year retention"
+else
+    fail "GitLab package and container registries declare three-year retention"
+fi
+
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
     awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" 'index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"
-compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every published cluster hostname"
+comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/non-browser-hosts" > "$TEMP_DIR/dashboard-hosts"
+comm -23 "$TEMP_DIR/dashboard-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-dashboard-hosts"
+compare_sets "$TEMP_DIR/central-dashboard-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every centrally owned browser-facing cluster hostname"
 
 sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "${kubernetes_manifests[@]}" |
     awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" '$0 != zone && index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/ingress-hosts"
-compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/ingress-hosts" "repository-owned public hosts have matching Ingress resources"
+comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-ingress-hosts"
+compare_sets "$TEMP_DIR/central-ingress-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
 
 info "Checking Kubernetes workload policy"
 image_failed=false

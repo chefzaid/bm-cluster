@@ -78,13 +78,21 @@ data:
         Labels                    On
         Annotations               Off
 
+    [FILTER]
+        Name                      lua
+        Match                     kube.*
+        script                    /fluent-bit/etc/enrich-kubernetes.lua
+        call                      enrich_kubernetes
+
     [OUTPUT]
         Name                      es
         Match                     kube.*
         Host                      elasticsearch.swirlit.internal
         Port                      9200
+        HTTP_User                 ${ELASTICSEARCH_USERNAME}
+        HTTP_Passwd               ${ELASTICSEARCH_PASSWORD}
         Logstash_Format           On
-        Logstash_Prefix           kubernetes-logs
+        Logstash_Prefix           kubernetes-logs-v2
         Logstash_DateFormat       %Y.%m.%d
         Suppress_Type_Name        On
         Generate_ID               On
@@ -96,25 +104,39 @@ data:
 
   index-template.json: |
     {
-      "index_patterns": ["kubernetes-logs-*"],
+      "order": 100,
+      "index_patterns": ["kubernetes-logs-v2-*"],
       "settings": {
         "number_of_shards": 1,
         "number_of_replicas": 0,
         "index.refresh_interval": "5s",
+        "index.mapping.total_fields.limit": 200,
+        "index.mapping.ignore_malformed": true,
         "index.lifecycle.name": "bm-cluster-logs-7d"
       },
       "mappings": {
-        "dynamic": true,
+        "dynamic": false,
         "properties": {
           "@timestamp": {"type": "date"},
           "app": {"type": "keyword"},
+          "observability_scope": {"type": "keyword"},
           "level": {"type": "keyword"},
           "logger_name": {"type": "keyword"},
           "thread_name": {"type": "keyword"},
           "stream": {"type": "keyword"},
           "message": {"type": "text"},
           "log": {"type": "text"},
+          "timestamp": {"type": "date"},
+          "context": {"type": "keyword"},
+          "trace": {"type": "text"},
+          "stack_trace": {"type": "text"},
+          "requestId": {"type": "keyword"},
+          "method": {"type": "keyword"},
+          "path": {"type": "keyword"},
+          "statusCode": {"type": "integer"},
+          "durationMs": {"type": "float"},
           "kubernetes": {
+            "dynamic": false,
             "properties": {
               "namespace_name": {"type": "keyword"},
               "pod_name": {"type": "keyword"},
@@ -128,6 +150,28 @@ data:
         }
       }
     }
+  enrich-kubernetes.lua: |
+    function enrich_kubernetes(tag, timestamp, record)
+      local kubernetes = record["kubernetes"]
+      if kubernetes == nil then
+        return 0, timestamp, record
+      end
+
+      if kubernetes["namespace_name"] == "apps" then
+        record["observability_scope"] = "application"
+      end
+
+      local labels = kubernetes["labels"]
+      if labels ~= nil and labels["app"] ~= nil then
+        record["app"] = labels["app"]
+      end
+
+      if record["message"] ~= nil and type(record["message"]) ~= "string" then
+        record["message"] = nil
+      end
+
+      return 2, timestamp, record
+    end
   ilm-policy.json: |
     {
       "policy": {
@@ -156,6 +200,8 @@ metadata:
   namespace: infra
   labels:
     app: fluent-bit
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   selector:
     matchLabels:
@@ -165,6 +211,7 @@ spec:
       labels:
         app: fluent-bit
       annotations:
+        bm-cluster.swirlit.dev/config-version: "3"
         prometheus.io/scrape: "true"
         prometheus.io/path: /api/v2/metrics/prometheus
         prometheus.io/port: "2020"
@@ -179,20 +226,24 @@ spec:
       initContainers:
         - name: configure-index-template
           image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          envFrom:
+            - secretRef:
+                name: fluent-bit-elasticsearch-credentials
           command:
             - sh
             - -c
             - |
-              until curl -fsS http://elasticsearch.swirlit.internal:9200 >/dev/null; do sleep 5; done
-              curl -fsS -X PUT \
+              until curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
+                http://elasticsearch.swirlit.internal:9200 >/dev/null; do sleep 5; done
+              curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/ilm-policy.json \
                 http://elasticsearch.swirlit.internal:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
-              curl -fsS -X PUT \
+              curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/index-template.json \
-                http://elasticsearch.swirlit.internal:9200/_template/kubernetes-logs >/dev/null
-              curl -fsS -X PUT \
+                http://elasticsearch.swirlit.internal:9200/_template/kubernetes-logs-v2 >/dev/null
+              curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary '{"index.lifecycle.name":"bm-cluster-logs-7d"}' \
                 'http://elasticsearch.swirlit.internal:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
@@ -217,6 +268,9 @@ spec:
       containers:
         - name: fluent-bit
           image: cr.fluentbit.io/fluent/fluent-bit@sha256:a941bdd5ca552b2c6597fc7b3bccf2e61d30873939bab5700963de0e94ac6169
+          envFrom:
+            - secretRef:
+                name: fluent-bit-elasticsearch-credentials
           ports:
             - name: metrics
               containerPort: 2020
@@ -248,6 +302,10 @@ spec:
             - name: config
               mountPath: /fluent-bit/etc/fluent-bit.conf
               subPath: fluent-bit.conf
+              readOnly: true
+            - name: config
+              mountPath: /fluent-bit/etc/enrich-kubernetes.lua
+              subPath: enrich-kubernetes.lua
               readOnly: true
             - name: varlogcontainers
               mountPath: /var/log/containers

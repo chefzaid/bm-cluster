@@ -24,8 +24,32 @@ install -d -m 0700 "$staging_dir/k3s-db" "$staging_dir/k3s-server" \
 
 # SQLite's online backup API produces a transactionally consistent copy even
 # while K3s is serving traffic and its WAL is changing.
-sqlite3 "$K3S_DB" ".timeout 60000" ".backup '$staging_dir/k3s-db/state.db'"
-[[ "$(sqlite3 "$staging_dir/k3s-db/state.db" 'PRAGMA integrity_check;')" == "ok" ]] || {
+backup_db="$staging_dir/k3s-db/state.db"
+sqlite3 "$K3S_DB" ".timeout 60000" ".backup '$backup_db'"
+
+# Compact only the staging copy to current state. Superseded revisions,
+# tombstones, previous values, and SQLite free pages are not needed to restore
+# the current Kubernetes objects and can retain deleted secrets indefinitely.
+# Never run these statements against the live K3s database.
+sqlite3 "$backup_db" <<'SQL'
+BEGIN IMMEDIATE;
+DELETE FROM kine
+WHERE id IN (
+  SELECT prev_revision
+  FROM kine
+  WHERE name != 'compact_rev_key' AND prev_revision != 0
+  UNION
+  SELECT id
+  FROM kine
+  WHERE deleted != 0
+);
+UPDATE kine
+SET prev_revision = 0, old_value = X''
+WHERE name != 'compact_rev_key';
+COMMIT;
+VACUUM;
+SQL
+[[ "$(sqlite3 "$backup_db" 'PRAGMA integrity_check;')" == "ok" ]] || {
   echo "Backup database integrity check failed." >&2
   exit 1
 }

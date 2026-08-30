@@ -5,12 +5,14 @@ umask 077
 NAMESPACE="${NAMESPACE:-infra}"
 RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runners}"
 GITLAB_URL="${GITLAB_URL:-}"
-GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-infrastructure}"
-GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-Infrastructure}"
+GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
+GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/bm-cluster}"
 GITLAB_PROJECT_NAME="${GITLAB_PROJECT_NAME:-bm-cluster}"
 RUNNER_DESCRIPTION="${RUNNER_DESCRIPTION:-bm-cluster-kubernetes}"
 RUNNER_TAGS="${RUNNER_TAGS:-bm-cluster,kubernetes}"
+RETENTION_TOKEN_NAME="${RETENTION_TOKEN_NAME:-bm-cluster-registry-retention}"
+RETENTION_TOKEN_LIFETIME_DAYS="${RETENTION_TOKEN_LIFETIME_DAYS:-364}"
 # GitLab requires max_artifacts_size to be a positive signed 32-bit integer;
 # unlike its ingress setting, zero means zero bytes rather than unlimited. Use
 # the largest value GitLab can store so artifact uploads are constrained only
@@ -18,6 +20,8 @@ RUNNER_TAGS="${RUNNER_TAGS:-bm-cluster,kubernetes}"
 MAX_ARTIFACTS_SIZE_MB=2147483647
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -36,7 +40,7 @@ fi
 sudo test -s "$VAULT_TOKEN_FILE" || fail "Vault bootstrap token is missing from $VAULT_TOKEN_FILE"
 
 work_dir="$(mktemp -d /tmp/bm-gitlab-ci.XXXXXX)"
-trap 'rm -r -- "$work_dir"; unset GITLAB_ADMIN_TOKEN vault_token runner_token' EXIT
+trap 'rm -r -- "$work_dir"; unset GITLAB_ADMIN_TOKEN GITLAB_RETENTION_TOKEN vault_token runner_token retention_api_token elastic_ci_username elastic_ci_password' EXIT
 api_config="$work_dir/curl-api.conf"
 printf 'silent\nshow-error\nheader = "PRIVATE-TOKEN: %s"\n' "$GITLAB_ADMIN_TOKEN" > "$api_config"
 
@@ -45,6 +49,36 @@ api_json() {
   shift 2
   curl --config "$api_config" --fail-with-body --request "$method" \
     "$GITLAB_URL/api/v4/$path" "$@"
+}
+
+upsert_project_variable() {
+  local key="$1" value="$2" encoded_key status
+  encoded_key="$(jq -rn --arg value "$key" '$value|@uri')"
+  status="$(curl --config "$api_config" --request GET \
+    --output /dev/null --write-out '%{http_code}' \
+    "$GITLAB_URL/api/v4/projects/$project_id/variables/$encoded_key")"
+  case "$status" in
+    200)
+      api_json PUT "projects/$project_id/variables/$encoded_key" \
+        --form-string "value=$value" \
+        --form-string variable_type=env_var \
+        --form-string protected=true \
+        --form-string masked=true \
+        --form-string raw=true >/dev/null
+      ;;
+    404)
+      api_json POST "projects/$project_id/variables" \
+        --form-string "key=$key" \
+        --form-string "value=$value" \
+        --form-string variable_type=env_var \
+        --form-string protected=true \
+        --form-string masked=true \
+        --form-string raw=true >/dev/null
+      ;;
+    *)
+      fail "GitLab returned HTTP $status while reconciling CI variable $key"
+      ;;
+  esac
 }
 
 api_json PUT application/settings \
@@ -117,13 +151,75 @@ jq -n \
 api_json PUT "projects/$project_id" --header 'Content-Type: application/json' \
   --data-binary "@$work_dir/update-project.json" > /dev/null
 
+jq -n \
+  '{container_expiration_policy_attributes:{enabled:true,cadence:"1d",older_than:"1095d",keep_n:null,name_regex:".*",name_regex_keep:null}}' \
+  > "$work_dir/registry-retention-policy.json"
+api_json GET "groups/$group_id/projects?include_subgroups=true&with_shared=false&per_page=100" \
+  > "$work_dir/group-projects.json"
+mapfile -t group_project_ids < <(jq -r '.[].id' "$work_dir/group-projects.json")
+for group_project_id in "${group_project_ids[@]}"; do
+  api_json PUT "projects/$group_project_id" --header 'Content-Type: application/json' \
+    --data-binary "@$work_dir/registry-retention-policy.json" > /dev/null
+done
+info "Configured three-year container image retention for ${#group_project_ids[@]} projects"
+
 vault_token="$(sudo cat "$VAULT_TOKEN_FILE")"
+elastic_ci_username="$({ printf '%s\n' "$vault_token"; } | \
+  kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
+    IFS= read -r VAULT_TOKEN
+    export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
+    vault kv get -field=ci_observer_username secret/infra/elasticsearch
+  ')"
+elastic_ci_password="$({ printf '%s\n' "$vault_token"; } | \
+  kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
+    IFS= read -r VAULT_TOKEN
+    export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
+    vault kv get -field=ci_observer_password secret/infra/elasticsearch
+  ')"
+[[ -n "$elastic_ci_username" && -n "$elastic_ci_password" ]] || \
+  fail "Elastic CI observer credentials are missing from Vault"
+upsert_project_variable ELASTICSEARCH_CI_USERNAME "$elastic_ci_username"
+upsert_project_variable ELASTICSEARCH_CI_PASSWORD "$elastic_ci_password"
+info "Configured protected, masked Elastic observer variables for delivery verification"
+
 runner_token="$({ printf '%s\n' "$vault_token"; } | \
   kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
     IFS= read -r VAULT_TOKEN
     export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
     vault kv get -field=runner_token secret/infra/gitlab 2>/dev/null || true
   ')"
+retention_api_token="${GITLAB_RETENTION_TOKEN:-}"
+if [[ -z "$retention_api_token" ]]; then
+  retention_api_token="$({ printf '%s\n' "$vault_token"; } | \
+    kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
+      IFS= read -r VAULT_TOKEN
+      export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
+      vault kv get -field=retention_api_token secret/infra/gitlab 2>/dev/null || true
+    ')"
+fi
+
+if [[ -n "$retention_api_token" ]]; then
+  retention_token_status="$(curl --silent --show-error --request GET \
+    --output /dev/null --write-out '%{http_code}' \
+    --header "PRIVATE-TOKEN: $retention_api_token" \
+    "$GITLAB_URL/api/v4/groups/$encoded_group_path/projects?per_page=1")"
+  if [[ "$retention_token_status" != "200" ]]; then
+    info "The stored registry-retention API token is stale and will be replaced"
+    retention_api_token=""
+  fi
+fi
+
+if [[ -z "$retention_api_token" ]]; then
+  retention_token_expires_at="$(date -u -d "+$RETENTION_TOKEN_LIFETIME_DAYS days" +%F)"
+  info "Creating a group-scoped GitLab registry-retention API token"
+  api_json POST "groups/$group_id/access_tokens" \
+    --form-string "name=$RETENTION_TOKEN_NAME" \
+    --form-string "expires_at=$retention_token_expires_at" \
+    --form-string "access_level=40" \
+    --form-string "scopes[]=api" \
+    > "$work_dir/retention-token.json"
+  retention_api_token="$(jq -er '.token' "$work_dir/retention-token.json")"
+fi
 
 api_json GET "projects/$project_id/runners?type=project_type&per_page=100" > "$work_dir/legacy-runners.json"
 mapfile -t legacy_runner_ids < <(
@@ -178,20 +274,26 @@ if { printf '%s\n' "$vault_token"; } | kubectl exec -i -n "$NAMESPACE" "$VAULT_P
   export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
   vault kv get secret/infra/gitlab >/dev/null 2>&1
 '; then
-  { printf '%s\n%s\n' "$vault_token" "$runner_token"; } | \
+  { printf '%s\n%s\n%s\n' "$vault_token" "$runner_token" "$retention_api_token"; } | \
     kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
       IFS= read -r VAULT_TOKEN
       IFS= read -r runner_token
+      IFS= read -r retention_api_token
       export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
-      vault kv patch secret/infra/gitlab runner_token="$runner_token" >/dev/null
+      vault kv patch secret/infra/gitlab \
+        runner_token="$runner_token" \
+        retention_api_token="$retention_api_token" >/dev/null
     '
 else
-  { printf '%s\n%s\n' "$vault_token" "$runner_token"; } | \
+  { printf '%s\n%s\n%s\n' "$vault_token" "$runner_token" "$retention_api_token"; } | \
     kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- sh -ceu '
       IFS= read -r VAULT_TOKEN
       IFS= read -r runner_token
+      IFS= read -r retention_api_token
       export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
-      vault kv put secret/infra/gitlab runner_token="$runner_token" >/dev/null
+      vault kv put secret/infra/gitlab \
+        runner_token="$runner_token" \
+        retention_api_token="$retention_api_token" >/dev/null
     '
 fi
 
@@ -204,4 +306,13 @@ if kubectl get externalsecret gitlab-runner-token -n "$RUNNER_NAMESPACE" >/dev/n
   kubectl rollout status deployment/gitlab-runner -n "$RUNNER_NAMESPACE" --timeout=5m >/dev/null
 fi
 
-info "GitLab project, package/container registries, and instance-scoped Kubernetes runner are configured"
+if kubectl get externalsecret gitlab-registry-retention-token -n "$NAMESPACE" >/dev/null 2>&1; then
+  kubectl annotate externalsecret gitlab-registry-retention-token -n "$NAMESPACE" \
+    force-sync="$(date +%s)" --overwrite >/dev/null
+  kubectl wait --for=condition=Ready externalsecret/gitlab-registry-retention-token \
+    -n "$NAMESPACE" --timeout=3m >/dev/null
+fi
+
+GITLAB_URL="$GITLAB_URL" "$REPOSITORY_ROOT/scripts/configure-repository-sync.sh"
+
+info "GitLab project, bidirectional GitHub sync, package/container registries, three-year retention, and instance-scoped Kubernetes runner are configured"

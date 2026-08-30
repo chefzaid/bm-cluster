@@ -1,0 +1,191 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-applications-namespace-dashboard
+  namespace: infra
+  labels:
+    grafana_dashboard: "1"
+data:
+  applications-namespace-overview.json: |
+    {
+      "uid": "applications-namespace-overview",
+      "title": "Applications Namespace Overview",
+      "tags": ["applications", "kubernetes", "auto-discovered"],
+      "timezone": "browser",
+      "schemaVersion": 41,
+      "version": 1,
+      "refresh": "30s",
+      "time": {"from": "now-6h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "name": "application",
+            "label": "Application label",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(kube_pod_labels{namespace=\"apps\",label_app!=\"\"}, label_app)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "refresh": 1,
+            "current": {"text": "All", "value": ["$__all"]}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Scrape Targets Up",
+          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(up{job=\"kubernetes-pods\",namespace=\"apps\",app=~\"$application\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Unavailable Deployments",
+          "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum((kube_deployment_spec_replicas{namespace=\"apps\"} - kube_deployment_status_replicas_available{namespace=\"apps\"}) > 0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Restarts (1h)",
+          "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"apps\"}[1h]))", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Log Ingest Rate",
+          "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(rate(fluentbit_input_records_total{name=\"kubernetes_containers\"}[5m]))", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "area"}
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "CPU by Application Pod",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=\"apps\",container!=\"\",image!=\"\"}[5m])) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=\"apps\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Memory by Application Pod",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=\"apps\",container!=\"\",image!=\"\"}) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=\"apps\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+        },
+        {
+          "id": 7,
+          "type": "timeseries",
+          "title": "Prometheus Scrape Duration",
+          "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "scrape_duration_seconds{job=\"kubernetes-pods\",namespace=\"apps\",app=~\"$application\"}", "legendFormat": "{{app}} / {{pod}}"}],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
+        },
+        {
+          "id": 8,
+          "type": "table",
+          "title": "Deployment Availability",
+          "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "kube_deployment_status_replicas_available{namespace=\"apps\"}", "legendFormat": "{{deployment}}", "instant": true, "format": "table"}],
+          "options": {"showHeader": true}
+        }
+      ]
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-applications-namespace-saved-objects
+  namespace: infra
+data:
+  applications-namespace.ndjson: |
+    {"type":"index-pattern","id":"kubernetes-container-logs","attributes":{"title":"kubernetes-logs-*","timeFieldName":"@timestamp","fields":"[]","fieldFormatMap":"{}","runtimeFieldMap":"{}","sourceFilters":"[]"},"references":[],"migrationVersion":{"index-pattern":"7.11.0"},"coreMigrationVersion":"7.17.0"}
+    {"type":"search","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Automatically discovered Kubernetes container logs from the apps namespace.","columns":["@timestamp","app","kubernetes.pod_name","kubernetes.container_name","level","message","log"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"kubernetes.namespace_name : \\\"apps\\\"\",\"language\":\"kuery\"},\"filter\":[],\"highlightAll\":true,\"version\":true,\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"kubernetes-container-logs"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"dashboard","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Auto-discovered logs for every workload in the apps namespace.","hits":0,"timeRestore":false,"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":0,\"w\":48,\"h\":28,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"search","id":"applications-namespace-logs"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-applications-namespace-bootstrap
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: kibana-applications-namespace-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: import-saved-objects
+          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          envFrom:
+            - secretRef:
+                name: kibana-bootstrap-credentials
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" \
+                http://kibana.swirlit.internal:5601/api/status >/dev/null; do sleep 5; done
+              response="$(curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" -X POST \
+                -H 'kbn-xsrf: namespace-observability-bootstrap' \
+                -F file=@/saved-objects/applications-namespace.ndjson \
+                'http://kibana.swirlit.internal:5601/api/saved_objects/_import?overwrite=true')"
+              echo "$response"
+              echo "$response" | grep -q '"success":true'
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: saved-objects
+              mountPath: /saved-objects
+              readOnly: true
+      volumes:
+        - name: saved-objects
+          configMap:
+            name: kibana-applications-namespace-saved-objects

@@ -85,7 +85,7 @@ data:
       showSearchSuggestions: true
       hideVisitURL: true
     layout:
-      Applications & Identity:
+      Applications:
         icon: mdi-apps
         style: row
         columns: 5
@@ -105,7 +105,7 @@ data:
         icon: grafana.png
         style: row
         columns: 4
-      Security & Edge:
+      Security & Identity:
         icon: mdi-shield-lock-outline
         style: row
         columns: 4
@@ -115,39 +115,27 @@ data:
         columns: 4
 
   services.yaml: |
-    - Applications & Identity:
+    - Applications:
         - Odoo:
             icon: odoo.png
             href: https://odoo.swirlit.dev
             description: ERP and CRM application
             namespace: apps
             podSelector: app=odoo
-        - Keycloak:
-            icon: keycloak.png
-            href: https://keycloak.swirlit.dev/auth
-            description: Identity and access management
-            namespace: infra
-            podSelector: app=keycloak
 
     - DevOps & Delivery:
+        - GitLab:
+            icon: gitlab.png
+            href: https://gitlab.swirlit.dev
+            description: Source control, CI, artifacts, and collaboration
+            namespace: infra
+            podSelector: app=gitlab
         - Argo CD:
             icon: argo-cd.png
             href: https://argocd.swirlit.dev
             description: GitOps continuous delivery
             namespace: infra
             podSelector: app.kubernetes.io/part-of=argocd
-        - GitLab:
-            icon: gitlab.png
-            href: https://gitlab.swirlit.dev
-            description: Source control, CI/CD, and package artifacts
-            namespace: infra
-            podSelector: app=gitlab
-        - GitLab Container Registry:
-            icon: gitlab.png
-            href: https://registry.swirlit.dev/v2/
-            description: Private OCI image storage
-            namespace: infra
-            podSelector: app=gitlab
         - SonarQube:
             icon: sonarqube.png
             href: https://sonarqube.swirlit.dev
@@ -274,7 +262,13 @@ data:
             namespace: infra
             podSelector: app=kube-state-metrics
 
-    - Security & Edge:
+    - Security & Identity:
+        - Keycloak:
+            icon: keycloak.png
+            href: https://keycloak.swirlit.dev/auth
+            description: Identity and access management
+            namespace: infra
+            podSelector: app=keycloak
         - Vault:
             icon: vault.png
             href: https://vault.swirlit.dev
@@ -432,7 +426,7 @@ spec:
         app.kubernetes.io/name: homepage
         app.kubernetes.io/part-of: bm-cluster
       annotations:
-        bm-cluster/config-revision: "4"
+        bm-cluster/config-revision: "6"
     spec:
       serviceAccountName: homepage
       automountServiceAccountToken: true

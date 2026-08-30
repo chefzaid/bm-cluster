@@ -15,8 +15,6 @@ spec:
     - sonarqube.swirlit.dev
     - argocd.swirlit.dev
     - grafana.swirlit.dev
-    - kibana.swirlit.dev
-    - longhorn.swirlit.dev
     - dbgate.swirlit.dev
     - kafka.swirlit.dev
     - portainer.swirlit.dev
@@ -62,26 +60,6 @@ spec:
             name: grafana
             port:
               number: 3000
-  - host: kibana.swirlit.dev
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: kibana
-            port:
-              number: 5601
-  - host: longhorn.swirlit.dev
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: longhorn-frontend
-            port:
-              number: 80
   - host: dbgate.swirlit.dev
     http:
       paths:
@@ -112,6 +90,65 @@ spec:
             name: portainer
             port:
               number: 9000
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana-ingress
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - kibana.swirlit.dev
+      secretName: swirlit-dev-tls
+  rules:
+    - host: kibana.swirlit.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kibana
+                port:
+                  number: 5601
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: longhorn-ingress
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: platform-ui-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Longhorn login"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - longhorn.swirlit.dev
+      secretName: swirlit-dev-tls
+  rules:
+    - host: longhorn.swirlit.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: longhorn-frontend
+                port:
+                  number: 80
 
 ---
 apiVersion: networking.k8s.io/v1

@@ -307,6 +307,61 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/portainer >/d
     password="$(generate_secret)" >/dev/null
 fi
 
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/elasticsearch >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/elasticsearch"
+  elastic_superuser_password="${ELASTIC_SUPERUSER_PASSWORD:-$(generate_secret)}"
+  elastic_admin_password="${ELASTIC_ADMIN_PASSWORD:-$(generate_secret)}"
+  kibana_system_password="$(generate_secret)"
+  logstash_writer_password="$(generate_secret)"
+  fluent_bit_writer_password="$(generate_secret)"
+  grafana_reader_password="$(generate_secret)"
+  kibana_bootstrap_password="$(generate_secret)"
+  ci_observer_password="$(generate_secret)"
+  vault_cmd_auth "$root_token" kv put secret/infra/elasticsearch \
+    elastic_username="elastic" \
+    elastic_password="$elastic_superuser_password" \
+    admin_username="admin" \
+    admin_password="$elastic_admin_password" \
+    kibana_system_username="kibana_system" \
+    kibana_system_password="$kibana_system_password" \
+    logstash_writer_username="logstash_writer" \
+    logstash_writer_password="$logstash_writer_password" \
+    fluent_bit_writer_username="fluent_bit_writer" \
+    fluent_bit_writer_password="$fluent_bit_writer_password" \
+    grafana_reader_username="grafana_reader" \
+    grafana_reader_password="$grafana_reader_password" \
+    kibana_bootstrap_username="kibana_dashboard_bootstrap" \
+    kibana_bootstrap_password="$kibana_bootstrap_password" \
+    ci_observer_username="ci_observer" \
+    ci_observer_password="$ci_observer_password" \
+    kibana_security_encryption_key="$(generate_secret)" \
+    kibana_saved_objects_encryption_key="$(generate_secret)" \
+    kibana_reporting_encryption_key="$(generate_secret)" >/dev/null
+  unset elastic_superuser_password elastic_admin_password kibana_system_password
+  unset logstash_writer_password fluent_bit_writer_password grafana_reader_password
+  unset kibana_bootstrap_password ci_observer_password
+fi
+
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/elasticsearch | \
+  jq -e '.data.data.ci_observer_username and .data.data.ci_observer_password' >/dev/null 2>&1; then
+  info "Adding the Elastic CI observer credential to Vault"
+  vault_cmd_auth "$root_token" kv patch secret/infra/elasticsearch \
+    ci_observer_username="ci_observer" \
+    ci_observer_password="$(generate_secret)" >/dev/null
+fi
+
+if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/platform-ui >/dev/null 2>&1; then
+  info "Seeding Vault secret: infra/platform-ui"
+  platform_ui_username="${PLATFORM_UI_USERNAME:-admin}"
+  platform_ui_password="${PLATFORM_UI_PASSWORD:-$(generate_secret)}"
+  platform_ui_htpasswd="$platform_ui_username:$(openssl passwd -apr1 "$platform_ui_password")"
+  vault_cmd_auth "$root_token" kv put secret/infra/platform-ui \
+    username="$platform_ui_username" \
+    password="$platform_ui_password" \
+    htpasswd="$platform_ui_htpasswd" >/dev/null
+  unset platform_ui_username platform_ui_password platform_ui_htpasswd
+fi
+
 install_host_unseal_service
 sudo systemctl start bm-vault-unseal.service
 

@@ -1,0 +1,226 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: gitlab-registry-retention-token
+  namespace: infra
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: gitlab-registry-retention-token
+    creationPolicy: Owner
+  data:
+    - secretKey: api-token
+      remoteRef:
+        key: infra/gitlab
+        property: retention_api_token
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-registry-retention
+  namespace: infra
+data:
+  cleanup.rb: |
+    #!/opt/gitlab/embedded/bin/ruby
+    # frozen_string_literal: true
+
+    require 'json'
+    require 'net/http'
+    require 'time'
+    require 'uri'
+
+    class GitLabApi
+      def initialize(root:, token:)
+        @root = URI(root.end_with?('/') ? root : "#{root}/")
+        @token = token
+      end
+
+      def request(method, path, query: {}, body: nil, expected: [200])
+        uri = @root.dup
+        uri.path = "#{@root.path.sub(%r{/+\z}, '')}/#{path.sub(%r{\A/+}, '')}"
+        uri.query = URI.encode_www_form(query) unless query.empty?
+
+        request_class = {
+          'DELETE' => Net::HTTP::Delete,
+          'GET' => Net::HTTP::Get,
+          'PUT' => Net::HTTP::Put
+        }.fetch(method)
+        api_request = request_class.new(uri)
+        api_request['PRIVATE-TOKEN'] = @token
+        if body
+          api_request['Content-Type'] = 'application/json'
+          api_request.body = JSON.generate(body)
+        end
+
+        response = Net::HTTP.start(
+          uri.host,
+          uri.port,
+          use_ssl: uri.scheme == 'https',
+          open_timeout: 15,
+          read_timeout: 120
+        ) { |http| http.request(api_request) }
+
+        return response if expected.include?(response.code.to_i)
+
+        message = response.body.to_s.gsub(/\s+/, ' ')[0, 500]
+        raise "GitLab #{method} #{uri.path} failed with HTTP #{response.code}: #{message}"
+      end
+
+      def all_pages(path, query: {})
+        records = []
+        page = '1'
+
+        loop do
+          response = request('GET', path, query: query.merge(per_page: 100, page: page))
+          current_page = JSON.parse(response.body)
+          raise "GitLab GET #{path} did not return a JSON array" unless current_page.is_a?(Array)
+
+          records.concat(current_page)
+          page = response['x-next-page'].to_s
+          break if page.empty?
+        end
+
+        records
+      end
+    end
+
+    api = GitLabApi.new(
+      root: ENV.fetch('GITLAB_API_URL'),
+      token: ENV.fetch('GITLAB_TOKEN')
+    )
+    group_path = ENV.fetch('GITLAB_GROUP_PATH', 'swirlit')
+    retention_days = Integer(ENV.fetch('RETENTION_DAYS', '1095'), 10)
+    dry_run = ENV.fetch('DRY_RUN', 'false').casecmp('true').zero?
+    cutoff = Time.now.utc - (retention_days * 86_400)
+    encoded_group_path = URI.encode_www_form_component(group_path)
+
+    projects = api.all_pages(
+      "groups/#{encoded_group_path}/projects",
+      query: { include_subgroups: true, with_shared: false }
+    )
+    raise "No projects are visible in GitLab group #{group_path}" if projects.empty?
+
+    deleted_packages = 0
+    puts "Enforcing #{retention_days}-day GitLab registry retention for #{projects.length} projects; cutoff=#{cutoff.iso8601} dry_run=#{dry_run}"
+
+    projects.each do |project|
+      project_id = Integer(project.fetch('id'))
+      project_path = project.fetch('path_with_namespace')
+
+      unless dry_run
+        api.request(
+          'PUT',
+          "projects/#{project_id}",
+          body: {
+            container_expiration_policy_attributes: {
+              enabled: true,
+              cadence: '1d',
+              older_than: "#{retention_days}d",
+              keep_n: nil,
+              name_regex: '.*',
+              name_regex_keep: nil
+            }
+          }
+        )
+      end
+      puts "#{project_path}: container image policy=#{retention_days}d"
+
+      packages = api.all_pages("projects/#{project_id}/packages")
+      packages.each do |package|
+        created_at = package['created_at']
+        unless created_at
+          warn "#{project_path}: skipping package #{package['id']} because created_at is missing"
+          next
+        end
+        next unless Time.iso8601(created_at) < cutoff
+
+        package_description = "#{package['package_type']}/#{package['name']}@#{package['version']} (id=#{package['id']}, created_at=#{created_at})"
+        if dry_run
+          puts "#{project_path}: would delete package #{package_description}"
+        else
+          api.request('DELETE', "projects/#{project_id}/packages/#{package.fetch('id')}", expected: [202, 204])
+          deleted_packages += 1
+          puts "#{project_path}: deleted package #{package_description}"
+        end
+      end
+    end
+
+    puts "GitLab registry retention complete: projects=#{projects.length} deleted_packages=#{deleted_packages}"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitlab-registry-retention
+  namespace: infra
+spec:
+  schedule: "17 3 * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app: gitlab-registry-retention
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: cleanup
+              image: docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f
+              command: ["/opt/gitlab/embedded/bin/ruby", "/scripts/cleanup.rb"]
+              env:
+                - name: GITLAB_API_URL
+                  value: http://gitlab.swirlit.internal/api/v4
+                - name: GITLAB_GROUP_PATH
+                  value: swirlit
+                - name: RETENTION_DAYS
+                  value: "1095"
+                - name: GITLAB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: gitlab-registry-retention-token
+                      key: api-token
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 96Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: script
+              configMap:
+                name: gitlab-registry-retention
+                defaultMode: 0555
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi

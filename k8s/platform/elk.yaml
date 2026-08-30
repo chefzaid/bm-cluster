@@ -38,6 +38,8 @@ data:
     output {
       elasticsearch {
         hosts => ["http://elasticsearch.swirlit.internal:9200"]
+        user => "${ELASTICSEARCH_USERNAME}"
+        password => "${ELASTICSEARCH_PASSWORD}"
         index => "app-logs-%{+yyyy.MM.dd}"
         template => "/usr/share/logstash/config/app-logs-template.json"
         template_name => "app-logs-single-node"
@@ -77,6 +79,8 @@ kind: Service
 metadata:
   name: elasticsearch
   namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
 spec:
   ports:
   - port: 9200
@@ -94,6 +98,8 @@ kind: Deployment
 metadata:
   name: elasticsearch
   namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
 spec:
   replicas: 1
   # The single-node process holds an exclusive lock on its RWO data path.
@@ -145,7 +151,12 @@ spec:
         - name: ES_JAVA_OPTS
           value: "-Xms1g -Xmx1g"
         - name: xpack.security.enabled
-          value: "false"
+          value: "true"
+        - name: ELASTIC_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-security-bootstrap
+              key: ELASTIC_PASSWORD
         resources:
           limits:
             memory: "2Gi"
@@ -165,16 +176,20 @@ spec:
           mountPath: /usr/share/elasticsearch/data
           subPath: esdata
         readinessProbe:
-          httpGet:
-            path: /_cluster/health
-            port: 9200
+          exec:
+            command:
+              - sh
+              - -c
+              - curl -fsS --user "elastic:${ELASTIC_PASSWORD}" http://127.0.0.1:9200/_cluster/health >/dev/null
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
         livenessProbe:
-          httpGet:
-            path: /_cluster/health
-            port: 9200
+          exec:
+            command:
+              - sh
+              - -c
+              - curl -fsS --user "elastic:${ELASTIC_PASSWORD}" http://127.0.0.1:9200/_cluster/health >/dev/null
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 5
@@ -185,11 +200,113 @@ spec:
           claimName: elasticsearch-data
 
 ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: elasticsearch-security-bootstrap
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: elasticsearch-security-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: configure-security
+          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          envFrom:
+            - secretRef:
+                name: elasticsearch-security-bootstrap
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              endpoint=http://elasticsearch.swirlit.internal:9200
+
+              json_escape() {
+                printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+              }
+
+              set_password() {
+                username="$1"
+                password="$(json_escape "$2")"
+                curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                  -X POST -H 'Content-Type: application/json' \
+                  --data-binary "{\"password\":\"${password}\"}" \
+                  "${endpoint}/_security/user/${username}/_password" >/dev/null
+              }
+
+              put_user() {
+                username="$1"
+                password="$(json_escape "$2")"
+                roles="$3"
+                full_name="$(json_escape "$4")"
+                curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                  -X PUT -H 'Content-Type: application/json' \
+                  --data-binary "{\"password\":\"${password}\",\"roles\":${roles},\"full_name\":\"${full_name}\"}" \
+                  "${endpoint}/_security/user/${username}" >/dev/null
+              }
+
+              until curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                "${endpoint}/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do
+                sleep 5
+              done
+
+              # Persist the bootstrap password as the elastic user's password
+              # before configuring the remaining built-in and native users.
+              set_password elastic "$ELASTIC_PASSWORD"
+              set_password kibana_system "$KIBANA_SYSTEM_PASSWORD"
+
+              curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                -X PUT -H 'Content-Type: application/json' \
+                --data-binary '{"cluster":["monitor","manage_index_templates","manage_ilm"],"indices":[{"names":["kubernetes-logs-*","app-logs-*"],"privileges":["auto_configure","create_index","manage","write"]}]}' \
+                "${endpoint}/_security/role/logs_writer" >/dev/null
+              curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                -X PUT -H 'Content-Type: application/json' \
+                --data-binary '{"cluster":["monitor"],"indices":[{"names":["kubernetes-logs-*","app-logs-*"],"privileges":["read","view_index_metadata"]}]}' \
+                "${endpoint}/_security/role/logs_reader" >/dev/null
+
+              put_user admin "$ADMIN_PASSWORD" '["superuser"]' 'Platform Administrator'
+              put_user logstash_writer "$LOGSTASH_WRITER_PASSWORD" '["logs_writer"]' 'Logstash Writer'
+              put_user fluent_bit_writer "$FLUENT_BIT_WRITER_PASSWORD" '["logs_writer"]' 'Fluent Bit Writer'
+              put_user grafana_reader "$GRAFANA_READER_PASSWORD" '["logs_reader"]' 'Grafana Logs Reader'
+              put_user kibana_dashboard_bootstrap "$KIBANA_BOOTSTRAP_PASSWORD" '["kibana_admin"]' 'Kibana Dashboard Bootstrap'
+              put_user ci_observer "$CI_OBSERVER_PASSWORD" '["logs_reader"]' 'CI Delivery Observer'
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: logstash
   namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   ports:
   - port: 5000
@@ -231,6 +348,16 @@ spec:
           value: "heap"
         - name: XPACK_MONITORING_ENABLED
           value: "false"
+        - name: ELASTICSEARCH_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: logstash-elasticsearch-credentials
+              key: ELASTICSEARCH_USERNAME
+        - name: ELASTICSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: logstash-elasticsearch-credentials
+              key: ELASTICSEARCH_PASSWORD
         resources:
           limits:
             memory: "1536Mi"
@@ -283,6 +410,8 @@ kind: Service
 metadata:
   name: kibana
   namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
 spec:
   type: ClusterIP
   ports:
@@ -320,8 +449,37 @@ spec:
         env:
         - name: ELASTICSEARCH_HOSTS
           value: '["http://elasticsearch.swirlit.internal:9200"]'
+        - name: ELASTICSEARCH_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: kibana-system-credentials
+              key: ELASTICSEARCH_USERNAME
+        - name: ELASTICSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: kibana-system-credentials
+              key: ELASTICSEARCH_PASSWORD
+        - name: XPACK_SECURITY_ENCRYPTIONKEY
+          valueFrom:
+            secretKeyRef:
+              name: kibana-system-credentials
+              key: XPACK_SECURITY_ENCRYPTIONKEY
+        - name: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+          valueFrom:
+            secretKeyRef:
+              name: kibana-system-credentials
+              key: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+        - name: XPACK_REPORTING_ENCRYPTIONKEY
+          valueFrom:
+            secretKeyRef:
+              name: kibana-system-credentials
+              key: XPACK_REPORTING_ENCRYPTIONKEY
         - name: SERVER_BASEPATH
           value: ""
+        - name: SERVER_PUBLICBASEURL
+          value: "https://kibana.swirlit.dev"
+        - name: XPACK_SECURITY_SECURECOOKIES
+          value: "true"
         - name: NODE_OPTIONS
           value: "--max-old-space-size=1536"
         resources:
@@ -340,14 +498,14 @@ spec:
             drop: ["ALL"]
         startupProbe:
           httpGet:
-            path: /api/status
+            path: /login
             port: 5601
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 60
         readinessProbe:
           httpGet:
-            path: /api/status
+            path: /login
             port: 5601
           periodSeconds: 10
           timeoutSeconds: 5
