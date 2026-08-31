@@ -141,9 +141,11 @@ metadata:
   namespace: gitlab-runners
 data:
   config.template.toml: |
-    concurrent = 2
+    # This single-node cluster has memory-heavy Java, Node, browser, and image
+    # scanning jobs. Serialize them so CI cannot starve production probes.
+    concurrent = 1
     check_interval = 3
-    shutdown_timeout = 30
+    shutdown_timeout = 7200
     listen_address = ":9252"
     log_format = "json"
 
@@ -153,7 +155,7 @@ data:
       clone_url = "http://gitlab.__INTERNAL_DNS_ZONE__"
       token = "__RUNNER_TOKEN__"
       executor = "kubernetes"
-      request_concurrency = 2
+      request_concurrency = 1
       environment = ["FF_USE_POD_ACTIVE_DEADLINE_SECONDS=true"]
 
       [runners.kubernetes]
@@ -212,7 +214,7 @@ spec:
       labels:
         app: gitlab-runner
       annotations:
-        gitlab.__PUBLIC_DOMAIN__/config-version: "4"
+        gitlab.__PUBLIC_DOMAIN__/config-version: "5"
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
         prometheus.io/port: "9252"
