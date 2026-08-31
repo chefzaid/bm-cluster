@@ -529,6 +529,9 @@ if grep -Fq 'name: trivy-operator' "$K8S_ROOT/Chart.yaml" &&
    grep -Fq 'prometheus.io/scrape: "true"' "$K8S_ROOT/values.yaml" &&
    grep -Fq '0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9' "$K8S_ROOT/values.yaml" &&
    grep -Fq 'name: grafana-trivy-security-dashboard' "$K8S_ROOT/platform/trivy.yaml" &&
+   grep -Fq 'name: gitlab-delivery-platform-read' "$K8S_ROOT/platform/gitlab-runner.yaml" &&
+   grep -Fq 'vulnerabilityreports.aquasecurity.github.io' "$K8S_ROOT/platform/gitlab-runner.yaml" &&
+   grep -Fq "grep '^trivy_' >/dev/null" "$REPOSITORY_ROOT/.gitlab-ci.yml" &&
    grep -Fq 'trivy_vulnerability_id' "$K8S_ROOT/platform/trivy.yaml" &&
    grep -Fq 'trivy_compliance_info' "$K8S_ROOT/platform/trivy.yaml"; then
     pass "Trivy Operator is pinned and its detailed findings are provisioned in Grafana"
