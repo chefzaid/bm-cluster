@@ -83,7 +83,7 @@ verify:delivery-platform:
     - kubectl rollout status statefulset/trivy-server -n infra --timeout=300s
     - kubectl get crd vulnerabilityreports.aquasecurity.github.io configauditreports.aquasecurity.github.io exposedsecretreports.aquasecurity.github.io >/dev/null
     - kubectl get configmap grafana-trivy-security-dashboard -n infra >/dev/null
-    - curl --fail --silent --show-error http://trivy-operator.infra.svc.cluster.local/metrics | grep -q '^trivy_'
+    - curl --fail --silent --show-error http://trivy-operator.infra.svc.cluster.local/metrics | grep '^trivy_' >/dev/null
     - curl --fail --silent --show-error --user "$ELASTICSEARCH_CI_USERNAME:$ELASTICSEARCH_CI_PASSWORD" http://elasticsearch.infra.svc.cluster.local:9200/_cluster/health | jq -e '.status == "green" or .status == "yellow"' >/dev/null
     - test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://gitlab-registry.infra.svc.cluster.local:5050/v2/)" = "401"
     - kubectl get configmap grafana-gitlab-delivery-dashboard -n infra >/dev/null
