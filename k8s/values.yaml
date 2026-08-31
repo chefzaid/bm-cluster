@@ -5,7 +5,7 @@ cloudflareAccessTeamName: ""
 appsEnabled: false
 deschedulerEnabled: true
 
-trivyOperator:
+trivy-operator:
   enabled: true
   fullnameOverride: trivy-operator
   targetWorkloads: "replicaset,statefulset,daemonset,cronjob"
