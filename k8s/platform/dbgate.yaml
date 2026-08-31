@@ -63,7 +63,7 @@ spec:
             - name: LABEL_postgres
               value: "PostgreSQL cluster"
             - name: SERVER_postgres
-              value: "postgres.swirlit.internal"
+              value: "postgres.__INTERNAL_DNS_ZONE__"
             - name: PORT_postgres
               value: "5432"
             - name: ENGINE_postgres
@@ -81,7 +81,7 @@ spec:
             - name: LABEL_mongodb
               value: "MongoDB"
             - name: SERVER_mongodb
-              value: "mongodb.swirlit.internal"
+              value: "mongodb.__INTERNAL_DNS_ZONE__"
             - name: PORT_mongodb
               value: "27017"
             - name: ENGINE_mongodb
@@ -99,7 +99,7 @@ spec:
             - name: LABEL_redis
               value: "Redis"
             - name: SERVER_redis
-              value: "redis.swirlit.internal"
+              value: "redis.__INTERNAL_DNS_ZONE__"
             - name: PORT_redis
               value: "6379"
             - name: ENGINE_redis

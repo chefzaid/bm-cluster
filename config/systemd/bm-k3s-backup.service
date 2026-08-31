@@ -1,5 +1,5 @@
 [Unit]
-Description=Create a consistent K3s and Vault recovery archive
+Description=Create consistent K3s, Vault, and application recovery backups
 After=k3s.service
 Requires=k3s.service
 
@@ -14,7 +14,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/etc/rancher/k3s /var/lib/rancher/k3s /var/lib/bm-cluster
+ReadOnlyPaths=/etc/rancher/k3s /etc/bm-cluster /var/lib/rancher/k3s /var/lib/bm-cluster
 ReadWritePaths=/var/backups/bm-cluster/k3s /run/lock
 LockPersonality=true
 MemoryDenyWriteExecute=true

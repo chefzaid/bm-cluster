@@ -909,8 +909,13 @@ configure_lynis_control_plane() {
     sudo install -D -o root -g root -m 0755 \
       "$SCRIPT_DIR/audit-cluster-nodes.sh" /usr/local/sbin/bm-cluster-audit-nodes
   fi
-  info "Running Lynis baseline audit..."
-  sudo lynis audit system --quick >/dev/null
+  [[ -x "$SCRIPT_DIR/configure-lynis-schedule.sh" ]] || \
+    err "The Lynis schedule reconciler is missing or not executable"
+  sudo "$SCRIPT_DIR/configure-lynis-schedule.sh"
+  if ! sudo test -s /var/log/lynis-report.dat; then
+    info "Running the initial Lynis baseline audit..."
+    sudo systemctl start bm-cluster-lynis.service
+  fi
 }
 
 remove_internet_only_tools() {

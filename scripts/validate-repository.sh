@@ -48,7 +48,8 @@ done
 source "$PLATFORM_CONFIG"
 
 mapfile -d '' -t kubernetes_manifests < <(
-    find "$K8S_ROOT" -type f -name '*.yaml' -print0 | LC_ALL=C sort -z
+    find "$K8S_ROOT/base" "$K8S_ROOT/datastores" "$K8S_ROOT/platform" \
+        "$K8S_ROOT/apps" "$K8S_ROOT/addons" -type f -name '*.yaml' -print0 | LC_ALL=C sort -z
 )
 
 csv_to_file() {
@@ -112,6 +113,67 @@ else
     fail "shared network validation behavior"
 fi
 
+prompt_library="$REPOSITORY_ROOT/scripts/lib/installer-prompts.sh"
+prompt_test_output="$(
+    printf 'custom-value\nshared-secret\nshared-secret\n2\n' |
+        bash -c '
+            source "$1"
+            installer_prompt_value test_value "Value"
+            installer_prompt_confirmed_secret test_secret "Secret" "Confirm"
+            installer_prompt_yes_no "Continue?" Y true
+            installer_select_node_transport test_transport "" vrack false
+            printf "%s:%s:%s\n" "$test_value" "$test_secret" "$test_transport"
+        ' _ "$prompt_library" 2>/dev/null
+)" || true
+prompt_consumers_ok=true
+for prompt_consumer in \
+    install-control-plane.sh \
+    install-worker.sh \
+    scripts/add-k3s-workers.sh \
+    scripts/install-k3s-worker.sh; do
+    grep -Fq 'source "$PROMPT_LIBRARY"' "$REPOSITORY_ROOT/$prompt_consumer" || \
+        prompt_consumers_ok=false
+done
+if [[ "$prompt_test_output" == "custom-value:shared-secret:tailscale" ]] &&
+   [[ "$prompt_consumers_ok" == "true" ]] &&
+   grep -Fq 'Use the recommended platform component bundle?' \
+       "$REPOSITORY_ROOT/install-control-plane.sh"; then
+    pass "installers share prompt primitives and group platform component selection"
+else
+    fail "installers share prompt primitives and group platform component selection"
+fi
+
+topology_script="$REPOSITORY_ROOT/scripts/reconcile-cluster-topology.sh"
+topology_mapping=""
+if [[ -x "$topology_script" ]]; then
+    for worker_count in 0 1 2 3 4; do
+        replicas="$("$topology_script" --replicas-for-worker-count "$worker_count")" || \
+            replicas=invalid
+        topology_mapping+="${topology_mapping:+,}$worker_count:$replicas"
+    done
+fi
+if [[ "$topology_mapping" == "0:1,1:1,2:2,3:3,4:4" ]] &&
+   grep -Fq 'Total number of cluster nodes, including the control plane' \
+       "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq 'Allow the control plane to run workloads as a controller-worker?' \
+       "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq -- '--worker-count "$WORKERS_TO_ADD"' \
+       "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq 'Switch the control plane to controller-only (NoSchedule) and keep Longhorn storage on workers?' \
+       "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq 'The control plane is already controller-only; preserving NoSchedule without another question.' \
+       "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq 'Set --control-plane-schedulable true|false|preserve for non-interactive enrollment.' \
+       "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq -- '--control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE"' \
+       "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
+   grep -Fq "!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master" \
+       "$REPOSITORY_ROOT/ansible/deploy.yml"; then
+    pass "install and worker enrollment share control-plane and Longhorn topology policy"
+else
+    fail "install and worker enrollment share control-plane and Longhorn topology policy"
+fi
+
 tailscale_firewall_line="$(grep -n '^configure_tailscale_firewall_integration$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 private_ssh_line="$(grep -n '^validate_worker_private_ssh_before_firewall$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 ufw_apply_line="$(grep -n '^configure_ufw$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
@@ -149,7 +211,7 @@ fi
 info "Checking shared platform contract"
 contract_failed=false
 while IFS= read -r line; do
-    [[ -z "$line" || "$line" == \#* || "$line" =~ ^[A-Z][A-Z0-9_]*=[^[:space:]]+$ ]] || {
+    [[ -z "$line" || "$line" == \#* || "$line" =~ ^[A-Z][A-Z0-9_]*=[^[:space:]]*$ ]] || {
         printf 'Invalid contract line: %s\n' "$line" >&2
         contract_failed=true
     }
@@ -168,33 +230,37 @@ else
     fail "K3s recovery archives exclude deleted SQLite free-page data"
 fi
 
-if [[ "${DEFAULT_INTERNAL_DNS_ZONE:-}" == "swirlit.internal" ]] &&
-   [[ "${DEFAULT_K3S_REGISTRY_HOST:-}" == "registry.swirlit.dev" ]] &&
+if [[ -z "${DEFAULT_PLATFORM_DOMAIN:-}" ]] &&
+   [[ -z "${DEFAULT_INTERNAL_DNS_ZONE:-}" ]] &&
+   [[ -z "${DEFAULT_K3S_REGISTRY_HOST:-}" ]] &&
    [[ "${DEFAULT_K3S_REGISTRY_ENDPOINT:-}" == "http://10.43.255.251:5050" ]] &&
-   grep -Fq 'name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto' \
+   grep -Fq 'name suffix .__INTERNAL_DNS_ZONE__. .infra.svc.cluster.local. answer auto' \
        "$K8S_ROOT/base/coredns-custom.yaml" &&
    grep -Fq 'clusterIP: 10.43.255.251' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'clusterIP: 10.43.255.252' "$K8S_ROOT/platform/gitlab.yaml" &&
-   grep -Fq 'K3S_REMOVED_REGISTRY_HOSTS:-gitlab.swirlit.dev' \
+   grep -Fq 'PLATFORM_DOMAIN:+gitlab.$PLATFORM_DOMAIN' \
        "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" &&
+   grep -Fq 'prompt_cluster_identity' "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq '__PUBLIC_DOMAIN__' "$K8S_ROOT/platform/ingress.yaml" &&
+   grep -Fq '__INTERNAL_DNS_ZONE__' "$K8S_ROOT/base/coredns-custom.yaml" &&
    [[ -x "$REPOSITORY_ROOT/scripts/configure-k3s-registry-mirror.sh" ]]; then
-    pass "cluster DNS, GitLab registry mirror, and canonical Dependency Proxy contracts are complete"
+    pass "cluster identity, private DNS, and Registry hosts are installer-defined"
 else
-    fail "cluster DNS, GitLab registry mirror, and canonical Dependency Proxy contracts are complete"
+    fail "cluster identity, private DNS, and Registry hosts are installer-defined"
 fi
 
 legacy_internal_references="$({
     grep -RIl --exclude='coredns-custom.yaml' --exclude='configure-k3s-registry-mirror.sh' \
-        --exclude='validate-repository.sh' --exclude-dir=.git \
+        --exclude='validate-repository.sh' --exclude='.gitlab-ci.yml' --exclude-dir=.git \
         --exclude-dir=node_modules --exclude-dir=target \
         'infra\.svc\.cluster\.local' "$REPOSITORY_ROOT" || true
 } | LC_ALL=C sort -u)"
 if [[ -z "$legacy_internal_references" ]]; then
-    pass "runtime and documentation references use the swirlit.internal alias zone"
+    pass "runtime references use the selected private alias zone or Kubernetes service DNS"
 else
     printf 'Canonical Infra service references remain outside CoreDNS:\n%s\n' \
         "$legacy_internal_references" >&2
-    fail "runtime and documentation references use the swirlit.internal alias zone"
+    fail "runtime references use the selected private alias zone or Kubernetes service DNS"
 fi
 
 legacy_private_dns_label=local
@@ -248,7 +314,8 @@ fi
 
 if [[ -x "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh" ]] &&
    grep -Fq 'OVHcloud-only' "$REPOSITORY_ROOT/scripts/configure-ovh-vrack.sh" &&
-   grep -Fq 'hybrid cloud or non-OVHcloud providers' "$REPOSITORY_ROOT/install-control-plane.sh"; then
+   grep -Fq 'hybrid cloud or non-OVHcloud providers' \
+       "$REPOSITORY_ROOT/scripts/lib/installer-prompts.sh"; then
     pass "private transport choices are explicitly provider-scoped"
 else
     fail "private transport choices are explicitly provider-scoped"
@@ -317,6 +384,18 @@ else
     fail "GitLab package and container registries declare three-year retention"
 fi
 
+if grep -Fq 'OnCalendar=*-*-15 03:00:00' "$REPOSITORY_ROOT/scripts/configure-lynis-schedule.sh" &&
+   grep -Fq -- '-mtime +365 -delete' "$REPOSITORY_ROOT/scripts/configure-lynis-schedule.sh" &&
+   grep -Fq 'paths:' "$K8S_ROOT/platform/logging-agent.yaml" &&
+   grep -Fq '/hostfs/var/log/lynis-report.dat' "$K8S_ROOT/platform/logging-agent.yaml" &&
+   grep -Fq 'index => "lynis-audits-%{+yyyy.MM}"' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq '"min_age": "365d"' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'id":"lynis-security-audits"' "$K8S_ROOT/platform/observability-discovery.yaml"; then
+    pass "monthly Lynis audits are indexed, retained for twelve months, and shown in Kibana"
+else
+    fail "monthly Lynis audits are indexed, retained for twelve months, and shown in Kibana"
+fi
+
 if grep -Fq 'GITLAB_CANONICAL_ADMIN_USERNAME' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'identity.user = canonical_user' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'Users::DestroyService.new(canonical_user)' "$K8S_ROOT/platform/gitlab.yaml" &&
@@ -349,14 +428,14 @@ else
 fi
 
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
-    awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" 'index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
+    awk 'index($0, ".__PUBLIC_DOMAIN__") == length($0) - length(".__PUBLIC_DOMAIN__") + 1 {sub("\\.__PUBLIC_DOMAIN__$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"
 comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/non-browser-hosts" > "$TEMP_DIR/dashboard-hosts"
 comm -23 "$TEMP_DIR/dashboard-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-dashboard-hosts"
 compare_sets "$TEMP_DIR/central-dashboard-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every centrally owned browser-facing cluster hostname"
 
 sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "${kubernetes_manifests[@]}" |
-    awk -v zone="$DEFAULT_CLOUDFLARE_ZONE" '$0 != zone && index($0, "." zone) == length($0) - length(zone) {sub("\\." zone "$", ""); print}' |
+    awk '$0 != "__PUBLIC_DOMAIN__" && index($0, ".__PUBLIC_DOMAIN__") == length($0) - length(".__PUBLIC_DOMAIN__") + 1 {sub("\\.__PUBLIC_DOMAIN__$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/ingress-hosts"
 comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-ingress-hosts"
 compare_sets "$TEMP_DIR/central-ingress-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
@@ -381,7 +460,7 @@ if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&
         python3 -c 'import sys, yaml; list(yaml.safe_load_all(open(sys.argv[1], encoding="utf-8")))' "$yaml_file" || yaml_failed=true
     done < <(
         find "$REPOSITORY_ROOT" -path "$REPOSITORY_ROOT/.git" -prune -o -type f \
-            \( -name '*.yaml' -o -name '*.yml' \) -print | LC_ALL=C sort
+            \( -name '*.yaml' -o -name '*.yml' \) ! -path "$K8S_ROOT/templates/*" -print | LC_ALL=C sort
     )
     if [[ "$yaml_failed" == "true" ]]; then
         fail "all repository YAML documents parse"
@@ -400,6 +479,8 @@ workload_kinds = {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"}
 failures = []
 
 for manifest in sorted(k8s_root.rglob("*.yaml")):
+    if "templates" in manifest.relative_to(k8s_root).parts:
+        continue
     for document_index, resource in enumerate(yaml.safe_load_all(manifest.read_text(encoding="utf-8")), 1):
         if not isinstance(resource, dict) or resource.get("kind") not in workload_kinds:
             continue
@@ -476,7 +557,22 @@ if [[ "$LIVE_VALIDATION" == "true" ]]; then
         fail "active Kubernetes API is reachable for --live"
     else
         live_failed=false
-        while IFS= read -r manifest; do
+        live_render_root="$TEMP_DIR/rendered"
+        PLATFORM_DOMAIN=example.com \
+        INTERNAL_DNS_ZONE=internal.example.com \
+        GITOPS_REPOSITORY_URL=https://github.com/example/bm-cluster.git \
+            "$REPOSITORY_ROOT/scripts/render-cluster-config.sh" \
+                --output "$live_render_root" \
+                --domain example.com \
+                --internal-domain internal.example.com \
+                --gitops-repository https://github.com/example/bm-cluster.git \
+                --gitlab-group example \
+                --gitlab-project bm-cluster \
+                --cloudflare-access-team example-team \
+                --apps-enabled true \
+                --descheduler-enabled true >/dev/null
+        while IFS= read -r source_manifest; do
+            manifest="$live_render_root/k8s/${source_manifest#"$K8S_ROOT/"}"
             if grep -Eq '^[[:space:]]+generateName:' "$manifest"; then
                 kubectl create --dry-run=server -f "$manifest" >/dev/null || live_failed=true
             else

@@ -8,9 +8,10 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
     source "$PLATFORM_CONFIG"
 fi
 
-REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-registry.swirlit.dev}}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-${PLATFORM_DOMAIN:+registry.$PLATFORM_DOMAIN}}}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.251:5050}}"
-REMOVED_REGISTRY_HOSTS="${K3S_REMOVED_REGISTRY_HOSTS:-gitlab.swirlit.dev}"
+REMOVED_REGISTRY_HOSTS="${K3S_REMOVED_REGISTRY_HOSTS:-${PLATFORM_DOMAIN:+gitlab.$PLATFORM_DOMAIN}}"
 RETAIN_LEGACY_REGISTRY="${K3S_RETAIN_LEGACY_REGISTRY:-false}"
 REGISTRY_CONFIG="${K3S_REGISTRY_CONFIG:-/etc/rancher/k3s/registries.yaml}"
 sudo_command=()
@@ -22,6 +23,7 @@ case "$RETAIN_LEGACY_REGISTRY" in
     true|false) ;;
     *) error "K3S_RETAIN_LEGACY_REGISTRY must be true or false" ;;
 esac
+[[ -n "$REGISTRY_HOST" ]] || error "Set PLATFORM_DOMAIN or K3S_REGISTRY_HOST."
 
 if [[ $EUID -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 || error "sudo is required when not running as root"

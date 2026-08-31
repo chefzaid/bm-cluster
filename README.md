@@ -11,7 +11,7 @@ Odoo.
 - Vault and External Secrets Operator
 - PostgreSQL, MongoDB, Redis, and Kafka in KRaft mode
 - Keycloak, GitLab CI/CD, GitLab Container and Package Registries, ArgoCD, and SonarQube
-- Prometheus, Grafana, Elasticsearch, Logstash, and Kibana
+- Prometheus, Grafana, Elasticsearch, Logstash, Kibana, Fluent Bit, and Filebeat
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
 - Homepage service catalog and Kubernetes status dashboard
 - UFW on every node, Fail2ban and CrowdSec on the internet-facing control plane, and control-plane Lynis audits
@@ -29,7 +29,8 @@ storage. Prometheus collects node, Kubernetes object, pod, container, and
 annotation-enabled application metrics; Grafana includes a provisioned cluster
 dashboard and loads application-owned dashboards from labeled ConfigMaps.
 Fluent Bit ships Kubernetes container logs with namespace, pod, container, and
-label metadata to Elasticsearch for Kibana discovery.
+label metadata to Elasticsearch for Kibana discovery. A control-plane Filebeat
+agent separately ships structured Lynis audit records through Logstash.
 
 PostgreSQL 18 is shared by the compatible applications, including Keycloak,
 Odoo, and SonarQube. GitLab keeps its bundled PostgreSQL 17 because GitLab 19
@@ -56,33 +57,33 @@ configuration are reproducible from this repository.
 
 ## Service dashboard
 
-Open `https://dashboard.swirlit.dev` for the complete categorized service
+Open `https://dashboard.<your-domain>` for the complete categorized service
 catalog; the zone apex redirects there. Cloudflare Access protects the
-administrative host inventory in `config/platform.env` with an email one-time
-PIN and a 24-hour session.
+administrative host inventory in `config/platform.env` through Keycloak SSO
+with a 24-hour session.
 Cluster automation uses internal Kubernetes service names, so these public
 administration hostnames can remain protected without blocking builds,
 deployments, package downloads, or scans.
 
 ### Internal service DNS
 
-Cluster workloads use the private `swirlit.internal` DNS zone. CoreDNS maps every
-`<name>.swirlit.internal` query to the same Service name in the `infra` namespace,
+Cluster workloads use the private `internal.<your-domain>` DNS zone. CoreDNS maps every
+`<name>.internal.<your-domain>` query to the same Service name in the `infra` namespace,
 preserving additional labels for headless services such as
-`kafka-controller-0.kafka-controller.swirlit.internal`. Curated aliases map
-`longhorn.swirlit.internal` into `longhorn-system`; application-owned services
+`kafka-controller-0.kafka-controller.internal.<your-domain>`. Curated aliases map
+`longhorn.internal.<your-domain>` into `longhorn-system`; application-owned services
 use their canonical Kubernetes DNS names.
 
 The zone is cluster-only: it is not published by Cloudflare and is not expected
 to resolve on the public Internet or from ordinary host tools. K3s/containerd
-maps `registry.swirlit.dev` to a fixed internal Registry service endpoint. The
-Dependency Proxy retains its canonical `gitlab.swirlit.dev` HTTPS route because
+maps `registry.<your-domain>` to a fixed internal Registry service endpoint. The
+Dependency Proxy retains its canonical `gitlab.<your-domain>` HTTPS route because
 containerd's mirror query parameter interferes with GitLab Workhorse cache
 uploads. Kubernetes API endpoints retain their canonical
 `kubernetes.default.svc` identity because that name is covered by the API server
 certificate.
 
-Public Docker clients also use `registry.swirlit.dev`. Cloudflare reconciliation
+Public Docker clients also use `registry.<your-domain>`. Cloudflare reconciliation
 keeps the hostname proxied but prevents browser-only bot challenges from
 intercepting the Registry API: basic Bot Fight Mode is disabled because it has
 no hostname exceptions, while Super Bot Fight Mode is skipped only for the
@@ -93,21 +94,22 @@ printed by the configurator.
 
 ### GitLab delivery
 
-The infrastructure repository lives at `swirlit/bm-cluster` in GitLab.
+The infrastructure repository lives at `<gitlab-group>/bm-cluster` in GitLab.
 Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
 `gitlab-runners` namespace. The default branch is continuously reconciled by
 the `bm-cluster` Argo CD Application; application manifests under `k8s/apps`
 remain outside this infrastructure GitOps boundary.
 
-GitHub and GitLab branches and tags are synchronized after every push. GitHub
-pushes start `.github/workflows/sync-gitlab.yml` directly; GitLab push and tag
-webhooks call GitHub's repository-dispatch endpoint and start the same
-reconciler, even when a commit skips CI. It fast-forwards the lagging side,
-merges divergent branches without force pushing, and refuses conflicting tag
-rewrites. A monthly schedule self-rotates the managed GitLab credential into
-the encrypted GitHub secret before expiry.
+Repository synchronization is optional. When selected in the installer, it asks
+for any number of `GitHub-owner/repository=GitLab-group/repository` mappings and
+a GitHub fine-grained token. GitHub pushes start
+`.github/workflows/sync-gitlab.yml`; GitLab push and tag webhooks dispatch the
+same reconciler. It discovers each GitLab project ID through the API,
+initializes an empty GitLab repository automatically, fast-forwards the lagging
+side, merges divergent branches without force pushing, and refuses conflicting
+tag rewrites. A monthly schedule self-rotates the managed GitLab credential.
 
-GitLab stores private OCI images at `registry.swirlit.dev`. Application
+GitLab stores private OCI images at `registry.<your-domain>`. Application
 pipelines retain downloadable job artifacts for seven days and publish
 immutable release outputs through each project's Generic Package Registry:
 DevApp publishes two JARs and its SPA archive, Thoughty publishes server and web
@@ -131,19 +133,19 @@ The three application repositories use one bootstrap contract:
 
 | Project | Argo CD bootstrap | Desired state |
 |---|---|---|
-| `swirlit/devapp` | `infra/argocd/application.yaml` | `infra/k8s` |
-| `swirlit/thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` |
-| `swirlit/indezy` | `infra/argocd/application.yaml` | `infra/k8s` |
+| `<gitlab-group>/devapp` | `infra/argocd/application.yaml` | `infra/k8s` |
+| `<gitlab-group>/thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` |
+| `<gitlab-group>/indezy` | `infra/argocd/application.yaml` | `infra/k8s` |
 
-Their pipelines use the internal `gitlab.swirlit.internal` API/clone route and
+Their pipelines use the internal `gitlab.internal.<your-domain>` API/clone route and
 the internal Registry service for cluster traffic, while user-facing GitLab and
-Registry URLs remain `gitlab.swirlit.dev` and `registry.swirlit.dev`. Each app
+Registry URLs remain `gitlab.<your-domain>` and `registry.<your-domain>`. Each app
 repository owns its GitLab bootstrap, Vault contracts, Argo CD Application, and
 runtime manifests; `bm-cluster` owns only the generic runner and shared platform.
 
 Registry retention is declared in `k8s/platform/gitlab-registry-retention.yaml`.
 Every day it reconciles GitLab's native container-image cleanup policy for all
-projects in the SwirlIT group and removes Package Registry versions created more
+projects in the installer-selected GitLab group and removes Package Registry versions created more
 than 1,095 days ago. GitLab continues to protect protected container tags and
 the literal `latest` tag. The group-scoped API token is stored in Vault at
 `secret/infra/gitlab`, projected by External Secrets, and never committed.
@@ -152,20 +154,27 @@ GitLab and the runner expose Prometheus metrics through pod annotations. The
 provisioned GitLab Delivery dashboard is loaded by Grafana, and Fluent Bit ships
 their JSON container logs into the existing Elasticsearch/Kibana pipeline.
 
-Create administrator tokens for the one-time GitLab and GitHub bootstrap, then
-run:
+GitLab CI/registry setup does not require a manually created token when run on
+the control plane. The configurator creates a one-day administrator token with
+`gitlab-rails`, uses it through the API, and revokes it on exit. For optional
+GitHub/GitLab synchronization, provide the public domain, repository mapping,
+and GitHub token:
 
 ```bash
-GITLAB_ADMIN_TOKEN='...' \
+PLATFORM_DOMAIN='<your-domain>' \
+CONFIGURE_REPOSITORY_SYNC=true \
+GITHUB_OWNER='<github-owner>' \
+GITHUB_REPOSITORY='<repository>' \
+GITLAB_GROUP_PATH='<gitlab-group>' \
+GITLAB_PROJECT_PATH='<gitlab-group>/<repository>' \
 GITHUB_ADMIN_TOKEN='...' \
   ./scripts/configure-gitlab-ci.sh
 ```
 
-The script creates or reconciles the group, project, Dependency Proxy, image
-retention policy, instance runner, encrypted repository-sync credentials, and
-GitLab repository-dispatch webhook. It stores the runner authentication token
-and a group-scoped registry-retention API token in Vault; no credential is
-committed.
+The script always reconciles the group, project, Dependency Proxy, image
+retention policy, instance runner, and Vault tokens. Repository secrets,
+variables, the first synchronization, and the GitLab dispatch webhook are
+created only when synchronization is enabled. No credential is committed.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `k8s/platform/homepage.yaml`. Both
@@ -187,8 +196,25 @@ For a new cluster, run the guided installer on the future control-plane host:
 ./install-control-plane.sh
 ```
 
-It first asks whether to install `infra` only or `infra + apps`. The apps choice
-deploys Odoo, the repository-owned ERP/CRM workload.
+It first asks for the public base domain and the K3s control-plane node name.
+The private service zone is derived as `internal.<your-domain>`; manifests are
+rendered from domain-neutral templates, and Argo CD receives the same values for
+all future reconciliation. When Cloudflare is enabled, it also asks for the
+Zero Trust team label (the first part of `TEAM.cloudflareaccess.com`) so the
+Keycloak callback is rendered without embedding an account hostname. It then
+asks whether to install `infra` only or
+`infra + apps`. The apps choice deploys Odoo, the repository-owned ERP/CRM
+workload.
+Questions are grouped into cluster identity and scope, host and K3s nodes,
+platform components, recovery and public access, GitOps delivery, and
+administrator credentials. The recommended platform bundle replaces seven
+repetitive component questions; decline it only when you want to select those
+components individually.
+The installer asks for the total cluster node count, including the control
+plane, and then whether that control plane is a schedulable controller-worker
+or a tainted controller-only node. A one-node cluster must use controller-worker
+mode. Worker enrollment derives its count from the total, so the same number is
+not requested twice.
 When platform services are selected, it asks for a platform administrator
 login and a confirmed hidden password. That identity is provisioned through
 Keycloak as administrator for every integrated service and application. The
@@ -198,10 +224,18 @@ It then asks which infrastructure features to install and, when workers are
 selected, starts the vRack or Tailscale prerequisite wizard before any UFW
 change. Each wizard shows the exact account page, pauses while you complete the
 manual account step, collects secrets with hidden input, checks the account
-read-only, and resumes. Nothing is persisted. `./install-control-plane.sh --yes`
+read-only, and resumes. Cloudflare setup verifies registrar nameserver
+delegation and the public DNSSEC DS record; Cloudflare Registrar completes these
+automatically, while other registrars pause with the exact values to enter.
+The repository-sync and encrypted S3-compatible backup features are separate
+installer choices and request credentials only when selected. Runtime secrets
+are never committed. `./install-control-plane.sh --yes`
 defaults to `infra + apps`; set `INSTALL_SCOPE=infra` for an infrastructure-only
 non-interactive run. Non-interactive platform installation also requires
-`KEYCLOAK_SSO_BOOTSTRAP_USERNAME` and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`.
+`PLATFORM_DOMAIN`, `CONTROL_PLANE_NODE_NAME`, `GITOPS_REPOSITORY_URL`,
+`KEYCLOAK_SSO_BOOTSTRAP_USERNAME`, and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`.
+Set `CLUSTER_NODE_COUNT` and `CONTROL_PLANE_SCHEDULABLE=true|false` to override
+the node-list-derived non-interactive topology defaults.
 Selected identity and transport secrets are supplied as environment variables.
 
 ## Adding worker nodes
@@ -212,6 +246,32 @@ hybrid/non-OVHcloud providers**, then enter any number of workers. Use one
 transport consistently for the control plane and all workers in an enrollment
 run. Adding workers increases workload capacity; it does not make the single
 K3s control plane highly available.
+
+After every worker enrollment, `scripts/reconcile-cluster-topology.sh` updates
+the stored topology and
+reconciles Longhorn's live setting, Helm values, default StorageClass, and
+existing volumes. Once workers exist, Longhorn stops scheduling storage on the
+control plane and safely evicts its old replicas to worker storage in the
+background.
+Standalone `./install-worker.sh --control-plane` enrollment asks whether to
+convert the control plane to controller-only after the new worker is Ready; the
+default answer is yes. It skips that question when every control-plane node
+already has the standard controller-only `NoSchedule` taint. Non-interactive
+enrollment from a schedulable control plane requires an explicit
+`--control-plane-schedulable true|false|preserve` safeguard. Enrollment launched
+by the main installer does not repeat the question because it passes through
+the explicit scheduling choice made earlier.
+Longhorn uses one replica with only the control plane or one worker; with two or
+more workers its replica count equals the Ready worker count. The control plane
+is excluded from Longhorn storage scheduling whenever a worker exists:
+
+| Topology | Longhorn replicas |
+|---|---:|
+| Control plane only | 1 |
+| Control plane + 1 worker | 1 |
+| Control plane + 2 workers | 2 |
+| Control plane + 3 workers | 3 |
+| Control plane + N workers | N |
 
 Worker requirements:
 
@@ -311,6 +371,12 @@ enroll workers:
 bm-cluster-audit-nodes
 ```
 
+The host security reconciler also installs `bm-cluster-lynis.timer`. It runs a
+local control-plane audit on the 15th of every month at 03:00 in the node's
+local timezone, updates `/var/log/lynis-report.dat`, and retains timestamped
+root-only report, log, and output archives under `/var/log/lynis-reports` for
+365 days. Check the next run with `systemctl list-timers bm-cluster-lynis.timer`.
+
 It discovers worker InternalIPs from Kubernetes, asks for SSH settings, copies
 the control plane's Lynis files into a temporary worker directory, performs a
 root audit through passwordless `sudo`, retrieves the reports under
@@ -324,11 +390,11 @@ Normal browser access uses the administrator login entered during cluster
 installation. Because Keycloak realms are hard identity boundaries, the
 reconciler maintains matching local identities in both `master` and `swirlit`
 with the same managed password. If the login is a username, its primary email
-is derived as `<username>@swirlit.dev`; an email login is used unchanged.
+is derived as `<username>@<your-domain>`; an email login is used unchanged.
 Membership in `platform-admins` supplies the application administrative role.
 The `master` identity receives Keycloak's composite `admin` role and can
 therefore administer the complete Keycloak instance from
-`https://keycloak.swirlit.dev/auth/admin/master/console/`.
+`https://keycloak.<your-domain>/auth/admin/master/console/`.
 Retrieve the managed login and password from the cluster rather than storing
 them in the repository:
 
@@ -443,11 +509,16 @@ namespace, while its generic **Applications Namespace Overview** requires no
 application inventory. Fluent Bit collects every container log, enriches records
 from the `apps` namespace with a stable `observability_scope=application` field,
 and copies the Kubernetes `app` label to a keyword field. Kibana provisions an
-**Applications Namespace Logs** dashboard filtered only by namespace. This keeps
+**Applications Namespace Logs** dashboard filtered only by namespace. Filebeat
+tails `/var/log/lynis-report.dat` on the control plane, Logstash parses its
+key/value and warning/suggestion fields, and Kibana provisions a **Lynis
+Security Audits** dashboard with a hardening-index trend and finding details.
+This keeps
 platform discovery independent of application names; app repositories own their
 metrics endpoints, structured stdout format, and optional detailed dashboards.
-The logging bootstrap applies a seven-day Elasticsearch lifecycle policy to
-bound disk use. Elasticsearch security is enabled: Kibana uses its reserved
+The logging bootstrap applies a seven-day lifecycle policy to container and
+application logs and a separate 365-day policy to monthly `lynis-audits-*`
+indices. Elasticsearch security is enabled: Kibana uses its reserved
 system account, ingestion and Grafana use dedicated least-privilege users, and
 dashboard import hooks use a dedicated account with the `kibana_admin` role. All credentials
 and Kibana encryption keys are synchronized from Vault.
@@ -460,13 +531,21 @@ kubectl get jobs -n infra -l app=descheduler -w
 ```
 
 K3s creates a consistent root-only recovery archive every day and retains the
-latest seven under `/var/backups/bm-cluster/k3s`. The transactionally consistent
-staging database is reduced to current Kubernetes state before archiving, so
-superseded Kine revisions, tombstones, previous values, and SQLite free pages
-are not retained. Run one immediately with
-`sudo systemctl start bm-k3s-backup.service`, then copy the resulting archive to
-encrypted off-node storage; a backup that remains on this server does not cover
-disk or host loss.
+latest seven under `/var/backups/bm-cluster/k3s`. It contains compacted current
+Kubernetes state, server/encryption credentials, a Vault Raft snapshot, and
+logical PostgreSQL and MongoDB dumps when those services exist. When the guided
+S3-compatible destination is enabled, restic encrypts and uploads each archive
+and retains daily, weekly, and monthly recovery points. Longhorn simultaneously
+backs up every labeled PVC to the same private bucket through a daily recurring
+job; the host backup labels newly created volumes before that job runs. Run an
+archive immediately with `sudo systemctl start bm-k3s-backup.service`.
+
+The object-storage assistant explains how to create a bucket-scoped access
+key/API token, then prompts with hidden input for the access key, secret, and
+restic recovery password. Those values are stored root-only in
+`/etc/bm-cluster/backup.env` and in the Longhorn credential Secret, never in Git.
+If off-node storage is declined, the installer warns that local archives cannot
+survive disk or host loss.
 
 ### Interactive scripts versus Ansible
 
@@ -478,6 +557,12 @@ disk or host loss.
 Run Ansible from the control-plane repository checkout with its local inventory:
 
 ```bash
+export PLATFORM_DOMAIN='example.com'
+export INTERNAL_DNS_ZONE='internal.example.com'
+export CONTROL_PLANE_NODE_NAME='control-plane-01'
+export CONTROL_PLANE_SCHEDULABLE='false'
+export GITOPS_REPOSITORY_URL='https://github.com/example/bm-cluster.git'
+export CLOUDFLARE_ACCESS_TEAM_NAME='example-team'
 export KEYCLOAK_SSO_BOOTSTRAP_USERNAME='platform-admin'
 export KEYCLOAK_SSO_BOOTSTRAP_PASSWORD='Replace-With-A-Strong-Password-1!'
 ansible-playbook -i ansible/inventory ansible/deploy.yml
@@ -494,6 +579,9 @@ all feature groups by default except Cloudflare. Feature switches are
 automatically: `install_apps=false` disables Odoo, platform services and Odoo
 require data stores, data stores require Vault and External Secrets, and
 Cloudflare requires ingress.
+Ansible preserves the installer-selected control-plane mode by default and
+uses the same Ready-worker Longhorn replica rule. Set
+`CONTROL_PLANE_SCHEDULABLE=true|false` only when intentionally changing it.
 
 Transport reconciliation is opt-in because it can change host networking. It
 always runs before K3s network binding and host UFW. Ansible does not pause for
@@ -549,8 +637,15 @@ the secret inputs and opt in explicitly:
 ```bash
 export CLOUDFLARE_API_TOKEN='your Cloudflare User API Token (cfut_... type)'
 export CLOUDFLARE_ACCESS_ALLOWED_EMAILS='admin@example.com'
+export CLOUDFLARE_ACCESS_TEAM_NAME='example-team'
 ansible-playbook -i ansible/inventory ansible/deploy.yml -e configure_cloudflare=true
 ```
+
+For off-node recovery, additionally export
+`CONFIGURE_OFFSITE_BACKUPS=true`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`,
+`BACKUP_S3_REGION`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY`, and
+`BACKUP_REPOSITORY_PASSWORD`. Ansible is non-interactive and therefore never
+prompts for missing secret inputs.
 
 The playbook deploys platform resources through the active kubeconfig; K3s
 control-plane installation and worker operating-system provisioning remain the
@@ -583,30 +678,37 @@ EditorConfig and Git attributes keep text formatting portable.
 | `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
 | `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
+| `scripts/configure-lynis-schedule.sh` | Monthly control-plane Lynis timer and twelve-month local report retention |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
 | `scripts/configure-tailscale.sh` | Provider-neutral tailnet policy, fleet inventory, role tags, one-use keys, and node reconciliation |
 | `scripts/configure-ovh-vrack.sh` | OVHcloud vRack API attachment and safe private-interface reconciliation |
 | `scripts/configure-vault.sh` | Vault initialization, policies, and secret seeding |
-| `scripts/configure-k3s-backups.sh` | Daily K3s/Vault recovery archives and retention |
+| `scripts/configure-k3s-backups.sh` | Local archive timer, encrypted S3/restic destination, and Longhorn recurring-backup reconciliation |
 | `scripts/configure-k3s-apparmor.sh` | Enforced runtime-default profile with Ubuntu stacking compatibility |
 | `scripts/configure-k3s-control-plane-network.sh` | Persist private cluster and public ingress addresses for the K3s control plane |
 | `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for GitLab Container Registry |
 | `scripts/configure-gitlab-ci.sh` | GitLab group, project, Dependency Proxy, instance runner, and Vault token reconciliation |
-| `scripts/configure-node-security.sh` | Host firewall and intrusion-prevention setup |
+| `scripts/configure-repository-sync.sh` | Optional project-discovered GitHub/GitLab mirroring, webhook, variables, secrets, and first sync |
+| `scripts/render-cluster-config.sh` | Render installer-selected domains and GitOps source from neutral templates |
+| `scripts/configure-node-security.sh` | Host firewall, intrusion prevention, and Lynis schedule setup |
+| `scripts/reconcile-cluster-topology.sh` | Reconcile control-plane taints, stored node topology, and worker-derived Longhorn replication |
+| `scripts/lib/installer-prompts.sh` | Shared section, value, secret, confirmation, yes/no, and node-transport prompt primitives |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
 | `scripts/lib/transport-guide.sh` | Shared guided vRack/Tailscale account prerequisites and verification |
+| `scripts/lib/gitlab-admin-token.sh` | Short-lived local GitLab administrator token creation and revocation |
 | `scripts/validate-repository.sh` | Consistency checks and optional live server dry-run |
 | `k8s/base/` | Cluster namespaces, security baseline, host-policy record, and internal CoreDNS aliases |
 | `k8s/datastores/` | PostgreSQL, Kafka, Redis, and MongoDB resources |
 | `k8s/platform/` | Infrastructure services, observability, ingress, Vault integration, and bootstrap jobs |
 | `k8s/apps/` | Repository-owned application resources |
 | `k8s/addons/` | Optional cluster add-ons and their manually triggered jobs |
+| `k8s/Chart.yaml` | Argo CD Helm entry point that renders the selected public/private domains |
 | `ansible/` | Ansible deployment entry point |
 
 ## Security notes
 
 - Keep PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and Prometheus internal.
-- Keep `swirlit.internal` in CoreDNS only; never publish it through Cloudflare or public DNS.
+- Keep `internal.<your-domain>` in CoreDNS only; never publish it through Cloudflare or public DNS.
 - Keep administrative UI hostnames behind Cloudflare Access.
 - Keep both Vault audit devices enabled and alert on audit-write failures or audit-volume pressure.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.

@@ -22,6 +22,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=scripts/lib/network.sh
 source "$NETWORK_LIBRARY"
+PROMPT_LIBRARY="$SCRIPT_DIR/scripts/lib/installer-prompts.sh"
+if [[ ! -r "$PROMPT_LIBRARY" ]]; then
+    echo "[ERROR] Shared installer prompt library not found: $PROMPT_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=scripts/lib/installer-prompts.sh
+source "$PROMPT_LIBRARY"
 TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/scripts/lib/transport-guide.sh"
 if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
     echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
@@ -37,7 +44,10 @@ fi
 # shellcheck source=scripts/lib/sso-admin.sh
 source "$SSO_ADMIN_LIBRARY"
 
-K8S_DIR="$SCRIPT_DIR/k8s"
+K8S_TEMPLATE_DIR="$SCRIPT_DIR/k8s"
+K8S_DIR="$K8S_TEMPLATE_DIR"
+ARGOCD_VALUES_FILE="$SCRIPT_DIR/config/argocd-values.yaml"
+RENDER_CONFIG_SCRIPT="$SCRIPT_DIR/scripts/render-cluster-config.sh"
 VAULT_VALUES_FILE="$SCRIPT_DIR/config/vault-values.yaml"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
@@ -45,11 +55,14 @@ CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
 WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
+GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/scripts/lib/gitlab-admin-token.sh"
 LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT="$SCRIPT_DIR/scripts/rotate-local-admin-passwords.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
 K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
+CLUSTER_TOPOLOGY_SCRIPT="$SCRIPT_DIR/scripts/reconcile-cluster-topology.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
+LEGACY_RECONCILIATION_SCRIPT="$SCRIPT_DIR/scripts/reconcile-legacy-resources.sh"
 TAILSCALE_SCRIPT="$SCRIPT_DIR/scripts/configure-tailscale.sh"
 OVH_VRACK_SCRIPT="$SCRIPT_DIR/scripts/configure-ovh-vrack.sh"
 AUTO_APPROVE=false
@@ -59,7 +72,7 @@ K3S_NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 TAILSCALE_API_TOKEN="${TAILSCALE_API_TOKEN:-}"
 TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-$DEFAULT_TAILSCALE_TAILNET}"
 TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-$DEFAULT_TAILSCALE_MESH_NAME}"
-TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-}"
 TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="${TAILSCALE_AUTH_KEY_EXPIRY_SECONDS:-$DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS}"
 OVH_VRACK_AUTOMATE_ACCOUNT="${OVH_VRACK_AUTOMATE_ACCOUNT:-}"
 OVH_API_ENDPOINT="${OVH_API_ENDPOINT:-ovh-eu}"
@@ -72,12 +85,29 @@ KEYCLOAK_SSO_BOOTSTRAP_USERNAME="${KEYCLOAK_SSO_BOOTSTRAP_USERNAME:-}"
 KEYCLOAK_SSO_BOOTSTRAP_PASSWORD="${KEYCLOAK_SSO_BOOTSTRAP_PASSWORD:-}"
 ROTATE_LOCAL_ADMIN_PASSWORDS="${ROTATE_LOCAL_ADMIN_PASSWORDS:-}"
 LOCAL_ADMIN_PASSWORD="${LOCAL_ADMIN_PASSWORD:-}"
+CONFIGURE_OFFSITE_BACKUPS="${CONFIGURE_OFFSITE_BACKUPS:-}"
+BACKUP_S3_ENDPOINT="${BACKUP_S3_ENDPOINT:-}"
+BACKUP_S3_BUCKET="${BACKUP_S3_BUCKET:-}"
+BACKUP_S3_REGION="${BACKUP_S3_REGION:-}"
+BACKUP_S3_ACCESS_KEY="${BACKUP_S3_ACCESS_KEY:-}"
+BACKUP_S3_SECRET_KEY="${BACKUP_S3_SECRET_KEY:-}"
+BACKUP_REPOSITORY_PASSWORD="${BACKUP_REPOSITORY_PASSWORD:-}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-}"
+CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
+CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-}"
+REPOSITORY_SYNC_MAPPINGS="${REPOSITORY_SYNC_MAPPINGS:-}"
+GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
+GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
+GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-}"
+GITOPS_REPOSITORY_URL="${GITOPS_REPOSITORY_URL:-}"
+RENDERED_CONFIG_DIR=""
 INSTALLER_TEMP_DIR=""
 nodesource_installer=""
 k3s_installer=""
 helm_installer=""
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
-K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-$DEFAULT_K3S_REGISTRY_HOST}"
+K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-}}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-$DEFAULT_K3S_REGISTRY_ENDPOINT}"
 INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-$DEFAULT_INGRESS_NGINX_CHART_VERSION}"
 LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-$DEFAULT_LONGHORN_CHART_VERSION}"
@@ -95,7 +125,12 @@ ARGOCD_HELM_TIMEOUT="${ARGOCD_HELM_TIMEOUT:-$DEFAULT_ARGOCD_HELM_TIMEOUT}"
 DATASTORE_WAIT_TIMEOUT="${DATASTORE_WAIT_TIMEOUT:-$DEFAULT_DATASTORE_WAIT_TIMEOUT}"
 PLATFORM_WAIT_TIMEOUT="${PLATFORM_WAIT_TIMEOUT:-$DEFAULT_PLATFORM_WAIT_TIMEOUT}"
 POST_DEPLOY_JOB_WAIT_TIMEOUT="${POST_DEPLOY_JOB_WAIT_TIMEOUT:-$DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT}"
-CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
+CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-${DEFAULT_CLOUDFLARE_ZONE:-}}"
+CLOUDFLARE_ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-}}"
+CLUSTER_NODE_COUNT="${CLUSTER_NODE_COUNT:-}"
+CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
+PLANNED_WORKER_COUNT=0
+WORKERS_TO_ADD=0
 
 IFS=',' read -r -a FOUNDATION_MANIFEST_ARRAY <<< "$FOUNDATION_MANIFESTS"
 IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
@@ -129,27 +164,312 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+fail()  { error "$@"; }
 step()  { echo -e "${BLUE}[STEP]${NC}  $*"; }
 
 ask_with_default() {
-    local prompt="$1"
-    local default_choice="${2:-N}"
-    local answer="" suffix=""
+    installer_prompt_yes_no "$1" "${2:-N}" "$AUTO_APPROVE"
+}
 
-    if [[ "$default_choice" == "Y" ]]; then
-        suffix="[Y/n]"
+prompt_cluster_identity() {
+    local default_node
+
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        installer_prompt_value PLATFORM_DOMAIN "Public base domain for this cluster" "$PLATFORM_DOMAIN"
+    fi
+    PLATFORM_DOMAIN="${PLATFORM_DOMAIN,,}"
+    [[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
+        error "Set PLATFORM_DOMAIN to a valid base domain such as example.com."
+
+    INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-internal.$PLATFORM_DOMAIN}"
+    INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE,,}"
+    [[ "$INTERNAL_DNS_ZONE" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
+        error "INTERNAL_DNS_ZONE is invalid."
+    [[ "$INTERNAL_DNS_ZONE" != "$PLATFORM_DOMAIN" ]] || \
+        error "The private service domain must differ from the public domain."
+
+    default_node="${CONTROL_PLANE_NODE_NAME:-$(hostname -s | tr '[:upper:]' '[:lower:]')}"
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        installer_prompt_value CONTROL_PLANE_NODE_NAME "K3s control-plane node name" "$default_node"
     else
-        suffix="[y/N]"
+        CONTROL_PLANE_NODE_NAME="$default_node"
+    fi
+    CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME,,}"
+    [[ "$CONTROL_PLANE_NODE_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#CONTROL_PLANE_NODE_NAME} -le 63 ]] || \
+        error "CONTROL_PLANE_NODE_NAME must be a single valid lowercase DNS label."
+
+    CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-$PLATFORM_DOMAIN}"
+    [[ "$CLOUDFLARE_ZONE" == "$PLATFORM_DOMAIN" ]] || \
+        error "CLOUDFLARE_ZONE must match PLATFORM_DOMAIN for this deployment."
+    K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-registry.$PLATFORM_DOMAIN}"
+    CLOUDFLARE_ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-bm-cluster-${PLATFORM_DOMAIN//./-}}"
+    [[ "$CLOUDFLARE_ACCESS_TEAM_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#CLOUDFLARE_ACCESS_TEAM_NAME} -le 63 ]] || \
+        error "CLOUDFLARE_ACCESS_TEAM_NAME must be a single lowercase DNS label."
+    TAILSCALE_NODE_HOSTNAME="${TAILSCALE_NODE_HOSTNAME:-$CONTROL_PLANE_NODE_NAME}"
+    export PLATFORM_DOMAIN INTERNAL_DNS_ZONE CONTROL_PLANE_NODE_NAME CLOUDFLARE_ZONE CLOUDFLARE_ACCESS_TEAM_NAME
+    export K3S_REGISTRY_HOST TAILSCALE_NODE_HOSTNAME
+    info "Cluster identity: node $CONTROL_PLANE_NODE_NAME, public domain $PLATFORM_DOMAIN, private domain $INTERNAL_DNS_ZONE"
+}
+
+configured_worker_target_count() {
+    local targets="${K3S_WORKER_HOSTS:-${K3S_WORKER_IPS:-}}"
+
+    [[ -n "$targets" ]] || { printf '0\n'; return; }
+    tr ',' '\n' <<< "$targets" | sed '/^[[:space:]]*$/d' | wc -l | tr -d '[:space:]'
+}
+
+ready_cluster_node_count() {
+    local nodes
+
+    command -v kubectl >/dev/null 2>&1 || { printf '0\n'; return; }
+    nodes="$(kubectl get nodes --no-headers 2>/dev/null)" || { printf '0\n'; return; }
+    awk '$2 ~ /^Ready/ {count++} END {print count+0}' <<< "$nodes"
+}
+
+ready_cluster_worker_count() {
+    local nodes
+
+    command -v kubectl >/dev/null 2>&1 || { printf '0\n'; return; }
+    nodes="$(kubectl get nodes \
+        -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master' \
+        --no-headers 2>/dev/null)" || { printf '0\n'; return; }
+    awk '$2 ~ /^Ready/ {count++} END {print count+0}' <<< "$nodes"
+}
+
+configure_cluster_topology_plan() {
+    local configured_workers existing_nodes existing_workers default_node_count
+    local control_plane_default
+
+    configured_workers="$(configured_worker_target_count)"
+    existing_nodes="$(ready_cluster_node_count || printf '0')"
+    existing_workers="$(ready_cluster_worker_count || printf '0')"
+    default_node_count="$existing_nodes"
+    (( default_node_count >= 1 )) || default_node_count=1
+    (( configured_workers == 0 )) || default_node_count=$((configured_workers + 1))
+
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        while true; do
+            installer_prompt_value CLUSTER_NODE_COUNT \
+                "Total number of cluster nodes, including the control plane" \
+                "${CLUSTER_NODE_COUNT:-$default_node_count}"
+            [[ "$CLUSTER_NODE_COUNT" =~ ^[1-9][0-9]*$ ]] && break
+            warn "Enter a positive whole number."
+        done
+    else
+        CLUSTER_NODE_COUNT="${CLUSTER_NODE_COUNT:-$default_node_count}"
+    fi
+    [[ "$CLUSTER_NODE_COUNT" =~ ^[1-9][0-9]*$ ]] || \
+        error "CLUSTER_NODE_COUNT must be a positive integer."
+    if (( existing_nodes > CLUSTER_NODE_COUNT )); then
+        error "The cluster already has $existing_nodes Ready nodes; this installer does not remove nodes."
     fi
 
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
-        [[ "$default_choice" == "Y" ]]
+    PLANNED_WORKER_COUNT=$((CLUSTER_NODE_COUNT - 1))
+    WORKERS_TO_ADD=$((PLANNED_WORKER_COUNT - existing_workers))
+    (( WORKERS_TO_ADD >= 0 )) || WORKERS_TO_ADD=0
+    if (( configured_workers > 0 )); then
+        (( configured_workers == PLANNED_WORKER_COUNT )) || \
+            error "The configured worker target list has $configured_workers entries, but CLUSTER_NODE_COUNT requires $PLANNED_WORKER_COUNT workers."
+        WORKERS_TO_ADD="$configured_workers"
+    fi
+
+    if [[ -z "$CONTROL_PLANE_SCHEDULABLE" ]]; then
+        [[ "$CLUSTER_NODE_COUNT" -eq 1 ]] && control_plane_default=Y || control_plane_default=N
+        if ask_with_default \
+            "Allow the control plane to run workloads as a controller-worker?" \
+            "$control_plane_default"; then
+            CONTROL_PLANE_SCHEDULABLE=true
+        else
+            CONTROL_PLANE_SCHEDULABLE=false
+        fi
+    else
+        case "${CONTROL_PLANE_SCHEDULABLE,,}" in
+            1|true|yes|y|worker|controller-worker) CONTROL_PLANE_SCHEDULABLE=true ;;
+            0|false|no|n|controller|controller-only) CONTROL_PLANE_SCHEDULABLE=false ;;
+            *) error "CONTROL_PLANE_SCHEDULABLE must be true or false." ;;
+        esac
+    fi
+    if [[ "$CLUSTER_NODE_COUNT" -eq 1 && "$CONTROL_PLANE_SCHEDULABLE" != "true" ]]; then
+        error "A control-plane-only cluster must allow workloads on its control plane."
+    fi
+
+    export CLUSTER_NODE_COUNT CONTROL_PLANE_SCHEDULABLE
+    info "Topology plan: $CLUSTER_NODE_COUNT total node(s), $PLANNED_WORKER_COUNT worker(s), control-plane schedulable=$CONTROL_PLANE_SCHEDULABLE."
+}
+
+github_repository_url() {
+    local remote_url
+    remote_url="$(git -C "$SCRIPT_DIR" remote get-url github 2>/dev/null || \
+        git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || true)"
+    case "$remote_url" in
+        git@github.com:*) remote_url="https://github.com/${remote_url#git@github.com:}" ;;
+        ssh://git@github.com/*) remote_url="https://github.com/${remote_url#ssh://git@github.com/}" ;;
+    esac
+    [[ "$remote_url" == https://github.com/*.git ]] && printf '%s\n' "$remote_url"
+}
+
+configure_repository_delivery() {
+    local default_gitops github_url github_slug mapping normalized_mappings=""
+    local repository_name
+    repository_name="$(basename "$SCRIPT_DIR")"
+    github_url="$(github_repository_url)"
+    github_slug="${github_url#https://github.com/}"
+    github_slug="${github_slug%.git}"
+
+    if [[ -z "$CONFIGURE_REPOSITORY_SYNC" ]]; then
+        if [[ "$AUTO_APPROVE" == "true" ]]; then
+            CONFIGURE_REPOSITORY_SYNC=false
+        elif ask_with_default "Synchronize selected repositories bidirectionally between GitHub and GitLab?" "N"; then
+            CONFIGURE_REPOSITORY_SYNC=true
+        else
+            CONFIGURE_REPOSITORY_SYNC=false
+        fi
+    fi
+    case "${CONFIGURE_REPOSITORY_SYNC,,}" in
+        1|true|yes|y) CONFIGURE_REPOSITORY_SYNC=true ;;
+        0|false|no|n) CONFIGURE_REPOSITORY_SYNC=false ;;
+        *) error "CONFIGURE_REPOSITORY_SYNC must be true or false." ;;
+    esac
+
+    if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
+        if [[ "$AUTO_APPROVE" != "true" ]]; then
+            installer_prompt_value GITLAB_GROUP_PATH "GitLab group path" "$GITLAB_GROUP_PATH"
+            installer_prompt_value GITLAB_GROUP_NAME "GitLab group display name" "$GITLAB_GROUP_NAME"
+        fi
+        [[ "$GITLAB_GROUP_PATH" =~ ^[A-Za-z0-9_.-]+$ ]] || \
+            error "The GitLab group path is invalid."
+        GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
+        if [[ "$AUTO_APPROVE" != "true" ]]; then
+            installer_prompt_value GITLAB_PROJECT_PATH "GitLab path for this cluster repository" "$GITLAB_PROJECT_PATH"
+        fi
+        [[ "$GITLAB_PROJECT_PATH" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]] || \
+            error "The GitLab project path is invalid."
+
+        if [[ -z "$REPOSITORY_SYNC_MAPPINGS" && -n "$github_slug" ]]; then
+            REPOSITORY_SYNC_MAPPINGS="$github_slug=$GITLAB_PROJECT_PATH"
+        fi
+        if [[ "$AUTO_APPROVE" != "true" ]]; then
+            cat >&2 <<EOF
+
+Enter each repository pair as GitHub-owner/repository=GitLab-group/repository.
+Separate multiple pairs with commas. Example:
+  company/web=platform/web,company/api=platform/api
+EOF
+            installer_prompt_value REPOSITORY_SYNC_MAPPINGS "Repository pairs" "$REPOSITORY_SYNC_MAPPINGS"
+        fi
+        [[ -n "$REPOSITORY_SYNC_MAPPINGS" ]] || error "At least one repository pair is required for synchronization."
+        IFS=',' read -r -a repository_mappings <<< "$REPOSITORY_SYNC_MAPPINGS"
+        for mapping in "${repository_mappings[@]}"; do
+            mapping="${mapping//[[:space:]]/}"
+            [[ "$mapping" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || \
+                error "Invalid repository mapping: $mapping"
+            normalized_mappings+="${normalized_mappings:+,}$mapping"
+        done
+        REPOSITORY_SYNC_MAPPINGS="$normalized_mappings"
+        GITOPS_REPOSITORY_URL="https://gitlab.$PLATFORM_DOMAIN/$GITLAB_PROJECT_PATH.git"
+    else
+        GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
+        default_gitops="${GITOPS_REPOSITORY_URL:-$github_url}"
+        if [[ "$AUTO_APPROVE" != "true" ]]; then
+            installer_prompt_value GITOPS_REPOSITORY_URL "GitOps repository URL" "$default_gitops"
+        else
+            GITOPS_REPOSITORY_URL="$default_gitops"
+        fi
+        [[ "$GITOPS_REPOSITORY_URL" =~ ^https?://[^[:space:]]+\.git$ ]] || \
+            error "Set GITOPS_REPOSITORY_URL to an HTTP(S) .git repository accessible by Argo CD."
+    fi
+    export CONFIGURE_REPOSITORY_SYNC REPOSITORY_SYNC_MAPPINGS GITLAB_GROUP_PATH
+    export GITLAB_GROUP_NAME GITLAB_PROJECT_PATH GITOPS_REPOSITORY_URL
+}
+
+prompt_github_admin_token() {
+    [[ -z "${GITHUB_ADMIN_TOKEN:-}" ]] || return 0
+    [[ "$AUTO_APPROVE" != "true" ]] || error "Set GITHUB_ADMIN_TOKEN when CONFIGURE_REPOSITORY_SYNC=true."
+    cat >&2 <<'EOF'
+
+Create a GitHub fine-grained personal access token:
+  1. Open https://github.com/settings/personal-access-tokens/new.
+  2. Select every repository entered above.
+  3. Grant Administration, Actions, Contents, Secrets, and Variables read/write.
+  4. Use the shortest practical expiry and paste the token below.
+EOF
+    installer_prompt_secret GITHUB_ADMIN_TOKEN "GitHub repository-management token (input hidden)"
+    [[ -n "$GITHUB_ADMIN_TOKEN" ]] || error "A GitHub token is required for repository synchronization."
+    export GITHUB_ADMIN_TOKEN
+}
+
+configure_backup_destination() {
+    if [[ -z "$CONFIGURE_OFFSITE_BACKUPS" ]]; then
+        if [[ "$AUTO_APPROVE" == "true" ]]; then
+            [[ -n "$BACKUP_S3_ENDPOINT$BACKUP_S3_BUCKET$BACKUP_S3_ACCESS_KEY$BACKUP_S3_SECRET_KEY" ]] && \
+                CONFIGURE_OFFSITE_BACKUPS=true || CONFIGURE_OFFSITE_BACKUPS=false
+        elif ask_with_default "Configure encrypted off-node backups in S3-compatible object storage?" "Y"; then
+            CONFIGURE_OFFSITE_BACKUPS=true
+        else
+            CONFIGURE_OFFSITE_BACKUPS=false
+        fi
+    fi
+    case "${CONFIGURE_OFFSITE_BACKUPS,,}" in
+        1|true|yes|y) CONFIGURE_OFFSITE_BACKUPS=true ;;
+        0|false|no|n) CONFIGURE_OFFSITE_BACKUPS=false ;;
+        *) error "CONFIGURE_OFFSITE_BACKUPS must be true or false." ;;
+    esac
+    if [[ "$CONFIGURE_OFFSITE_BACKUPS" != "true" ]]; then
+        warn "Backups will remain local and will not survive loss of this server."
+        export CONFIGURE_OFFSITE_BACKUPS
         return
     fi
 
-    read -rp "$(echo -e "${YELLOW}$prompt $suffix${NC} ")" answer
-    answer="${answer:-$default_choice}"
-    [[ "$answer" =~ ^[Yy]$ ]]
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        cat >&2 <<'EOF'
+
+Prepare S3-compatible backup storage:
+  1. Create a private bucket at your object-storage provider.
+  2. Enable object versioning and provider-side retention if available.
+  3. Create an access key/API token limited to list, read, write, and delete
+     objects in that bucket. Do not use an account-wide administrator key.
+  4. Copy the S3 endpoint, region, bucket name, access-key ID, and secret key.
+
+Examples of endpoints are https://s3.REGION.amazonaws.com and an R2/MinIO S3
+endpoint supplied by that provider.
+EOF
+        installer_prompt_value BACKUP_S3_ENDPOINT "S3-compatible HTTPS endpoint" "$BACKUP_S3_ENDPOINT"
+        installer_prompt_value BACKUP_S3_REGION "S3 region" "$BACKUP_S3_REGION"
+        installer_prompt_value BACKUP_S3_BUCKET "Private backup bucket" "$BACKUP_S3_BUCKET"
+        [[ -n "$BACKUP_S3_ACCESS_KEY" ]] || installer_prompt_secret BACKUP_S3_ACCESS_KEY "S3 access-key ID (input hidden)"
+        [[ -n "$BACKUP_S3_SECRET_KEY" ]] || installer_prompt_secret BACKUP_S3_SECRET_KEY "S3 secret access key/API token (input hidden)"
+        if [[ -z "$BACKUP_REPOSITORY_PASSWORD" ]]; then
+            installer_prompt_confirmed_secret BACKUP_REPOSITORY_PASSWORD \
+                "Encryption password for the off-node recovery archive" \
+                "Confirm recovery-archive encryption password" || \
+                error "Backup encryption passwords do not match."
+        fi
+    fi
+    [[ "$BACKUP_S3_ENDPOINT" == https://* ]] || error "BACKUP_S3_ENDPOINT must use HTTPS."
+    [[ "$BACKUP_S3_REGION" =~ ^[A-Za-z0-9._-]+$ ]] || error "BACKUP_S3_REGION is invalid."
+    [[ "$BACKUP_S3_BUCKET" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{1,61}[A-Za-z0-9]$ ]] || error "BACKUP_S3_BUCKET is invalid."
+    [[ -n "$BACKUP_S3_ACCESS_KEY" && -n "$BACKUP_S3_SECRET_KEY" ]] || error "S3 backup credentials are required."
+    (( ${#BACKUP_REPOSITORY_PASSWORD} >= 16 )) || error "The backup encryption password must contain at least 16 characters."
+    export CONFIGURE_OFFSITE_BACKUPS BACKUP_S3_ENDPOINT BACKUP_S3_REGION BACKUP_S3_BUCKET
+    export BACKUP_S3_ACCESS_KEY BACKUP_S3_SECRET_KEY BACKUP_REPOSITORY_PASSWORD
+}
+
+prepare_rendered_configuration() {
+    [[ -x "$RENDER_CONFIG_SCRIPT" ]] || error "Configuration renderer is not executable: $RENDER_CONFIG_SCRIPT"
+    RENDERED_CONFIG_DIR="$(mktemp -d /tmp/bm-cluster-rendered.XXXXXX)"
+    chmod 700 "$RENDERED_CONFIG_DIR"
+    "$RENDER_CONFIG_SCRIPT" \
+        --output "$RENDERED_CONFIG_DIR" \
+        --domain "$PLATFORM_DOMAIN" \
+        --internal-domain "$INTERNAL_DNS_ZONE" \
+        --gitops-repository "$GITOPS_REPOSITORY_URL" \
+        --gitlab-group "$GITLAB_GROUP_PATH" \
+        --gitlab-project "${GITLAB_PROJECT_PATH##*/}" \
+        --cloudflare-access-team "$CLOUDFLARE_ACCESS_TEAM_NAME" \
+        --apps-enabled "$INSTALL_APPS" \
+        --descheduler-enabled "$INSTALL_DESCHEDULER" >/dev/null
+    K8S_DIR="$RENDERED_CONFIG_DIR/k8s"
+    ARGOCD_VALUES_FILE="$RENDERED_CONFIG_DIR/config/argocd-values.yaml"
 }
 
 validate_local_admin_password() {
@@ -172,8 +492,6 @@ validate_local_admin_password() {
 }
 
 configure_local_admin_password_rotation() {
-    local password_confirmation=""
-
     if [[ -z "$ROTATE_LOCAL_ADMIN_PASSWORDS" ]]; then
         if ask_with_default "Use one password for all local infrastructure superusers?" "N"; then
             ROTATE_LOCAL_ADMIN_PASSWORDS=true
@@ -200,20 +518,15 @@ configure_local_admin_password_rotation() {
         fi
         [[ -z "$LOCAL_ADMIN_PASSWORD" ]] || warn "$LOCAL_ADMIN_PASSWORD_ERROR"
         LOCAL_ADMIN_PASSWORD=""
-        IFS= read -rsp "Local infrastructure administrator password (input hidden): " \
-            LOCAL_ADMIN_PASSWORD
-        echo >&2
-        IFS= read -rsp "Confirm local infrastructure administrator password: " \
-            password_confirmation
-        echo >&2
-        if [[ "$LOCAL_ADMIN_PASSWORD" != "$password_confirmation" ]]; then
+        if ! installer_prompt_confirmed_secret LOCAL_ADMIN_PASSWORD \
+            "Local infrastructure administrator password (input hidden)" \
+            "Confirm local infrastructure administrator password"; then
             warn "The passwords do not match."
             LOCAL_ADMIN_PASSWORD=""
         fi
-        password_confirmation=""
     done
 
-    unset password_confirmation LOCAL_ADMIN_PASSWORD_ERROR
+    unset LOCAL_ADMIN_PASSWORD_ERROR
     info "The installer will align supported local infrastructure superusers after platform deployment."
 }
 
@@ -277,53 +590,58 @@ select_install_scope() {
 }
 
 select_node_transport() {
-    local default_transport raw_answer normalized
-    default_transport="$(normalize_node_transport "${DEFAULT_K3S_NODE_TRANSPORT:-vrack}")" || default_transport=vrack
+    local requested_transport="$K3S_NODE_TRANSPORT" selected_transport=""
 
-    if [[ -n "$K3S_NODE_TRANSPORT" ]]; then
-        normalize_node_transport "$K3S_NODE_TRANSPORT" || error "K3S_NODE_TRANSPORT must be vrack or tailscale."
-        return
-    fi
-    if [[ "$AUTO_APPROVE" == "true" ]]; then
+    if [[ "$AUTO_APPROVE" == "true" && -z "$requested_transport" ]]; then
         if [[ -n "${K3S_WORKER_HOSTS:-}" ]]; then
-            printf 'tailscale\n'
+            requested_transport=tailscale
         elif [[ -n "${K3S_WORKER_IPS:-}" ]]; then
-            printf 'vrack\n'
+            requested_transport=vrack
         else
             error "Set K3S_NODE_TRANSPORT=vrack|tailscale when adding workers non-interactively."
         fi
+    fi
+
+    installer_select_node_transport selected_transport "$requested_transport" \
+        "${DEFAULT_K3S_NODE_TRANSPORT:-vrack}" "$AUTO_APPROVE" || \
+        error "K3S_NODE_TRANSPORT must be vrack or tailscale."
+    printf '%s\n' "$selected_transport"
+}
+
+configure_platform_component_selection() {
+    installer_prompt_section "Platform components" \
+        "The recommended bundle installs storage, ingress, secrets, data stores," \
+        "platform services, Descheduler resources, and Argo CD."
+
+    if ask_with_default "Use the recommended platform component bundle?" "Y"; then
+        INSTALL_LONGHORN=true
+        INSTALL_INGRESS=true
+        INSTALL_VAULT_STACK=true
+        DEPLOY_DATA_STORES=true
+        DEPLOY_PLATFORM_SERVICES=true
+        INSTALL_DESCHEDULER=true
+        INSTALL_ARGOCD=true
         return
     fi
 
-    printf '%s\n' \
-        "Select the private node transport:" \
-        "  1) OVHcloud vRack (OVHcloud-only)" \
-        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)" >&2
-    while true; do
-        read -rp "Select 1 or 2 [$([[ "$default_transport" == "vrack" ]] && printf 1 || printf 2)]: " raw_answer
-        raw_answer="${raw_answer:-$default_transport}"
-        if normalized="$(normalize_node_transport "$raw_answer")"; then
-            printf '%s\n' "$normalized"
-            return
-        fi
-        case "$raw_answer" in
-            1) printf 'vrack\n'; return ;;
-            2) printf 'tailscale\n'; return ;;
-        esac
-        warn "Enter 1 for vRack or 2 for Tailscale."
-    done
+    info "Custom component selection enabled."
+    ask_with_default "Install/upgrade Longhorn and make it the default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
+    ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
+    ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
+    ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
+    ask_with_default "Deploy/upgrade platform services from the shared inventory?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
+    ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
+    ask_with_default "Install/upgrade Argo CD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
 }
 
 prompt_platform_admin_credentials() {
-    local password_confirmation=""
-
     while ! sso_admin_validate_username "$KEYCLOAK_SSO_BOOTSTRAP_USERNAME"; do
         if [[ "$AUTO_APPROVE" == "true" ]]; then
             error "Set a valid KEYCLOAK_SSO_BOOTSTRAP_USERNAME for a non-interactive platform installation. $SSO_ADMIN_VALIDATION_ERROR"
         fi
         [[ -z "$KEYCLOAK_SSO_BOOTSTRAP_USERNAME" ]] || warn "$SSO_ADMIN_VALIDATION_ERROR"
-        read -rp "$(echo -e "${YELLOW}Platform administrator login (username or email):${NC} ")" \
-            KEYCLOAK_SSO_BOOTSTRAP_USERNAME
+        installer_prompt_value KEYCLOAK_SSO_BOOTSTRAP_USERNAME \
+            "Platform administrator login (username or email)"
     done
 
     while ! sso_admin_validate_password "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" \
@@ -333,19 +651,14 @@ prompt_platform_admin_credentials() {
         fi
         [[ -z "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" ]] || warn "$SSO_ADMIN_VALIDATION_ERROR"
         KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
-        IFS= read -rsp "Platform administrator password (input hidden): " \
-            KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
-        echo >&2
-        IFS= read -rsp "Confirm platform administrator password: " password_confirmation
-        echo >&2
-        if [[ "$KEYCLOAK_SSO_BOOTSTRAP_PASSWORD" != "$password_confirmation" ]]; then
+        if ! installer_prompt_confirmed_secret KEYCLOAK_SSO_BOOTSTRAP_PASSWORD \
+            "Platform administrator password (input hidden)" \
+            "Confirm platform administrator password"; then
             warn "The passwords do not match."
             KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
         fi
     done
 
-    password_confirmation=""
-    unset password_confirmation
     export KEYCLOAK_SSO_BOOTSTRAP_USERNAME KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
     info "Keycloak will provision '$KEYCLOAK_SSO_BOOTSTRAP_USERNAME' as the shared platform administrator."
 }
@@ -357,11 +670,25 @@ cleanup_private_credentials() {
     OVH_CONSUMER_KEY=""
     KEYCLOAK_SSO_BOOTSTRAP_PASSWORD=""
     LOCAL_ADMIN_PASSWORD=""
+    GITHUB_ADMIN_TOKEN=""
+    CLOUDFLARE_API_TOKEN=""
+    BACKUP_S3_ACCESS_KEY=""
+    BACKUP_S3_SECRET_KEY=""
+    BACKUP_REPOSITORY_PASSWORD=""
     unset TAILSCALE_API_TOKEN OVH_APPLICATION_KEY OVH_APPLICATION_SECRET OVH_CONSUMER_KEY 2>/dev/null || true
     unset KEYCLOAK_SSO_BOOTSTRAP_USERNAME KEYCLOAK_SSO_BOOTSTRAP_PASSWORD 2>/dev/null || true
     unset LOCAL_ADMIN_PASSWORD LOCAL_ADMIN_PASSWORD_ERROR 2>/dev/null || true
+    unset GITHUB_ADMIN_TOKEN 2>/dev/null || true
+    unset CLOUDFLARE_API_TOKEN 2>/dev/null || true
+    unset BACKUP_S3_ACCESS_KEY BACKUP_S3_SECRET_KEY BACKUP_REPOSITORY_PASSWORD 2>/dev/null || true
+    if declare -F gitlab_revoke_ephemeral_admin_token >/dev/null 2>&1; then
+        gitlab_revoke_ephemeral_admin_token
+    fi
     if [[ -n "$INSTALLER_TEMP_DIR" && "$INSTALLER_TEMP_DIR" == /tmp/bm-cluster-installers.* && -d "$INSTALLER_TEMP_DIR" ]]; then
         rm -r -- "$INSTALLER_TEMP_DIR"
+    fi
+    if [[ -n "$RENDERED_CONFIG_DIR" && "$RENDERED_CONFIG_DIR" == /tmp/bm-cluster-rendered.* && -d "$RENDERED_CONFIG_DIR" ]]; then
+        rm -r -- "$RENDERED_CONFIG_DIR"
     fi
 }
 trap cleanup_private_credentials EXIT HUP INT TERM
@@ -442,7 +769,7 @@ info " Control Plane Installer"
 info "============================================="
 echo ""
 echo "This script will:"
-echo "  - Prompt you for each install feature group one by one"
+echo "  - Group related questions and offer a recommended platform bundle"
 echo "  - Provision the login you choose as administrator through Keycloak SSO"
 echo "  - Install only selected components"
 echo "  - Apply UFW everywhere and add intrusion prevention only when internet-exposed"
@@ -450,7 +777,10 @@ echo ""
 
 ask_with_default "Proceed with installation and deployment?" "Y" || { info "Aborted."; exit 0; }
 
-step "Select features to install (answer each prompt)"
+installer_prompt_section "Cluster identity and deployment scope" \
+    "Choose where this cluster runs and whether it includes application workloads."
+prompt_cluster_identity
+
 SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
     info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and control-plane Lynis."
@@ -468,6 +798,12 @@ else
     info "Infrastructure-only installation selected."
 fi
 
+installer_prompt_section "Cluster nodes and scheduling" \
+    "Set the total node count, then choose whether the control plane also runs workloads."
+configure_cluster_topology_plan
+
+installer_prompt_section "Host prerequisites and K3s nodes" \
+    "Choose host preparation, control-plane installation, and optional workers."
 if command -v k3s &>/dev/null; then
     warn "K3s detected: $(k3s --version | head -1)"
     K3S_DEFAULT="N"
@@ -477,10 +813,12 @@ fi
 
 ask_with_default "Install/upgrade system prerequisites (Java/Maven/Docker/Ansible/Node/etc.)?" "Y" && INSTALL_PREREQS=true || INSTALL_PREREQS=false
 ask_with_default "Install or reinstall K3s control plane?" "$K3S_DEFAULT" && INSTALL_K3S=true || INSTALL_K3S=false
-if [[ "$AUTO_APPROVE" == "true" ]]; then
-    [[ -n "${K3S_WORKER_IPS:-}${K3S_WORKER_HOSTS:-}" ]] && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+if (( WORKERS_TO_ADD > 0 )); then
+    ADD_K3S_WORKERS=true
+    info "$WORKERS_TO_ADD worker node(s) will be added or reconciled over SSH."
 else
-    ask_with_default "Add or reconcile K3s worker nodes over SSH?" "N" && ADD_K3S_WORKERS=true || ADD_K3S_WORKERS=false
+    ADD_K3S_WORKERS=false
+    info "The requested worker count is already present; no worker enrollment is needed."
 fi
 if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
     K3S_NODE_TRANSPORT="$(select_node_transport)"
@@ -508,8 +846,9 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
             error "OVHcloud vRack prerequisites are incomplete or account verification failed."
         if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
             if [[ "$AUTO_APPROVE" != "true" ]]; then
-                read -rp "$(echo -e "${YELLOW}This control plane's OVHcloud Dedicated Server service name [${OVH_CONTROL_PLANE_SERVICE_NAME}]:${NC} ")" ovh_answer
-                OVH_CONTROL_PLANE_SERVICE_NAME="${ovh_answer:-$OVH_CONTROL_PLANE_SERVICE_NAME}"
+                installer_prompt_value OVH_CONTROL_PLANE_SERVICE_NAME \
+                    "This control plane's OVHcloud Dedicated Server service name" \
+                    "$OVH_CONTROL_PLANE_SERVICE_NAME"
             fi
             [[ -n "$OVH_VRACK_SERVICE_NAME" && -n "$OVH_CONTROL_PLANE_SERVICE_NAME" ]] || \
                 error "OVH_VRACK_SERVICE_NAME and OVH_CONTROL_PLANE_SERVICE_NAME are required for API attachment."
@@ -529,7 +868,7 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
                 error "K3S_PRIVATE_ADDRESS is required with vRack workers."
             fi
-            read -rp "$(echo -e "${YELLOW}Control-plane vRack/private RFC1918 IPv4:${NC} ")" K3S_PRIVATE_ADDRESS
+            installer_prompt_value K3S_PRIVATE_ADDRESS "Control-plane vRack/private RFC1918 IPv4"
             [[ -n "$K3S_PRIVATE_ADDRESS" ]] || error "A control-plane vRack/private IPv4 address is required."
             export K3S_PRIVATE_ADDRESS
         fi
@@ -540,17 +879,19 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
             if [[ "$AUTO_APPROVE" == "true" ]]; then
                 error "K3S_NODE_NETWORK_CIDR is required with vRack workers."
             fi
-            read -rp "$(echo -e "${YELLOW}Trusted vRack/private node CIDR (for example 10.50.0.0/24):${NC} ")" K3S_NODE_NETWORK_CIDR
+            installer_prompt_value K3S_NODE_NETWORK_CIDR \
+                "Trusted vRack/private node CIDR (for example 10.50.0.0/24)"
             [[ -n "$K3S_NODE_NETWORK_CIDR" ]] || error "A trusted vRack/private node CIDR is required."
             export K3S_NODE_NETWORK_CIDR
         fi
         existing_vrack_interface="$(interface_owning_ip "$K3S_PRIVATE_ADDRESS")"
         if [[ -z "$existing_vrack_interface" && "$AUTO_APPROVE" != "true" ]]; then
             ip -br link show
-            read -rp "$(echo -e "${YELLOW}Control-plane OVHcloud private/vRack NIC name:${NC} ")" K3S_PRIVATE_INTERFACE
-            read -rp "$(echo -e "${YELLOW}Expected private NIC MAC (recommended) [${K3S_PRIVATE_INTERFACE_MAC:-}]:${NC} ")" ovh_answer
-            K3S_PRIVATE_INTERFACE_MAC="${ovh_answer:-${K3S_PRIVATE_INTERFACE_MAC:-}}"
-            read -rp "$(echo -e "${YELLOW}Optional vRack VLAN ID (blank for untagged VLAN 0):${NC} ")" K3S_VRACK_VLAN_ID
+            installer_prompt_value K3S_PRIVATE_INTERFACE "Control-plane OVHcloud private/vRack NIC name"
+            installer_prompt_value K3S_PRIVATE_INTERFACE_MAC \
+                "Expected private NIC MAC (recommended)" "${K3S_PRIVATE_INTERFACE_MAC:-}"
+            installer_prompt_value K3S_VRACK_VLAN_ID \
+                "Optional vRack VLAN ID (blank for untagged VLAN 0)"
         fi
         vrack_node_args=(
             --configure-node
@@ -566,18 +907,29 @@ if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
         export K3S_PRIVATE_INTERFACE K3S_PRIVATE_INTERFACE_MAC K3S_VRACK_VLAN_ID
     fi
 fi
-ask_with_default "Install/upgrade Longhorn and make it default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
-ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
+
+configure_platform_component_selection
+
+installer_prompt_section "Recovery and public access" \
+    "Configure off-node backups and, for internet-facing clusters, public DNS and TLS."
+configure_backup_destination
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
     ask_with_default "Configure Cloudflare public DNS and Origin TLS?" "Y" && CONFIGURE_CLOUDFLARE=true || CONFIGURE_CLOUDFLARE=false
 else
     CONFIGURE_CLOUDFLARE=false
 fi
-ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
-ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
-ask_with_default "Deploy/upgrade platform services from the shared inventory?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
-ask_with_default "Install/upgrade Descheduler addon resources (manual trigger only)?" "Y" && INSTALL_DESCHEDULER=true || INSTALL_DESCHEDULER=false
-ask_with_default "Install/upgrade ArgoCD?" "Y" && INSTALL_ARGOCD=true || INSTALL_ARGOCD=false
+if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$AUTO_APPROVE" != "true" ]]; then
+    installer_prompt_value CLOUDFLARE_ACCESS_TEAM_NAME \
+        "Cloudflare Zero Trust team label (first part of TEAM.cloudflareaccess.com)" \
+        "$CLOUDFLARE_ACCESS_TEAM_NAME"
+fi
+[[ "$CLOUDFLARE_ACCESS_TEAM_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && ${#CLOUDFLARE_ACCESS_TEAM_NAME} -le 63 ]] || \
+    error "CLOUDFLARE_ACCESS_TEAM_NAME must be a single lowercase DNS label."
+export CLOUDFLARE_ACCESS_TEAM_NAME
+
+installer_prompt_section "GitOps and repository delivery" \
+    "Choose the Argo CD source and optionally configure GitHub/GitLab synchronization."
+configure_repository_delivery
 
 if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
     warn "Platform services depend on data stores; enabling data store deployment."
@@ -595,12 +947,9 @@ if [[ "$DEPLOY_ODOO" == "true" && "$DEPLOY_PLATFORM_SERVICES" != "true" ]]; then
 fi
 
 if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
-    step "Configure the shared Keycloak platform administrator"
+    installer_prompt_section "Administrator credentials" \
+        "Configure the shared Keycloak administrator and optional local password alignment."
     prompt_platform_admin_credentials
-fi
-
-if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
-    step "Configure optional local administrator password alignment"
     configure_local_admin_password_rotation
 else
     ROTATE_LOCAL_ADMIN_PASSWORDS=false
@@ -628,6 +977,8 @@ if [[ "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL
     NEEDS_HELM=true
 fi
 
+prepare_rendered_configuration
+
 # ---------- Prerequisites section ----------------------------------------------
 if [[ "$INSTALL_PREREQS" == "true" ]]; then
     step "Installing system prerequisites..."
@@ -640,6 +991,7 @@ if [[ "$INSTALL_PREREQS" == "true" ]]; then
         open-iscsi \
         nfs-common \
         curl \
+        dnsutils \
         jq \
         git \
         openssl \
@@ -683,10 +1035,14 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$INSTALL_K3S" == "true" ]]; then
         info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
         download_installer https://get.k3s.io k3s-install.sh k3s_installer
-        sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh "$k3s_installer" \
-            --disable traefik \
-            --secrets-encryption \
+        k3s_server_args=(
+            --disable traefik
+            --node-name "$CONTROL_PLANE_NODE_NAME"
+            --secrets-encryption
             --write-kubeconfig-mode 600
+        )
+        sudo env INSTALL_K3S_VERSION="$K3S_INSTALL_VERSION" sh "$k3s_installer" \
+            "${k3s_server_args[@]}"
     fi
 
     if [[ -f /etc/rancher/k3s/k3s.yaml ]]; then
@@ -748,8 +1104,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     [[ ${#control_plane_nodes[@]} -gt 0 ]] || error "No control-plane node was found."
     kubectl label "${control_plane_nodes[@]}" \
         svccontroller.k3s.cattle.io/enablelb=true \
-        node.swirlit.dev/role=control-plane \
-        "node.swirlit.dev/exposure=$SERVER_EXPOSURE" \
+        node.bm-cluster.io/role=control-plane \
+        "node.bm-cluster.io/exposure=$SERVER_EXPOSURE" \
         --overwrite >/dev/null
 
     if [[ "$INSTALL_K3S" == "true" ]]; then
@@ -763,6 +1119,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         [[ -z "$worker_ip_list" ]] || worker_manager_args+=(--worker-ips "$worker_ip_list")
         worker_host_list="${K3S_WORKER_HOSTS:-}"
         [[ -z "$worker_host_list" ]] || worker_manager_args+=(--worker-hosts "$worker_host_list")
+        if [[ -z "$worker_ip_list$worker_host_list" ]]; then
+            worker_manager_args+=(--worker-count "$WORKERS_TO_ADD")
+        fi
+        worker_manager_args+=(--control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE")
         worker_manager_args+=(--transport "$K3S_NODE_TRANSPORT")
         worker_server_url="${K3S_SERVER_URL:-https://${K3S_PRIVATE_ADDRESS}:6443}"
         worker_manager_args+=(--server-url "$worker_server_url")
@@ -783,11 +1143,19 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     step "Creating infra namespace..."
     kubectl create namespace infra --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    [[ -x "$CLUSTER_TOPOLOGY_SCRIPT" ]] || \
+        error "Cluster topology reconciler is not executable: $CLUSTER_TOPOLOGY_SCRIPT"
+    step "Reconciling control-plane scheduling and topology-dependent configuration..."
+    "$CLUSTER_TOPOLOGY_SCRIPT" \
+        --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+        --expected-node-count "$CLUSTER_NODE_COUNT"
+    [[ -x "$LEGACY_RECONCILIATION_SCRIPT" ]] || error "Legacy-state reconciler is not executable: $LEGACY_RECONCILIATION_SCRIPT"
+    "$LEGACY_RECONCILIATION_SCRIPT"
     if [[ "$INSTALL_APPS" == "true" ]]; then
         step "Creating the shared application namespace..."
         kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
     fi
-    step "Configuring the cluster-only $DEFAULT_INTERNAL_DNS_ZONE service aliases..."
+    step "Configuring the cluster-only $INTERNAL_DNS_ZONE service aliases..."
     for manifest in "${FOUNDATION_MANIFEST_ARRAY[@]}"; do
         kubectl apply -f "$K8S_DIR/$manifest"
     done
@@ -806,10 +1174,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
-        node_count="$(kubectl get nodes --no-headers | awk '$2 ~ /^Ready/ {count++} END {print count+0}')"
-        longhorn_replicas="$node_count"
-        (( longhorn_replicas > 3 )) && longhorn_replicas=3
-        (( longhorn_replicas < 1 )) && longhorn_replicas=1
+        longhorn_replicas="$("$CLUSTER_TOPOLOGY_SCRIPT" --print-longhorn-replicas)"
         step "Installing/upgrading Longhorn with $longhorn_replicas default replica(s) for new volumes..."
         helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
         helm repo update > /dev/null 2>&1
@@ -831,8 +1196,13 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
         kubectl wait --for=condition=ready pod -l app=longhorn-manager \
             -n longhorn-system --timeout="$LONGHORN_POD_WAIT_TIMEOUT"
-        kubectl -n longhorn-system patch settings.longhorn.io default-replica-count \
-            --type=merge -p "{\"value\":\"$longhorn_replicas\"}" >/dev/null
+        "$CLUSTER_TOPOLOGY_SCRIPT" \
+            --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+            --expected-node-count "$CLUSTER_NODE_COUNT"
+        if [[ "$CONFIGURE_OFFSITE_BACKUPS" == "true" ]]; then
+            step "Configuring recurring off-node Longhorn volume backups..."
+            RUN_BACKUP_NOW=false "$K3S_BACKUP_SCRIPT"
+        fi
     fi
 
     if [[ "$INSTALL_INGRESS" == "true" ]]; then
@@ -845,14 +1215,26 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
             --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
+            --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane' \
+            --set-string 'controller.tolerations[0].operator=Exists' \
+            --set-string 'controller.tolerations[0].effect=NoSchedule' \
             --wait --timeout "$INGRESS_HELM_TIMEOUT"
     fi
 
     if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
         [[ -x "$CLOUDFLARE_SCRIPT" ]] || error "Cloudflare configurator is not executable: $CLOUDFLARE_SCRIPT"
         if [[ -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
-            read -rsp "Cloudflare User API Token (cfut_...): " CLOUDFLARE_API_TOKEN
-            echo >&2
+            cat >&2 <<'EOF'
+
+Create a Cloudflare User API Token:
+  1. Open https://dash.cloudflare.com/profile/api-tokens.
+  2. Create a custom user token for the selected account.
+  3. Grant Zone/DNS/Zone Settings/SSL/WAF/Cache edit, Access Apps and
+     Organizations edit, Memberships read, and Registrar Domains read.
+  4. For a new zone, scope zone permissions to all zones in the account.
+  5. Paste the cfut_ token below; it is used only for this installer run.
+EOF
+            installer_prompt_secret CLOUDFLARE_API_TOKEN "Cloudflare User API Token (cfut_...)"
             export CLOUDFLARE_API_TOKEN
         fi
         step "Configuring Cloudflare DNS and Origin TLS..."
@@ -922,6 +1304,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"
         done
+        kubectl delete role/bm-cluster-gitops-read rolebinding/bm-cluster-gitops-read \
+            -n infra --ignore-not-found >/dev/null
 
         for app in "${PLATFORM_WAIT_APP_ARRAY[@]}"; do
             kubectl wait --for=condition=ready pod -l "app=$app" -n infra \
@@ -952,13 +1336,39 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             "$CLOUDFLARE_SCRIPT"
         fi
 
-        if [[ -n "${GITLAB_ADMIN_TOKEN:-}" ]]; then
-            [[ -x "$GITLAB_CI_SCRIPT" ]] || error "GitLab CI configurator is not executable: $GITLAB_CI_SCRIPT"
-            step "Configuring the bm-cluster GitLab project and Kubernetes runner..."
-            "$GITLAB_CI_SCRIPT"
+        [[ -x "$GITLAB_CI_SCRIPT" ]] || error "GitLab CI configurator is not executable: $GITLAB_CI_SCRIPT"
+        [[ -r "$GITLAB_TOKEN_LIBRARY" ]] || error "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
+        # shellcheck source=scripts/lib/gitlab-admin-token.sh
+        source "$GITLAB_TOKEN_LIBRARY"
+        gitlab_acquire_admin_token
+        if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
+            prompt_github_admin_token
+            IFS=',' read -r -a repository_mappings <<< "$REPOSITORY_SYNC_MAPPINGS"
+            for repository_mapping in "${repository_mappings[@]}"; do
+                github_slug="${repository_mapping%%=*}"
+                gitlab_path="${repository_mapping#*=}"
+                gitlab_group="${gitlab_path%%/*}"
+                gitlab_project="${gitlab_path##*/}"
+                gitlab_group_name="$gitlab_group"
+                [[ "$gitlab_group" != "$GITLAB_GROUP_PATH" ]] || gitlab_group_name="$GITLAB_GROUP_NAME"
+                step "Configuring and initializing $github_slug <-> $gitlab_path..."
+                GITHUB_OWNER="${github_slug%%/*}" \
+                GITHUB_REPOSITORY="${github_slug##*/}" \
+                GITLAB_GROUP_PATH="$gitlab_group" \
+                GITLAB_GROUP_NAME="$gitlab_group_name" \
+                GITLAB_PROJECT_PATH="$gitlab_path" \
+                GITLAB_PROJECT_NAME="$gitlab_project" \
+                GITLAB_PUBLIC_URL="https://gitlab.$PLATFORM_DOMAIN" \
+                CONFIGURE_REPOSITORY_SYNC=true \
+                    "$GITLAB_CI_SCRIPT"
+            done
         else
-            warn "GITLAB_ADMIN_TOKEN is unset; run scripts/configure-gitlab-ci.sh after installation to activate the instance runner."
+            GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$(basename "$SCRIPT_DIR")}" \
+            GITLAB_PUBLIC_URL="https://gitlab.$PLATFORM_DOMAIN" \
+            CONFIGURE_REPOSITORY_SYNC=false \
+                "$GITLAB_CI_SCRIPT"
         fi
+        gitlab_revoke_ephemeral_admin_token
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
@@ -982,7 +1392,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install argocd argo/argo-cd \
             --namespace infra \
             --version "$ARGOCD_CHART_VERSION" \
-            --values "$SCRIPT_DIR/config/argocd-values.yaml" \
+            --values "$ARGOCD_VALUES_FILE" \
             --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
             --wait --timeout "$ARGOCD_HELM_TIMEOUT"
 
@@ -1001,6 +1411,16 @@ info " Installation complete!"
 info "============================================="
 
 echo ""
+echo "Cluster topology:"
+echo "  Total nodes: $CLUSTER_NODE_COUNT"
+echo "  Worker nodes: $PLANNED_WORKER_COUNT"
+if [[ "$CONTROL_PLANE_SCHEDULABLE" == "true" ]]; then
+    echo "  Control plane: controller-worker"
+else
+    echo "  Control plane: controller-only (NoSchedule)"
+fi
+echo "  Longhorn replicas: $((PLANNED_WORKER_COUNT > 0 ? PLANNED_WORKER_COUNT : 1))"
+echo ""
 echo "Installed versions:"
 command -v java >/dev/null 2>&1 && echo "  Java: $(java -version 2>&1 | head -1)"
 command -v mvn >/dev/null 2>&1 && echo "  Maven: $(mvn -version 2>&1 | head -1)"
@@ -1013,7 +1433,7 @@ fi
 echo ""
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]] || kubectl get deployment homepage -n infra >/dev/null 2>&1; then
-        echo "Service dashboard: https://dashboard.swirlit.dev"
+        echo "Service dashboard: https://dashboard.$PLATFORM_DOMAIN"
     fi
 
     echo ""

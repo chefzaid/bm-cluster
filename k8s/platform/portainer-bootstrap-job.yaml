@@ -75,7 +75,7 @@ spec:
               import urllib.request
               import uuid
 
-              base_url = "http://portainer.swirlit.internal:9000/api"
+              base_url = "http://portainer.__INTERNAL_DNS_ZONE__:9000/api"
               username = os.environ["PORTAINER_USERNAME"]
               password = os.environ["PORTAINER_PASSWORD"]
               sso_username = os.environ["SSO_BOOTSTRAP_USERNAME"]
@@ -122,11 +122,11 @@ spec:
                   "OAuthSettings": {
                       "ClientID": "portainer",
                       "ClientSecret": os.environ["PORTAINER_OIDC_CLIENT_SECRET"],
-                      "AuthorizationURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth",
-                      "AccessTokenURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/token",
-                      "ResourceURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/userinfo",
-                      "RedirectURI": "https://portainer.swirlit.dev",
-                      "LogoutURI": "https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/logout",
+                      "AuthorizationURI": "https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/auth",
+                      "AccessTokenURI": "https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/token",
+                      "ResourceURI": "https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/userinfo",
+                      "RedirectURI": "https://portainer.__PUBLIC_DOMAIN__",
+                      "LogoutURI": "https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/logout",
                       "UserIdentifier": "preferred_username",
                       "Scopes": "openid profile email groups",
                       "OAuthAutoCreateUsers": True,

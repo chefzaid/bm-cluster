@@ -188,7 +188,7 @@ spec:
               command: ["/opt/gitlab/embedded/bin/ruby", "/scripts/cleanup.rb"]
               env:
                 - name: GITLAB_API_URL
-                  value: http://gitlab.swirlit.internal/api/v4
+                  value: http://gitlab.__INTERNAL_DNS_ZONE__/api/v4
                 - name: GITLAB_GROUP_PATH
                   value: swirlit
                 - name: RETENTION_DAYS

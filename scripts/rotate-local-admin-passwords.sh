@@ -7,6 +7,7 @@ NAMESPACE="${NAMESPACE:-infra}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_ADDR="http://127.0.0.1:8200"
 VAULT_BOOTSTRAP_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
 
 info() { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 fail() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -315,7 +316,8 @@ rotate_sonarqube() {
     if [[ "$sso_username" == *"@"* ]]; then
       sso_email="$sso_username"
     else
-      sso_email="${sso_username}@swirlit.dev"
+      [[ -n "$PLATFORM_DOMAIN" ]] || fail "Set PLATFORM_DOMAIN to derive the administrator email."
+      sso_email="${sso_username}@$PLATFORM_DOMAIN"
     fi
   fi
   info "Rotating SonarQube local superuser 'admin'..."

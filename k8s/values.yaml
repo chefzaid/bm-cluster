@@ -1,0 +1,6 @@
+publicDomain: ""
+internalDnsZone: ""
+gitopsRepositoryURL: ""
+cloudflareAccessTeamName: ""
+appsEnabled: false
+deschedulerEnabled: true

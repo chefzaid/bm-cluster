@@ -9,6 +9,7 @@ GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
 GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/bm-cluster}"
 GITLAB_PROJECT_NAME="${GITLAB_PROJECT_NAME:-bm-cluster}"
+CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-false}"
 RUNNER_DESCRIPTION="${RUNNER_DESCRIPTION:-bm-cluster-kubernetes}"
 RUNNER_TAGS="${RUNNER_TAGS:-bm-cluster,kubernetes}"
 RETENTION_TOKEN_NAME="${RETENTION_TOKEN_NAME:-bm-cluster-registry-retention}"
@@ -22,6 +23,7 @@ VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/lib/gitlab-admin-token.sh"
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -29,6 +31,11 @@ fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 for command_name in curl jq kubectl sudo; do
   command -v "$command_name" >/dev/null || fail "$command_name is required"
 done
+[[ "$CONFIGURE_REPOSITORY_SYNC" =~ ^(true|false)$ ]] || \
+  fail "CONFIGURE_REPOSITORY_SYNC must be true or false"
+[[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
+# shellcheck source=scripts/lib/gitlab-admin-token.sh
+source "$GITLAB_TOKEN_LIBRARY"
 
 if [[ -z "$GITLAB_URL" ]]; then
   gitlab_service_ip="$(kubectl get service gitlab -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}')"
@@ -36,11 +43,17 @@ if [[ -z "$GITLAB_URL" ]]; then
   GITLAB_URL="http://$gitlab_service_ip"
 fi
 
-[[ -n "${GITLAB_ADMIN_TOKEN:-}" ]] || fail "Set GITLAB_ADMIN_TOKEN to an API token that can create projects and instance runners"
+gitlab_acquire_admin_token
 sudo test -s "$VAULT_TOKEN_FILE" || fail "Vault bootstrap token is missing from $VAULT_TOKEN_FILE"
 
 work_dir="$(mktemp -d /tmp/bm-gitlab-ci.XXXXXX)"
-trap 'rm -r -- "$work_dir"; unset GITLAB_ADMIN_TOKEN GITLAB_RETENTION_TOKEN vault_token runner_token retention_api_token elastic_ci_username elastic_ci_password' EXIT
+cleanup() {
+  rm -r -- "$work_dir"
+  gitlab_revoke_ephemeral_admin_token
+  unset GITLAB_RETENTION_TOKEN vault_token runner_token retention_api_token \
+    elastic_ci_username elastic_ci_password 2>/dev/null || true
+}
+trap cleanup EXIT
 api_config="$work_dir/curl-api.conf"
 printf 'silent\nshow-error\nheader = "PRIVATE-TOKEN: %s"\n' "$GITLAB_ADMIN_TOKEN" > "$api_config"
 
@@ -313,6 +326,10 @@ if kubectl get externalsecret gitlab-registry-retention-token -n "$NAMESPACE" >/
     -n "$NAMESPACE" --timeout=3m >/dev/null
 fi
 
-GITLAB_URL="$GITLAB_URL" "$REPOSITORY_ROOT/scripts/configure-repository-sync.sh"
-
-info "GitLab project, bidirectional GitHub sync, package/container registries, three-year retention, and instance-scoped Kubernetes runner are configured"
+if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
+  GITLAB_URL="${GITLAB_PUBLIC_URL:-$GITLAB_URL}" \
+    "$REPOSITORY_ROOT/scripts/configure-repository-sync.sh"
+  info "GitLab project, bidirectional GitHub sync, package/container registries, three-year retention, and instance-scoped Kubernetes runner are configured"
+else
+  info "GitLab project, package/container registries, three-year retention, and instance-scoped Kubernetes runner are configured; repository sync was not requested"
+fi

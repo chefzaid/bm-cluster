@@ -87,7 +87,7 @@ data:
     [OUTPUT]
         Name                      es
         Match                     kube.*
-        Host                      elasticsearch.swirlit.internal
+        Host                      elasticsearch.__INTERNAL_DNS_ZONE__
         Port                      9200
         HTTP_User                 ${ELASTICSEARCH_USERNAME}
         HTTP_Passwd               ${ELASTICSEARCH_PASSWORD}
@@ -211,7 +211,7 @@ spec:
       labels:
         app: fluent-bit
       annotations:
-        bm-cluster.swirlit.dev/config-version: "3"
+        bm-cluster.__PUBLIC_DOMAIN__/config-version: "3"
         prometheus.io/scrape: "true"
         prometheus.io/path: /api/v2/metrics/prometheus
         prometheus.io/port: "2020"
@@ -234,19 +234,19 @@ spec:
             - -c
             - |
               until curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
-                http://elasticsearch.swirlit.internal:9200 >/dev/null; do sleep 5; done
+                http://elasticsearch.__INTERNAL_DNS_ZONE__:9200 >/dev/null; do sleep 5; done
               curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/ilm-policy.json \
-                http://elasticsearch.swirlit.internal:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
+                http://elasticsearch.__INTERNAL_DNS_ZONE__:9200/_ilm/policy/bm-cluster-logs-7d >/dev/null
               curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary @/config/index-template.json \
-                http://elasticsearch.swirlit.internal:9200/_template/kubernetes-logs-v2 >/dev/null
+                http://elasticsearch.__INTERNAL_DNS_ZONE__:9200/_template/kubernetes-logs-v2 >/dev/null
               curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" -X PUT \
                 -H 'Content-Type: application/json' \
                 --data-binary '{"index.lifecycle.name":"bm-cluster-logs-7d"}' \
-                'http://elasticsearch.swirlit.internal:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
+                'http://elasticsearch.__INTERNAL_DNS_ZONE__:9200/kubernetes-logs-*,app-logs-*/_settings?allow_no_indices=true&ignore_unavailable=true' >/dev/null
           securityContext:
             runAsNonRoot: true
             runAsUser: 100
@@ -329,4 +329,161 @@ spec:
         - name: state
           hostPath:
             path: /var/lib/fluent-bit
+            type: DirectoryOrCreate
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-lynis-config
+  namespace: infra
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: filestream
+        id: lynis-report
+        enabled: true
+        paths:
+          - /hostfs/var/log/lynis-report.dat
+        exclude_lines: ['^[[:space:]]*(#|$)']
+        prospector.scanner.check_interval: 10s
+        file_identity.fingerprint: ~
+        fields_under_root: true
+        fields:
+          event:
+            dataset: lynis.audit
+            module: lynis
+          host:
+            name: ${NODE_NAME}
+          service:
+            type: lynis
+
+    output.logstash:
+      hosts: ["logstash.__INTERNAL_DNS_ZONE__:5044"]
+      worker: 1
+      compression_level: 3
+      backoff.init: 1s
+      backoff.max: 60s
+
+    setup.ilm.enabled: false
+    setup.template.enabled: false
+
+    queue.mem:
+      events: 512
+      flush.min_events: 1
+      flush.timeout: 1s
+
+    http.enabled: true
+    http.host: 0.0.0.0
+    http.port: 5066
+    logging.level: info
+    logging.to_files: false
+    logging.metrics.enabled: false
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat-lynis
+  namespace: infra
+  labels:
+    app: filebeat-lynis
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  selector:
+    matchLabels:
+      app: filebeat-lynis
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: filebeat-lynis
+      annotations:
+        bm-cluster.__PUBLIC_DOMAIN__/config-version: "1"
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: filebeat
+          image: docker.elastic.co/beats/filebeat@sha256:f2b3bb6a6a02ebfc5f2f91cf8d560522acc4965bdb941f3f1608964cb8544829
+          args:
+            - -e
+            - -c
+            - /etc/filebeat/filebeat.yml
+            - --strict.perms=false
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http
+              containerPort: 5066
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 192Mi
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/filebeat/filebeat.yml
+              subPath: filebeat.yml
+              readOnly: true
+            - name: host-var-log
+              mountPath: /hostfs/var/log
+              readOnly: true
+            - name: state
+              mountPath: /usr/share/filebeat/data
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: filebeat-lynis-config
+        - name: host-var-log
+          hostPath:
+            path: /var/log
+            type: Directory
+        - name: state
+          hostPath:
+            path: /var/lib/bm-cluster/filebeat-lynis
             type: DirectoryOrCreate

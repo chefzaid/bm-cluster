@@ -61,9 +61,11 @@ sso_admin_validate_password() {
 
 sso_admin_primary_email() {
     local username="$1"
+    local platform_domain="${2:-${PLATFORM_DOMAIN:-}}"
     if [[ "$username" == *"@"* ]]; then
         printf '%s\n' "$username"
     else
-        printf '%s@swirlit.dev\n' "$username"
+        [[ -n "$platform_domain" ]] || return 1
+        printf '%s@%s\n' "$username" "$platform_domain"
     fi
 }

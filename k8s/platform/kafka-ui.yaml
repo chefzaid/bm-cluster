@@ -53,7 +53,7 @@ spec:
             - name: KAFKA_CLUSTERS_0_NAME
               value: bm-cluster
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
-              value: kafka.swirlit.internal:9092
+              value: kafka.__INTERNAL_DNS_ZONE__:9092
             - name: KAFKA_CLUSTERS_0_READONLY
               value: "false"
             - name: AUTH_TYPE
@@ -68,7 +68,7 @@ spec:
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_SCOPE
               value: openid,profile,email,groups
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_ISSUERURI
-              value: https://keycloak.swirlit.dev/auth/realms/swirlit
+              value: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_USERNAMEATTRIBUTE
               value: preferred_username
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CLIENTNAME
@@ -76,7 +76,7 @@ spec:
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_PROVIDER
               value: keycloak
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_REDIRECTURI
-              value: https://kafka.swirlit.dev/login/oauth2/code/keycloak
+              value: https://kafka.__PUBLIC_DOMAIN__/login/oauth2/code/keycloak
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_AUTHORIZATIONGRANTTYPE
               value: authorization_code
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CUSTOMPARAMS_TYPE

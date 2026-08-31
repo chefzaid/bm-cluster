@@ -8,7 +8,7 @@ data:
   logstash.conf: |
     input {
       kafka {
-        bootstrap_servers => "kafka.swirlit.internal:9092"
+        bootstrap_servers => "kafka.__INTERNAL_DNS_ZONE__:9092"
         topics => ["order_topic", "order_result_topic"]
         group_id => "logstash"
         codec => "json"
@@ -18,32 +18,82 @@ data:
         port => 5000
         codec => json_lines
       }
+      beats {
+        port => 5044
+        enrich => ["source_metadata"]
+      }
     }
     filter {
-      if [logger_name] {
-        mutate {
-          add_field => { "app" => "%{[logger_name]}" }
+      if [event][dataset] == "lynis.audit" {
+        dissect {
+          mapping => { "message" => "%{[lynis][key]}=%{[lynis][value]}" }
+          tag_on_failure => ["_lynis_key_value_parse_failure"]
         }
-      }
-      if [topic] {
         mutate {
-          add_field => { "kafka_topic" => "%{[topic]}" }
+          strip => ["[lynis][key]", "[lynis][value]"]
+          add_field => {
+            "[event][kind]" => "event"
+            "[event][category]" => "configuration"
+          }
         }
-      }
-      date {
-        match => [ "timestamp", "ISO8601", "yyyy-MM-dd HH:mm:ss.SSS" ]
-        target => "@timestamp"
+        if [lynis][key] =~ /\[\]$/ {
+          mutate {
+            gsub => ["[lynis][key]", "\[\]$", ""]
+          }
+        }
+        if [lynis][key] in ["warning", "suggestion"] {
+          mutate {
+            add_field => { "[lynis][finding_type]" => "%{[lynis][key]}" }
+          }
+          dissect {
+            mapping => { "[lynis][value]" => "%{[lynis][test_id]}|%{[lynis][finding]}|%{[lynis][detail]}|%{[lynis][solution]}|%{}" }
+            tag_on_failure => ["_lynis_finding_parse_failure"]
+          }
+        }
+        if [lynis][value] =~ /^-?[0-9]+(?:\.[0-9]+)?$/ {
+          mutate {
+            copy => { "[lynis][value]" => "[lynis][numeric_value]" }
+          }
+          mutate {
+            convert => { "[lynis][numeric_value]" => "float" }
+          }
+        }
+      } else {
+        if [logger_name] {
+          mutate {
+            add_field => { "app" => "%{[logger_name]}" }
+          }
+        }
+        if [topic] {
+          mutate {
+            add_field => { "kafka_topic" => "%{[topic]}" }
+          }
+        }
+        date {
+          match => [ "timestamp", "ISO8601", "yyyy-MM-dd HH:mm:ss.SSS" ]
+          target => "@timestamp"
+        }
       }
     }
     output {
-      elasticsearch {
-        hosts => ["http://elasticsearch.swirlit.internal:9200"]
-        user => "${ELASTICSEARCH_USERNAME}"
-        password => "${ELASTICSEARCH_PASSWORD}"
-        index => "app-logs-%{+yyyy.MM.dd}"
-        template => "/usr/share/logstash/config/app-logs-template.json"
-        template_name => "app-logs-single-node"
-        template_overwrite => true
+      if [event][dataset] == "lynis.audit" {
+        elasticsearch {
+          hosts => ["http://elasticsearch.__INTERNAL_DNS_ZONE__:9200"]
+          user => "${ELASTICSEARCH_USERNAME}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          index => "lynis-audits-%{+yyyy.MM}"
+          manage_template => false
+        }
+      } else {
+        elasticsearch {
+          hosts => ["http://elasticsearch.__INTERNAL_DNS_ZONE__:9200"]
+          user => "${ELASTICSEARCH_USERNAME}"
+          password => "${ELASTICSEARCH_PASSWORD}"
+          index => "app-logs-%{+yyyy.MM.dd}"
+          template => "/usr/share/logstash/config/app-logs-template.json"
+          template_name => "app-logs-single-node"
+          template_overwrite => true
+        }
       }
     }
   app-logs-template.json: |
@@ -57,6 +107,84 @@ data:
         }
       },
       "priority": 200
+    }
+  lynis-ilm-policy.json: |
+    {
+      "policy": {
+        "phases": {
+          "hot": {
+            "min_age": "0ms",
+            "actions": {
+              "set_priority": {"priority": 100}
+            }
+          },
+          "delete": {
+            "min_age": "365d",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }
+  lynis-index-template.json: |
+    {
+      "index_patterns": ["lynis-audits-*"],
+      "priority": 300,
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "index.refresh_interval": "5s",
+          "index.mapping.total_fields.limit": 100,
+          "index.lifecycle.name": "bm-cluster-lynis-12m"
+        },
+        "mappings": {
+          "dynamic": false,
+          "properties": {
+            "@timestamp": {"type": "date"},
+            "message": {"type": "text"},
+            "event": {
+              "properties": {
+                "dataset": {"type": "keyword"},
+                "module": {"type": "keyword"},
+                "kind": {"type": "keyword"},
+                "category": {"type": "keyword"}
+              }
+            },
+            "host": {
+              "properties": {
+                "name": {"type": "keyword"}
+              }
+            },
+            "log": {
+              "properties": {
+                "file": {
+                  "properties": {
+                    "path": {"type": "keyword"}
+                  }
+                },
+                "offset": {"type": "long"}
+              }
+            },
+            "lynis": {
+              "properties": {
+                "key": {"type": "keyword"},
+                "value": {"type": "keyword", "ignore_above": 8191},
+                "numeric_value": {"type": "double"},
+                "finding_type": {"type": "keyword"},
+                "test_id": {"type": "keyword"},
+                "finding": {
+                  "type": "text",
+                  "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}
+                },
+                "detail": {"type": "text"},
+                "solution": {"type": "text"}
+              }
+            }
+          }
+        }
+      }
     }
 
 ---
@@ -236,7 +364,7 @@ spec:
             - -c
             - |
               set -eu
-              endpoint=http://elasticsearch.swirlit.internal:9200
+              endpoint=http://elasticsearch.__INTERNAL_DNS_ZONE__:9200
 
               json_escape() {
                 printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -274,11 +402,11 @@ spec:
 
               curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
                 -X PUT -H 'Content-Type: application/json' \
-                --data-binary '{"cluster":["monitor","manage_index_templates","manage_ilm"],"indices":[{"names":["kubernetes-logs-*","app-logs-*"],"privileges":["auto_configure","create_index","manage","write"]}]}' \
+                --data-binary '{"cluster":["monitor","manage_index_templates","manage_ilm"],"indices":[{"names":["kubernetes-logs-*","app-logs-*","lynis-audits-*"],"privileges":["auto_configure","create_index","manage","write"]}]}' \
                 "${endpoint}/_security/role/logs_writer" >/dev/null
               curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
                 -X PUT -H 'Content-Type: application/json' \
-                --data-binary '{"cluster":["monitor"],"indices":[{"names":["kubernetes-logs-*","app-logs-*"],"privileges":["read","view_index_metadata"]}]}' \
+                --data-binary '{"cluster":["monitor"],"indices":[{"names":["kubernetes-logs-*","app-logs-*","lynis-audits-*"],"privileges":["read","view_index_metadata"]}]}' \
                 "${endpoint}/_security/role/logs_reader" >/dev/null
 
               put_user admin "$ADMIN_PASSWORD" '["superuser"]' 'Platform Administrator'
@@ -312,6 +440,9 @@ spec:
   - port: 5000
     targetPort: 5000
     name: tcp-input
+  - port: 5044
+    targetPort: 5044
+    name: beats-input
   selector:
     app: logstash
 
@@ -330,17 +461,72 @@ spec:
     metadata:
       labels:
         app: logstash
+      annotations:
+        bm-cluster.__PUBLIC_DOMAIN__/config-version: "2"
     spec:
       automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+      - name: configure-lynis-index
+        image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+        env:
+        - name: ELASTICSEARCH_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: logstash-elasticsearch-credentials
+              key: ELASTICSEARCH_USERNAME
+        - name: ELASTICSEARCH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: logstash-elasticsearch-credentials
+              key: ELASTICSEARCH_PASSWORD
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          endpoint=http://elasticsearch.__INTERNAL_DNS_ZONE__:9200
+          until curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
+            "${endpoint}/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null; do
+            sleep 5
+          done
+          curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
+            -X PUT -H 'Content-Type: application/json' \
+            --data-binary @/config/lynis-ilm-policy.json \
+            "${endpoint}/_ilm/policy/bm-cluster-lynis-12m" >/dev/null
+          curl -fsS --user "${ELASTICSEARCH_USERNAME}:${ELASTICSEARCH_PASSWORD}" \
+            -X PUT -H 'Content-Type: application/json' \
+            --data-binary @/config/lynis-index-template.json \
+            "${endpoint}/_index_template/lynis-audits" >/dev/null
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 100
+          runAsGroup: 101
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /config
+          readOnly: true
       containers:
       - name: logstash
         image: docker.elastic.co/logstash/logstash@sha256:a0664a36744b4767b8648d24d1fa676f92349f24b69302879fcd7da0798b42fd
         ports:
         - containerPort: 5000
+          name: tcp-input
+        - containerPort: 5044
+          name: beats-input
         env:
         - name: LS_JAVA_OPTS
           value: "-Xms512m -Xmx512m -XX:+ExitOnOutOfMemoryError"
@@ -497,7 +683,7 @@ spec:
         - containerPort: 5601
         env:
         - name: ELASTICSEARCH_HOSTS
-          value: '["http://elasticsearch.swirlit.internal:9200"]'
+          value: '["http://elasticsearch.__INTERNAL_DNS_ZONE__:9200"]'
         - name: ELASTICSEARCH_USERNAME
           valueFrom:
             secretKeyRef:
@@ -526,7 +712,7 @@ spec:
         - name: SERVER_BASEPATH
           value: ""
         - name: SERVER_PUBLICBASEURL
-          value: "https://kibana.swirlit.dev"
+          value: "https://kibana.__PUBLIC_DOMAIN__"
         - name: XPACK_SECURITY_SECURECOOKIES
           value: "true"
         - name: NODE_OPTIONS

@@ -3,9 +3,16 @@ set -euo pipefail
 umask 077
 
 REPOSITORY_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLATFORM_CONFIG="$REPOSITORY_ROOT/config/platform.env"
+if [[ -r "$PLATFORM_CONFIG" ]]; then
+  # shellcheck source=config/platform.env
+  source "$PLATFORM_CONFIG"
+fi
 REPOSITORY_NAME="${REPOSITORY_NAME:-$(basename "$REPOSITORY_ROOT")}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-swirlit/$REPOSITORY_NAME}"
-GITLAB_URL="${GITLAB_URL:-https://gitlab.swirlit.dev}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
+GITLAB_URL="${GITLAB_URL:-${PLATFORM_DOMAIN:+https://gitlab.$PLATFORM_DOMAIN}}"
 GITHUB_OWNER="${GITHUB_OWNER:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-$REPOSITORY_NAME}"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
@@ -14,6 +21,8 @@ SYNC_TOKEN_LIFETIME_DAYS="${SYNC_TOKEN_LIFETIME_DAYS:-364}"
 SYNC_TOKEN_ROTATION_DAYS="${SYNC_TOKEN_ROTATION_DAYS:-90}"
 ROTATE_SYNC_TOKEN="${ROTATE_SYNC_TOKEN:-false}"
 TEST_REPOSITORY_SYNC_WEBHOOK="${TEST_REPOSITORY_SYNC_WEBHOOK:-false}"
+INITIALIZE_REPOSITORY_SYNC="${INITIALIZE_REPOSITORY_SYNC:-true}"
+GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/lib/gitlab-admin-token.sh"
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
@@ -22,11 +31,38 @@ for command_name in curl date git jq python3; do
   command -v "$command_name" >/dev/null || fail "$command_name is required"
 done
 
-[[ -n "${GITLAB_ADMIN_TOKEN:-}" ]] ||   fail "Set GITLAB_ADMIN_TOKEN to an API token that can manage $GITLAB_PROJECT_PATH"
-[[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] ||   fail "Set GITHUB_ADMIN_TOKEN to a token that can manage Actions secrets and dispatch workflows for the GitHub repository"
+[[ "$GITLAB_URL" == https://* ]] || fail "Set GITLAB_URL to the public HTTPS GitLab URL."
+[[ "$INITIALIZE_REPOSITORY_SYNC" =~ ^(true|false)$ ]] || fail "INITIALIZE_REPOSITORY_SYNC must be true or false"
+[[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
+# shellcheck source=scripts/lib/gitlab-admin-token.sh
+source "$GITLAB_TOKEN_LIBRARY"
+gitlab_acquire_admin_token
+if [[ -z "${GITHUB_ADMIN_TOKEN:-}" ]]; then
+  [[ -t 0 ]] || fail "Set GITHUB_ADMIN_TOKEN to configure repository sync non-interactively."
+  cat >&2 <<'EOF'
+
+GitHub repository-management token required:
+  1. Open https://github.com/settings/personal-access-tokens/new.
+  2. Select only the repositories that will be synchronized.
+  3. Grant repository Administration (read/write), Actions (read/write),
+     Secrets (read/write), Variables (read/write), and Contents (read/write).
+  4. Create the shortest practical expiry, then paste the token below.
+
+The token configures encrypted Actions secrets and the GitLab webhook. It is
+not committed to either repository.
+EOF
+  IFS= read -rsp "GitHub fine-grained personal access token: " GITHUB_ADMIN_TOKEN
+  printf '\n' >&2
+fi
+[[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] || fail "A GitHub repository-management token is required."
 
 work_dir="$(mktemp -d "/tmp/$REPOSITORY_NAME-repository-sync.XXXXXX")"
-trap 'rm -r -- "$work_dir"; unset GITLAB_ADMIN_TOKEN GITHUB_ADMIN_TOKEN sync_token' EXIT
+cleanup() {
+  rm -r -- "$work_dir"
+  gitlab_revoke_ephemeral_admin_token
+  unset GITHUB_ADMIN_TOKEN sync_token 2>/dev/null || true
+}
+trap cleanup EXIT
 gitlab_config="$work_dir/gitlab-curl.conf"
 github_config="$work_dir/github-curl.conf"
 printf 'silent\nshow-error\nheader = "PRIVATE-TOKEN: %s"\n' "$GITLAB_ADMIN_TOKEN" > "$gitlab_config"
@@ -42,6 +78,28 @@ github_api() {
   local method="$1" path="$2"
   shift 2
   curl --config "$github_config" --fail-with-body --request "$method"     "$GITHUB_API_URL/$path" "$@"
+}
+
+put_github_variable() {
+  local name="$1" value="$2" status
+  status="$(curl --config "$github_config" --request GET --output /dev/null \
+    --write-out '%{http_code}' \
+    "$GITHUB_API_URL/repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/variables/$name")"
+  jq -n --arg name "$name" --arg value "$value" '{name:$name,value:$value}' \
+    > "$work_dir/github-variable.json"
+  case "$status" in
+    200)
+      github_api PATCH "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/variables/$name" \
+        --header 'Content-Type: application/json' \
+        --data-binary "@$work_dir/github-variable.json" >/dev/null
+      ;;
+    404)
+      github_api POST "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/variables" \
+        --header 'Content-Type: application/json' \
+        --data-binary "@$work_dir/github-variable.json" >/dev/null
+      ;;
+    *) fail "GitHub returned HTTP $status while reading repository variable $name" ;;
+  esac
 }
 
 if [[ -z "$GITHUB_OWNER" ]]; then
@@ -93,6 +151,15 @@ project_id="$(jq -er '.id' "$work_dir/project.json")"
 github_api GET "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY" > "$work_dir/github-repository.json"
 github_api GET "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/secrets?per_page=100"   > "$work_dir/github-secrets.json"
 github_api GET "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/secrets/public-key"   > "$work_dir/github-public-key.json"
+
+gitlab_host="${GITLAB_URL#https://}"
+gitlab_host="${gitlab_host%%/*}"
+repository_sync_email="${REPOSITORY_SYNC_EMAIL:-repository-sync@${PLATFORM_DOMAIN:-users.noreply.github.com}}"
+put_github_variable GITLAB_API_URL "$GITLAB_URL/api/v4"
+put_github_variable GITLAB_HOST "$gitlab_host"
+put_github_variable GITLAB_REPOSITORY "$GITLAB_URL/$GITLAB_PROJECT_PATH.git"
+put_github_variable REPOSITORY_SYNC_EMAIL "$repository_sync_email"
+info "Configured repository-specific GitLab connection variables in GitHub Actions"
 
 gitlab_api GET "projects/$project_id/access_tokens?per_page=100" > "$work_dir/gitlab-access-tokens.json"
 rotation_date="$(date -u -d "+$SYNC_TOKEN_ROTATION_DAYS days" +%F)"
@@ -190,6 +257,25 @@ jq -e --arg url "$webhook_url" '
 if [[ "$TEST_REPOSITORY_SYNC_WEBHOOK" == "true" ]]; then
   info "Sending a GitLab push-event test to the GitHub repository dispatcher"
   gitlab_api POST "projects/$project_id/hooks/$hook_id/test/push_events" >/dev/null
+fi
+
+if [[ "$INITIALIZE_REPOSITORY_SYNC" == "true" ]]; then
+  default_branch="$(jq -er '.default_branch' "$work_dir/github-repository.json")"
+  jq -n --arg ref "$default_branch" '{ref:$ref}' > "$work_dir/workflow-dispatch.json"
+  info "Starting the first GitHub-to-GitLab reconciliation for $GITHUB_OWNER/$GITHUB_REPOSITORY"
+  github_api POST "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/workflows/sync-gitlab.yml/dispatches" \
+    --header 'Content-Type: application/json' \
+    --data-binary "@$work_dir/workflow-dispatch.json" >/dev/null
+
+  for attempt in $(seq 1 30); do
+    gitlab_api GET "projects/$project_id" > "$work_dir/project-state.json"
+    if [[ "$(jq -r '.default_branch // empty' "$work_dir/project-state.json")" == "$default_branch" ]]; then
+      info "The GitLab repository is initialized on branch $default_branch"
+      break
+    fi
+    (( attempt < 30 )) || fail "GitHub Actions did not initialize the GitLab repository within five minutes; inspect the Sync GitHub and GitLab workflow."
+    sleep 10
+  done
 fi
 
 info "$GITHUB_OWNER/$GITHUB_REPOSITORY and $GITLAB_PROJECT_PATH repository sync is configured"

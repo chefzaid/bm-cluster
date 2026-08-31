@@ -1,0 +1,36 @@
+{{- define "bm-cluster.render" -}}
+{{- $root := index . 0 -}}
+{{- $path := index . 1 -}}
+{{- $content := $root.Files.Get $path -}}
+{{- $content = replace "__PUBLIC_DOMAIN__" (required "publicDomain is required" $root.Values.publicDomain) $content -}}
+{{- $content = replace "__INTERNAL_DNS_ZONE__" (required "internalDnsZone is required" $root.Values.internalDnsZone) $content -}}
+{{- $content = replace "__GITOPS_REPOSITORY_URL__" (required "gitopsRepositoryURL is required" $root.Values.gitopsRepositoryURL) $content -}}
+{{- $content = replace "__CLOUDFLARE_ACCESS_TEAM_NAME__" (required "cloudflareAccessTeamName is required" $root.Values.cloudflareAccessTeamName) $content -}}
+{{- $content = replace "__APPS_ENABLED__" (toString $root.Values.appsEnabled) $content -}}
+{{- $content = replace "__DESCHEDULER_ENABLED__" (toString $root.Values.deschedulerEnabled) $content -}}
+{{ $content }}
+---
+{{- end -}}
+
+{{- range $path, $_ := .Files.Glob "base/*.yaml" }}
+{{- if or $.Values.appsEnabled (ne $path "base/apps-namespace.yaml") }}
+{{ include "bm-cluster.render" (list $ $path) }}
+{{- end }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "datastores/*.yaml" }}
+{{ include "bm-cluster.render" (list $ $path) }}
+{{- end }}
+{{- range $path, $_ := .Files.Glob "platform/*.yaml" }}
+{{- if ne $path "platform/portainer-bootstrap-job.yaml" }}
+{{ include "bm-cluster.render" (list $ $path) }}
+{{- end }}
+{{- end }}
+{{- if .Values.appsEnabled }}
+{{- range $path, $_ := .Files.Glob "apps/*.yaml" }}
+{{ include "bm-cluster.render" (list $ $path) }}
+{{- end }}
+{{- end }}
+{{- if .Values.deschedulerEnabled }}
+{{ include "bm-cluster.render" (list $ "addons/descheduler.yaml") }}
+{{- end }}
+{{ include "bm-cluster.render" (list $ "addons/bm-cluster-application.yaml") }}

@@ -88,10 +88,10 @@ data:
             request.session.logout(keep_db=True)
             query = urlencode({
                 'client_id': 'odoo',
-                'post_logout_redirect_uri': 'https://odoo.swirlit.dev/',
+                'post_logout_redirect_uri': 'https://odoo.__PUBLIC_DOMAIN__/',
             })
             return request.redirect(
-                'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/logout?' + query,
+                'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/logout?' + query,
                 303,
                 local=False,
             )
@@ -178,7 +178,7 @@ spec:
       labels:
         app: odoo
       annotations:
-        identity.swirlit.dev/config-revision: "2"
+        identity.__PUBLIC_DOMAIN__/config-revision: "2"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -205,7 +205,7 @@ spec:
                 printf 'admin_passwd = %s\n' "$ODOO_DATABASE_MASTER_PASSWORD"
                 printf 'data_dir = /var/lib/odoo\n'
                 printf 'addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons\n'
-                printf 'db_host = postgres.swirlit.internal\n'
+                printf 'db_host = postgres.__INTERNAL_DNS_ZONE__\n'
                 printf 'db_port = 5432\n'
                 printf 'db_user = %s\n' "$ODOO_DB_USER"
                 printf 'db_password = %s\n' "$ODOO_DB_PASSWORD"
@@ -335,15 +335,15 @@ spec:
                   'password': os.environ['ODOO_ADMIN_PASSWORD'],
               })
               params = env['ir.config_parameter'].sudo()
-              params.set_param('web.base.url', 'https://odoo.swirlit.dev')
+              params.set_param('web.base.url', 'https://odoo.__PUBLIC_DOMAIN__')
               params.set_param('web.base.url.freeze', 'True')
               params.set_param('auth_oauth.authorization_header', 'True')
               params.set_param('bm_cluster.bootstrap_complete', 'true')
               provider_values = {
                   'name': 'Keycloak',
                   'client_id': 'odoo',
-                  'auth_endpoint': 'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth',
-                  'validation_endpoint': 'https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/userinfo',
+                  'auth_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/auth',
+                  'validation_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/userinfo',
                   'data_endpoint': '',
                   'scope': 'openid profile email',
                   'enabled': True,
@@ -360,7 +360,7 @@ spec:
               PY
           env:
             - name: ODOO_DB_HOST
-              value: postgres.swirlit.internal
+              value: postgres.__INTERNAL_DNS_ZONE__
             - name: ODOO_DB_PORT
               value: "5432"
             - name: POSTGRES_ADMIN_USER
@@ -504,10 +504,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - odoo.swirlit.dev
+        - odoo.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: odoo.swirlit.dev
+    - host: odoo.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /websocket

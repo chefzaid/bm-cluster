@@ -27,7 +27,8 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
     # shellcheck source=../config/platform.env
     source "$PLATFORM_CONFIG"
 fi
-REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-registry.swirlit.dev}}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-${PLATFORM_DOMAIN:+registry.$PLATFORM_DOMAIN}}}"
 REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.251:5050}}"
 TAILSCALE_TAILNET="${TAILSCALE_TAILNET:-${DEFAULT_TAILSCALE_TAILNET:--}}"
 TAILSCALE_MESH_NAME="${TAILSCALE_MESH_NAME:-${DEFAULT_TAILSCALE_MESH_NAME:-bm-cluster}}"
@@ -40,6 +41,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
+PROMPT_LIBRARY="$SCRIPT_DIR/lib/installer-prompts.sh"
+if [[ ! -r "$PROMPT_LIBRARY" ]]; then
+    echo "[ERROR] Shared installer prompt library not found: $PROMPT_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/installer-prompts.sh
+source "$PROMPT_LIBRARY"
 TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/lib/transport-guide.sh"
 if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
     echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
@@ -100,6 +108,7 @@ Options:
   --server-url URL          K3s server URL; https:// and :6443 are added if omitted
   --token-stdin             Read the K3s join token as one line from standard input
   --node-name NAME          Unique Kubernetes node name (default: short hostname)
+  --domain DOMAIN           Public cluster domain used to derive the Registry host
   --node-ip IP              This worker's RFC1918 or Tailscale IPv4 address
   --labels CSV              Initial Kubernetes node labels (key=value,key=value)
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
@@ -143,6 +152,8 @@ while [[ $# -gt 0 ]]; do
         --token-stdin)      TOKEN_STDIN=true ;;
         --node-name)        shift; [[ $# -gt 0 ]] || error "Missing value for --node-name"; NODE_NAME="$1" ;;
         --node-name=*)      NODE_NAME="${1#*=}" ;;
+        --domain)           shift; [[ $# -gt 0 ]] || error "Missing value for --domain"; PLATFORM_DOMAIN="$1" ;;
+        --domain=*)         PLATFORM_DOMAIN="${1#*=}" ;;
         --node-ip)          shift; [[ $# -gt 0 ]] || error "Missing value for --node-ip"; NODE_IP="$1" ;;
         --node-ip=*)        NODE_IP="${1#*=}" ;;
         --labels)           shift; [[ $# -gt 0 ]] || error "Missing value for --labels"; NODE_LABELS="$1" ;;
@@ -186,11 +197,19 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-prompt() {
-    local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
-    read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
-    printf -v "$variable_name" '%s' "${answer:-$default_value}"
-}
+if [[ -z "$REGISTRY_HOST" && -n "$PLATFORM_DOMAIN" ]]; then
+    REGISTRY_HOST="registry.${PLATFORM_DOMAIN,,}"
+fi
+if [[ -z "$REGISTRY_HOST" ]]; then
+    [[ "$NON_INTERACTIVE" != "true" ]] || error "Set --domain or K3S_REGISTRY_HOST."
+    installer_prompt_section "Cluster identity" \
+        "The public domain determines this worker's GitLab Registry host."
+    installer_prompt_value PLATFORM_DOMAIN "Public base domain for this cluster"
+    PLATFORM_DOMAIN="${PLATFORM_DOMAIN,,}"
+    [[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || error "Invalid public domain."
+    REGISTRY_HOST="registry.$PLATFORM_DOMAIN"
+fi
+export PLATFORM_DOMAIN K3S_REGISTRY_HOST="$REGISTRY_HOST"
 
 normalize_server_url() {
     local value="${1%/}" authority
@@ -224,26 +243,14 @@ trim() {
 }
 
 select_transport() {
-    local answer=""
-    if [[ -n "$NODE_TRANSPORT" ]]; then
-        NODE_TRANSPORT="$(normalize_node_transport "$NODE_TRANSPORT")" || error "Transport must be vrack or tailscale."
-        return
-    fi
-    [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
-    printf '%s\n' \
-        "Select the private node transport:" \
-        "  1) OVHcloud vRack (OVHcloud-only)" \
-        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)"
-    while true; do
-        read -rp "Select 1 or 2: " answer
-        case "$answer" in
-            1|vrack|vRack|lan) NODE_TRANSPORT=vrack; return ;;
-            2|tailscale|ts) NODE_TRANSPORT=tailscale; return ;;
-            *) warn "Enter 1 for vRack or 2 for Tailscale." ;;
-        esac
-    done
+    installer_select_node_transport NODE_TRANSPORT "$NODE_TRANSPORT" vrack "$NON_INTERACTIVE" || \
+        error "Set --transport to vrack or tailscale."
 }
 
+if [[ "$NON_INTERACTIVE" != "true" ]]; then
+    installer_prompt_section "Private worker transport" \
+        "Use the same transport as the control plane and every existing worker."
+fi
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
     [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
@@ -288,29 +295,30 @@ if [[ "$TOKEN_STDIN" == "true" ]]; then
 fi
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    [[ -n "$SERVER_URL" ]] || prompt SERVER_URL "Control-plane private IPv4 address or K3s URL"
+    installer_prompt_section "Control plane and worker identity" \
+        "Provide the private join endpoint, token, node network, and Kubernetes metadata."
+    [[ -n "$SERVER_URL" ]] || installer_prompt_value SERVER_URL "Control-plane private IPv4 address or K3s URL"
     SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
     SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
         error "Use the control plane's RFC1918 or Tailscale IPv4 address, not a public address or hostname."
-    [[ -n "$CONTROL_PLANE_IP" ]] || prompt CONTROL_PLANE_IP "Control-plane private IPv4 allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
+    [[ -n "$CONTROL_PLANE_IP" ]] || installer_prompt_value CONTROL_PLANE_IP "Control-plane private IPv4 allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
     if [[ -z "$JOIN_TOKEN" ]]; then
-        read -rsp "K3s join token (input hidden): " JOIN_TOKEN
-        printf '\n'
+        installer_prompt_secret JOIN_TOKEN "K3s join token (input hidden)"
     fi
-    [[ -n "$NODE_NAME" ]] || prompt NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
+    [[ -n "$NODE_NAME" ]] || installer_prompt_value NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
     if [[ -z "$NODE_IP" ]]; then
         if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
-            prompt NODE_IP "This worker's unique OVHcloud vRack RFC1918 address"
+            installer_prompt_value NODE_IP "This worker's unique OVHcloud vRack RFC1918 address"
         else
-            prompt NODE_IP "This worker's Tailscale IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
+            installer_prompt_value NODE_IP "This worker's Tailscale IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
         fi
     fi
-    [[ -n "$NODE_LABELS" ]] || prompt NODE_LABELS "Initial labels, comma-separated (optional)"
-    [[ -n "$NODE_TAINTS" ]] || prompt NODE_TAINTS "Initial taints, comma-separated (optional)"
-    [[ -n "$NODE_NETWORK_CIDR" ]] || prompt NODE_NETWORK_CIDR "RFC1918 node CIDR or Tailscale 100.64.0.0/10"
-    [[ -n "$K3S_VERSION" ]] || prompt K3S_VERSION "Exact K3s version (blank to use the current stable release)"
+    [[ -n "$NODE_LABELS" ]] || installer_prompt_value NODE_LABELS "Initial labels, comma-separated (optional)"
+    [[ -n "$NODE_TAINTS" ]] || installer_prompt_value NODE_TAINTS "Initial taints, comma-separated (optional)"
+    [[ -n "$NODE_NETWORK_CIDR" ]] || installer_prompt_value NODE_NETWORK_CIDR "RFC1918 node CIDR or Tailscale 100.64.0.0/10"
+    [[ -n "$K3S_VERSION" ]] || installer_prompt_value K3S_VERSION "Exact K3s version (blank to use the current stable release)"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
-        prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
+        installer_prompt_value NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
     done
 fi
 
@@ -336,10 +344,12 @@ if [[ "$NODE_TRANSPORT" == "vrack" && -z "$(interface_owning_ip "$NODE_IP")" ]];
     [[ -x "$OVH_VRACK_CONFIGURATOR" ]] || \
         error "OVHcloud vRack interface is not configured and the configurator is unavailable: $OVH_VRACK_CONFIGURATOR"
     if [[ "$NON_INTERACTIVE" != "true" ]]; then
+        installer_prompt_section "OVHcloud private interface" \
+            "Select the vRack NIC before the installer changes networking or UFW."
         ip -br link show
-        [[ -n "$VRACK_INTERFACE" ]] || prompt VRACK_INTERFACE "OVHcloud physical private/vRack NIC name"
-        [[ -n "$VRACK_INTERFACE_MAC" ]] || prompt VRACK_INTERFACE_MAC "Expected OVHcloud private NIC MAC (recommended)"
-        [[ -n "$VRACK_VLAN_ID" ]] || prompt VRACK_VLAN_ID "Optional vRack VLAN ID (blank for untagged VLAN 0)"
+        [[ -n "$VRACK_INTERFACE" ]] || installer_prompt_value VRACK_INTERFACE "OVHcloud physical private/vRack NIC name"
+        [[ -n "$VRACK_INTERFACE_MAC" ]] || installer_prompt_value VRACK_INTERFACE_MAC "Expected OVHcloud private NIC MAC (recommended)"
+        [[ -n "$VRACK_VLAN_ID" ]] || installer_prompt_value VRACK_VLAN_ID "Optional vRack VLAN ID (blank for untagged VLAN 0)"
     fi
     vrack_args=(
         --configure-node
@@ -430,7 +440,7 @@ if [[ -n "$NODE_LABELS" ]]; then
         value="$(trim "$value")"
         [[ -n "$value" ]] || error "Labels cannot contain an empty item."
         case "${value%%=*}" in
-            svccontroller.k3s.cattle.io/enablelb|node-role.kubernetes.io/control-plane|node.swirlit.dev/role|node.swirlit.dev/exposure)
+            svccontroller.k3s.cattle.io/enablelb|node-role.kubernetes.io/control-plane|node.bm-cluster.io/role|node.bm-cluster.io/exposure)
                 error "Reserved topology label cannot be set on a worker: ${value%%=*}"
                 ;;
         esac
@@ -438,8 +448,8 @@ if [[ -n "$NODE_LABELS" ]]; then
     done
 fi
 agent_args+=(
-    --node-label node.swirlit.dev/role=worker
-    --node-label node.swirlit.dev/exposure=local
+    --node-label node.bm-cluster.io/role=worker
+    --node-label node.bm-cluster.io/exposure=local
 )
 if [[ -n "$NODE_TAINTS" ]]; then
     IFS=',' read -r -a taint_values <<< "$NODE_TAINTS"

@@ -47,10 +47,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - vault.swirlit.dev
+        - vault.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: vault.swirlit.dev
+    - host: vault.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -68,7 +68,7 @@ metadata:
 spec:
   provider:
     vault:
-      server: http://vault.swirlit.internal:8200
+      server: http://vault.__INTERNAL_DNS_ZONE__:8200
       path: secret
       version: v2
       auth:

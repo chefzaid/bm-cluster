@@ -9,11 +9,11 @@ configs:
   params:
     server.insecure: true
   cm:
-    url: https://argocd.swirlit.dev
+    url: https://argocd.__PUBLIC_DOMAIN__
     admin.enabled: false
     oidc.config: |
       name: Keycloak
-      issuer: https://keycloak.swirlit.dev/auth/realms/swirlit
+      issuer: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
       clientID: argocd
       enablePKCEAuthentication: true
       requestedScopes:

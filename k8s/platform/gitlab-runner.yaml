@@ -118,8 +118,8 @@ data:
 
     [[runners]]
       name = "bm-cluster-kubernetes"
-      url = "http://gitlab.swirlit.internal"
-      clone_url = "http://gitlab.swirlit.internal"
+      url = "http://gitlab.__INTERNAL_DNS_ZONE__"
+      clone_url = "http://gitlab.__INTERNAL_DNS_ZONE__"
       token = "__RUNNER_TOKEN__"
       executor = "kubernetes"
       request_concurrency = 2
@@ -175,7 +175,7 @@ spec:
       labels:
         app: gitlab-runner
       annotations:
-        gitlab.swirlit.dev/config-version: "3"
+        gitlab.__PUBLIC_DOMAIN__/config-version: "3"
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
         prometheus.io/port: "9252"

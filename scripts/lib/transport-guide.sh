@@ -2,25 +2,18 @@
 # Shared interactive account-readiness wizards for private node transports.
 # The caller owns strict-mode settings and provides info(), warn(), and error().
 
+TRANSPORT_GUIDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -F installer_prompt_value >/dev/null 2>&1; then
+    # shellcheck source=scripts/lib/installer-prompts.sh
+    source "$TRANSPORT_GUIDE_DIR/installer-prompts.sh"
+fi
+
 TRANSPORT_GUIDE_OVH_DOC_URL="https://docs.ovhcloud.com/en/guides/bare-metal-cloud/dedicated-servers/vrack-configuring-on-dedicated-server"
 TRANSPORT_GUIDE_OVH_MANAGER_URL="https://www.ovh.com/manager/#/dedicated/vrack"
 TRANSPORT_GUIDE_OVH_API_DOC_URL="https://docs.ovhcloud.com/en/guides/manage-and-operate/api/first-steps"
 TRANSPORT_GUIDE_TAILSCALE_ADMIN_URL="https://login.tailscale.com/admin"
 TRANSPORT_GUIDE_TAILSCALE_KEYS_URL="https://login.tailscale.com/admin/settings/keys"
 TRANSPORT_GUIDE_TAILSCALE_API_DOC_URL="https://tailscale.com/docs/reference/tailscale-api"
-
-transport_guide_prompt() {
-    local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
-    read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
-    printf -v "$variable_name" '%s' "${answer:-$default_value}"
-}
-
-transport_guide_secret() {
-    local variable_name="$1" prompt_text="$2" answer=""
-    read -rsp "$prompt_text: " answer
-    printf '\n' >&2
-    printf -v "$variable_name" '%s' "$answer"
-}
 
 transport_guide_continue() {
     local prompt_text="$1" answer=""
@@ -45,18 +38,18 @@ Tailscale prerequisite guide (hybrid cloud or non-OVHcloud providers)
 Official API-token reference: $TRANSPORT_GUIDE_TAILSCALE_API_DOC_URL
 EOF
         transport_guide_continue "Return here after the tailnet and API access token are ready" || return 1
-        transport_guide_prompt TAILSCALE_TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILSCALE_TAILNET"
-        transport_guide_prompt TAILSCALE_MESH_NAME "Unique Tailscale mesh/cluster name" "$TAILSCALE_MESH_NAME"
+        installer_prompt_value TAILSCALE_TAILNET "Tailnet name/login domain ('-' uses the token's tailnet)" "$TAILSCALE_TAILNET"
+        installer_prompt_value TAILSCALE_MESH_NAME "Unique Tailscale mesh/cluster name" "$TAILSCALE_MESH_NAME"
         if [[ "$prompt_node_identity" == "true" ]]; then
-            transport_guide_prompt TAILSCALE_NODE_HOSTNAME "Tailscale hostname for this node" "$TAILSCALE_NODE_HOSTNAME"
+            installer_prompt_value TAILSCALE_NODE_HOSTNAME "Tailscale hostname for this node" "$TAILSCALE_NODE_HOSTNAME"
         fi
         [[ "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS" =~ ^[0-9]+$ ]] || return 1
         expiry_minutes="$((TAILSCALE_AUTH_KEY_EXPIRY_SECONDS / 60))"
-        transport_guide_prompt expiry_minutes "One-use node auth-key lifetime in minutes" "$expiry_minutes"
+        installer_prompt_value expiry_minutes "One-use node auth-key lifetime in minutes" "$expiry_minutes"
         [[ "$expiry_minutes" =~ ^[1-9][0-9]*$ ]] || return 1
         TAILSCALE_AUTH_KEY_EXPIRY_SECONDS="$((expiry_minutes * 60))"
         [[ -n "$TAILSCALE_API_TOKEN" ]] || \
-            transport_guide_secret TAILSCALE_API_TOKEN "Tailscale personal API access token (tskey-api-...)"
+            installer_prompt_secret TAILSCALE_API_TOKEN "Tailscale personal API access token (tskey-api-...)"
     fi
 
     [[ "$TAILSCALE_API_TOKEN" =~ ^tskey-api-[A-Za-z0-9_-]+$ ]] || return 1
@@ -69,7 +62,7 @@ EOF
         read -rp "Press Enter to retry, r to replace the token, or q to quit: " answer
         case "${answer,,}" in
             q) return 1 ;;
-            r) transport_guide_secret TAILSCALE_API_TOKEN "Replacement Tailscale personal API access token" ;;
+            r) installer_prompt_secret TAILSCALE_API_TOKEN "Replacement Tailscale personal API access token" ;;
         esac
     done
     info "Tailscale account access is verified; transport setup may continue."
@@ -95,8 +88,9 @@ transport_guide_vrack_account() {
                 OVH_VRACK_AUTOMATE_ACCOUNT=false
             fi
         else
-            read -rp "Use the OVHcloud API to attach server interfaces to an existing vRack? [Y/n]: " answer
-            [[ "${answer:-Y}" =~ ^[Yy]$ ]] && OVH_VRACK_AUTOMATE_ACCOUNT=true || OVH_VRACK_AUTOMATE_ACCOUNT=false
+            installer_prompt_yes_no \
+                "Use the OVHcloud API to attach server interfaces to an existing vRack?" Y false && \
+                OVH_VRACK_AUTOMATE_ACCOUNT=true || OVH_VRACK_AUTOMATE_ACCOUNT=false
         fi
     fi
     [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" =~ ^(true|false)$ ]] || return 1
@@ -117,7 +111,7 @@ Official vRack host-network guide: $TRANSPORT_GUIDE_OVH_DOC_URL
 EOF
         if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
             transport_guide_continue "Return here after the vRack is active and recovery access is proven" || return 1
-            transport_guide_prompt OVH_API_ENDPOINT "OVHcloud API region endpoint (ovh-eu, ovh-ca, or ovh-us)" "$OVH_API_ENDPOINT"
+            installer_prompt_value OVH_API_ENDPOINT "OVHcloud API region endpoint (ovh-eu, ovh-ca, or ovh-us)" "$OVH_API_ENDPOINT"
             token_url="$(transport_guide_vrack_token_url "$OVH_API_ENDPOINT")" || return 1
             cat >&2 <<EOF
 
@@ -133,10 +127,10 @@ Grant these least-privilege paths (wildcards include interface/task reads):
 Official API credential guide: $TRANSPORT_GUIDE_OVH_API_DOC_URL
 EOF
             transport_guide_continue "Return here after the API credentials are created" || return 1
-            transport_guide_prompt OVH_VRACK_SERVICE_NAME "Existing OVHcloud vRack service name (pn-...)" "$OVH_VRACK_SERVICE_NAME"
-            [[ -n "$OVH_APPLICATION_KEY" ]] || transport_guide_prompt OVH_APPLICATION_KEY "OVHcloud API application key"
-            [[ -n "$OVH_APPLICATION_SECRET" ]] || transport_guide_secret OVH_APPLICATION_SECRET "OVHcloud API application secret"
-            [[ -n "$OVH_CONSUMER_KEY" ]] || transport_guide_secret OVH_CONSUMER_KEY "OVHcloud API consumer key"
+            installer_prompt_value OVH_VRACK_SERVICE_NAME "Existing OVHcloud vRack service name (pn-...)" "$OVH_VRACK_SERVICE_NAME"
+            [[ -n "$OVH_APPLICATION_KEY" ]] || installer_prompt_value OVH_APPLICATION_KEY "OVHcloud API application key"
+            [[ -n "$OVH_APPLICATION_SECRET" ]] || installer_prompt_secret OVH_APPLICATION_SECRET "OVHcloud API application secret"
+            [[ -n "$OVH_CONSUMER_KEY" ]] || installer_prompt_secret OVH_CONSUMER_KEY "OVHcloud API consumer key"
         else
             cat >&2 <<'EOF'
   5. In the Control Panel, attach the control plane and every worker to that
@@ -159,9 +153,9 @@ EOF
             case "${answer,,}" in
                 q) return 1 ;;
                 r)
-                    transport_guide_prompt OVH_APPLICATION_KEY "Replacement OVHcloud API application key"
-                    transport_guide_secret OVH_APPLICATION_SECRET "Replacement OVHcloud API application secret"
-                    transport_guide_secret OVH_CONSUMER_KEY "Replacement OVHcloud API consumer key"
+                    installer_prompt_value OVH_APPLICATION_KEY "Replacement OVHcloud API application key"
+                    installer_prompt_secret OVH_APPLICATION_SECRET "Replacement OVHcloud API application secret"
+                    installer_prompt_secret OVH_CONSUMER_KEY "Replacement OVHcloud API consumer key"
                     ;;
             esac
         done

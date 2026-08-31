@@ -11,13 +11,13 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - argocd.swirlit.dev
-    - grafana.swirlit.dev
-    - kafka.swirlit.dev
-    - portainer.swirlit.dev
+    - argocd.__PUBLIC_DOMAIN__
+    - grafana.__PUBLIC_DOMAIN__
+    - kafka.__PUBLIC_DOMAIN__
+    - portainer.__PUBLIC_DOMAIN__
     secretName: swirlit-dev-tls
   rules:
-  - host: argocd.swirlit.dev
+  - host: argocd.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /
@@ -27,7 +27,7 @@ spec:
             name: argocd-server
             port:
               number: 80
-  - host: grafana.swirlit.dev
+  - host: grafana.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /
@@ -37,7 +37,7 @@ spec:
             name: grafana
             port:
               number: 3000
-  - host: kafka.swirlit.dev
+  - host: kafka.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /
@@ -47,7 +47,7 @@ spec:
             name: kafka-ui
             port:
               number: 8080
-  - host: portainer.swirlit.dev
+  - host: portainer.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /
@@ -68,16 +68,16 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [sonarqube.swirlit.dev]
+    - hosts: [sonarqube.__PUBLIC_DOMAIN__]
       secretName: swirlit-dev-tls
   rules:
-    - host: sonarqube.swirlit.dev
+    - host: sonarqube.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -104,10 +104,10 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [sonarqube.swirlit.dev]
+    - hosts: [sonarqube.__PUBLIC_DOMAIN__]
       secretName: swirlit-dev-tls
   rules:
-    - host: sonarqube.swirlit.dev
+    - host: sonarqube.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /api
@@ -128,16 +128,16 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [dbgate.swirlit.dev]
+    - hosts: [dbgate.__PUBLIC_DOMAIN__]
       secretName: swirlit-dev-tls
   rules:
-    - host: dbgate.swirlit.dev
+    - host: dbgate.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -158,17 +158,17 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - kibana.swirlit.dev
+        - kibana.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: kibana.swirlit.dev
+    - host: kibana.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -189,17 +189,17 @@ metadata:
     argocd.argoproj.io/sync-wave: "0"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - longhorn.swirlit.dev
+        - longhorn.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: longhorn.swirlit.dev
+    - host: longhorn.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -227,10 +227,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - gitlab.swirlit.dev
+        - gitlab.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: gitlab.swirlit.dev
+    - host: gitlab.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -257,10 +257,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - registry.swirlit.dev
+        - registry.__PUBLIC_DOMAIN__
       secretName: swirlit-dev-tls
   rules:
-    - host: registry.swirlit.dev
+    - host: registry.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /
@@ -280,16 +280,16 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/permanent-redirect: https://dashboard.swirlit.dev/
+    nginx.ingress.kubernetes.io/permanent-redirect: https://dashboard.__PUBLIC_DOMAIN__/
     nginx.ingress.kubernetes.io/permanent-redirect-code: "308"
 spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - swirlit.dev
+    - __PUBLIC_DOMAIN__
     secretName: swirlit-dev-tls
   rules:
-  - host: swirlit.dev
+  - host: __PUBLIC_DOMAIN__
     http:
       paths:
       - path: /
@@ -308,6 +308,6 @@ metadata:
   namespace: infra
 spec:
   type: ExternalName
-  externalName: longhorn.swirlit.internal
+  externalName: longhorn.__INTERNAL_DNS_ZONE__
   ports:
   - port: 80

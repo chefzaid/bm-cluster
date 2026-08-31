@@ -69,12 +69,12 @@ spec:
             - /bin/sh
             - -ec
             - |
-              until pg_isready --host=postgres.swirlit.internal --port=5432 --username=sonar; do
+              until pg_isready --host=postgres.__INTERNAL_DNS_ZONE__ --port=5432 --username=sonar; do
                 sleep 5
               done
 
               PGPASSWORD="$SONAR_DB_PASSWORD" psql \
-                --host=postgres.swirlit.internal \
+                --host=postgres.__INTERNAL_DNS_ZONE__ \
                 --port=5432 \
                 --username=sonar \
                 --dbname=sonarqube \
@@ -124,7 +124,7 @@ spec:
             - /bin/sh
             - -ec
             - |
-              sonar_url=http://sonarqube.swirlit.internal:9000
+              sonar_url=http://sonarqube.__INTERNAL_DNS_ZONE__:9000
               auth_header="Authorization: Bearer $SONAR_ADMIN_TOKEN"
 
               until curl --fail --silent --show-error \
@@ -285,7 +285,7 @@ spec:
         - -ec
         - |
           until PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
-            --host=postgres.swirlit.internal \
+            --host=postgres.__INTERNAL_DNS_ZONE__ \
             --username="$POSTGRES_ADMIN_USER" \
             --dbname=postgres \
             --command='SELECT 1' >/dev/null 2>&1; do
@@ -293,7 +293,7 @@ spec:
             sleep 2
           done
           PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" psql \
-            --host=postgres.swirlit.internal \
+            --host=postgres.__INTERNAL_DNS_ZONE__ \
             --username="$POSTGRES_ADMIN_USER" \
             --dbname=postgres \
             --set=ON_ERROR_STOP=1 \
@@ -319,7 +319,7 @@ spec:
         - containerPort: 9000
         env:
         - name: SONAR_JDBC_URL
-          value: "jdbc:postgresql://postgres.swirlit.internal:5432/sonarqube"
+          value: "jdbc:postgresql://postgres.__INTERNAL_DNS_ZONE__:5432/sonarqube"
         - name: SONAR_JDBC_USERNAME
           value: "sonar"
         - name: SONAR_JDBC_PASSWORD

@@ -73,22 +73,22 @@ verify:delivery-platform:
     - apk add --cache-dir "$APK_CACHE_DIR" curl jq kubectl
   script:
     - test -n "$ELASTICSEARCH_CI_USERNAME" && test -n "$ELASTICSEARCH_CI_PASSWORD"
-    - curl --fail --silent --show-error http://gitlab.swirlit.internal/-/readiness >/dev/null
-    - curl --fail --silent --show-error http://prometheus.swirlit.internal:9090/-/ready >/dev/null
-    - curl --fail --silent --show-error http://grafana.swirlit.internal:3000/api/health | jq -e '.database == "ok"' >/dev/null
-    - curl --fail --silent --show-error --user "$ELASTICSEARCH_CI_USERNAME:$ELASTICSEARCH_CI_PASSWORD" http://elasticsearch.swirlit.internal:9200/_cluster/health | jq -e '.status == "green" or .status == "yellow"' >/dev/null
-    - test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://gitlab-registry.swirlit.internal:5050/v2/)" = "401"
+    - curl --fail --silent --show-error http://gitlab.infra.svc.cluster.local/-/readiness >/dev/null
+    - curl --fail --silent --show-error http://prometheus.infra.svc.cluster.local:9090/-/ready >/dev/null
+    - curl --fail --silent --show-error http://grafana.infra.svc.cluster.local:3000/api/health | jq -e '.database == "ok"' >/dev/null
+    - curl --fail --silent --show-error --user "$ELASTICSEARCH_CI_USERNAME:$ELASTICSEARCH_CI_PASSWORD" http://elasticsearch.infra.svc.cluster.local:9200/_cluster/health | jq -e '.status == "green" or .status == "yellow"' >/dev/null
+    - test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://gitlab-registry.infra.svc.cluster.local:5050/v2/)" = "401"
     - kubectl get configmap grafana-gitlab-delivery-dashboard -n infra >/dev/null
     - |
       curl --get --fail --silent --show-error \
         --data-urlencode 'query=max(up{namespace="infra",app="gitlab"})' \
-        http://prometheus.swirlit.internal:9090/api/v1/query |
+        http://prometheus.infra.svc.cluster.local:9090/api/v1/query |
         jq -e '.status == "success" and (.data.result[0].value[1] | tonumber) == 1' >/dev/null
     - |
       curl --get --fail --silent --show-error \
         --user "$ELASTICSEARCH_CI_USERNAME:$ELASTICSEARCH_CI_PASSWORD" \
         --data-urlencode 'q=kubernetes.pod_name:gitlab*' \
-        http://elasticsearch.swirlit.internal:9200/kubernetes-logs-*/_count |
+        http://elasticsearch.infra.svc.cluster.local:9200/kubernetes-logs-*/_count |
         jq -e '.count > 0' >/dev/null
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -106,7 +106,7 @@ verify:registry-write:
     - apk add --cache-dir "$APK_CACHE_DIR" curl jq
   script:
     - |
-      registry_url=http://gitlab-registry.swirlit.internal:5050
+      registry_url=http://gitlab-registry.infra.svc.cluster.local:5050
       repository="$CI_PROJECT_PATH/ci-smoke"
       registry_token="$(
         curl --fail --silent --show-error \
@@ -114,7 +114,7 @@ verify:registry-write:
           --get \
           --data-urlencode service=container_registry \
           --data-urlencode "scope=repository:$repository:pull,push" \
-          http://gitlab.swirlit.internal/jwt/auth |
+          http://gitlab.infra.svc.cluster.local/jwt/auth |
           jq -er '.token'
       )"
       config='{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{}}'

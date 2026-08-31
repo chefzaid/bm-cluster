@@ -20,10 +20,14 @@ fi
 source "$NETWORK_LIBRARY"
 
 API_BASE="${CLOUDFLARE_API_BASE:-https://api.cloudflare.com/client/v4}"
-ZONE_NAME="${CLOUDFLARE_ZONE:-$DEFAULT_CLOUDFLARE_ZONE}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-${DEFAULT_INTERNAL_DNS_ZONE:-}}"
+ZONE_NAME="${CLOUDFLARE_ZONE:-${DEFAULT_CLOUDFLARE_ZONE:-$PLATFORM_DOMAIN}}"
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 ORIGIN_IP="${CLOUDFLARE_ORIGIN_IP:-}"
 API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
+PUBLISH_NODE_DNS="${CLOUDFLARE_PUBLISH_NODE_DNS:-true}"
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-infra}"
 INGRESS_SERVICE="${INGRESS_SERVICE:-ingress-nginx-controller}"
 TLS_SECRET_NAME="${CLOUDFLARE_TLS_SECRET_NAME:-swirlit-dev-tls}"
@@ -40,7 +44,9 @@ ENABLE_ACCESS="${CLOUDFLARE_ENABLE_ACCESS:-true}"
 PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
 ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
-ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-}"
+ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-}}"
+ACCESS_TEAM_NAME_EXPLICIT=false
+[[ -z "$ACCESS_TEAM_NAME" ]] || ACCESS_TEAM_NAME_EXPLICIT=true
 ACCESS_OIDC_CLIENT_SECRET="${CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET:-}"
 INGRESS_CONFIGMAP="${INGRESS_CONFIGMAP:-$INGRESS_SERVICE}"
 ORIGIN_LOCK_STATUS="not requested"
@@ -100,6 +106,8 @@ Optional environment variables:
                                       Prevent browser-only bot challenges on the Registry (default: true)
   CLOUDFLARE_ENABLE_ACCESS         Default: true
   CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
+  CLOUDFLARE_PUBLISH_NODE_DNS      Publish NODE.DOMAIN unproxied for administration (default: true)
+  CONTROL_PLANE_NODE_NAME          Node label used by the optional unproxied record
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
   CLOUDFLARE_ACCESS_SESSION_DURATION  Default: 24h
   CLOUDFLARE_ACCESS_HOST_LABELS    Space-separated admin labels replacing defaults
@@ -148,8 +156,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 ZONE_NAME="${ZONE_NAME,,}"
-ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}}"
-[[ "$ZONE_NAME" != "${DEFAULT_INTERNAL_DNS_ZONE:-swirlit.internal}" ]] || \
+ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
+[[ -n "$ZONE_NAME" ]] || error "Set PLATFORM_DOMAIN or CLOUDFLARE_ZONE."
+[[ -z "$INTERNAL_DNS_ZONE" || "$ZONE_NAME" != "$INTERNAL_DNS_ZONE" ]] || \
     error "$ZONE_NAME is the cluster-only CoreDNS zone and must never be published through Cloudflare."
 [[ "$ZONE_NAME" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
     error "Invalid zone name: $ZONE_NAME"
@@ -166,13 +175,18 @@ ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-bm-
     error "CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY must be true or false."
 [[ "$ENABLE_ACCESS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_ENABLE_ACCESS must be true or false."
 [[ "$PUBLISH_APEX" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_APEX must be true or false."
+[[ "$PUBLISH_NODE_DNS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_NODE_DNS must be true or false."
+if [[ "$PUBLISH_NODE_DNS" == "true" ]]; then
+    [[ "$CONTROL_PLANE_NODE_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
+        error "Set CONTROL_PLANE_NODE_NAME to a single valid DNS label when node DNS publishing is enabled."
+fi
 [[ "$HSTS_MAX_AGE" =~ ^[0-9]+$ ]] || error "CLOUDFLARE_HSTS_MAX_AGE must be seconds as a whole number."
 [[ "$ACCESS_SESSION_DURATION" =~ ^[1-9][0-9]*(m|h)$ ]] || \
     error "CLOUDFLARE_ACCESS_SESSION_DURATION must be a positive duration such as 30m or 24h."
 [[ "$ACCESS_TEAM_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
     error "CLOUDFLARE_ACCESS_TEAM_NAME must contain lowercase letters, numbers, and hyphens."
 
-for command_name in curl jq openssl kubectl base64; do
+for command_name in curl jq openssl kubectl base64 dig; do
     command -v "$command_name" >/dev/null 2>&1 || error "Required command not found: $command_name"
 done
 kubectl cluster-info >/dev/null 2>&1 || error "Cannot reach the Kubernetes cluster."
@@ -181,6 +195,7 @@ if [[ -z "$API_TOKEN" ]]; then
     cat >&2 <<'EOF'
 
 Cloudflare credential required:
+  Create it at: https://dash.cloudflare.com/profile/api-tokens
   Type: Cloudflare User API Token (current cfut_... format)
   Do not use: Account API Token (cfat_...) or Global API Key (cfk_...)
 
@@ -197,6 +212,7 @@ The custom user token must allow:
   Zone    -> Bot Management           -> Edit
   Account -> Access: Apps and Policies -> Edit
   Account -> Access: Organizations, Identity Providers, and Groups -> Edit
+  Account -> Cloudflare Registrar Domains -> Read
 
 For a blank account, scope the zone permissions to all zones in the selected
 account; a token restricted to a specific existing zone cannot create the zone.
@@ -550,8 +566,13 @@ configure_access() {
 
     organization_auth_domain="$(jq -r '.result.auth_domain // empty' <<< "$organization_response")"
     [[ -n "$organization_auth_domain" ]] || error "Cloudflare returned no Zero Trust organization auth domain."
-    [[ "$organization_auth_domain" == "$ACCESS_TEAM_NAME.cloudflareaccess.com" ]] || \
-        error "The live Cloudflare Access team is $organization_auth_domain; set CLOUDFLARE_ACCESS_TEAM_NAME to its first label."
+    if [[ "$organization_auth_domain" != "$ACCESS_TEAM_NAME.cloudflareaccess.com" ]]; then
+        if [[ "$ACCESS_TEAM_NAME_EXPLICIT" == "true" ]]; then
+            error "The live Cloudflare Access team is $organization_auth_domain; set CLOUDFLARE_ACCESS_TEAM_NAME to its first label."
+        fi
+        ACCESS_TEAM_NAME="${organization_auth_domain%.cloudflareaccess.com}"
+        info "Discovered the existing Cloudflare Access team: $ACCESS_TEAM_NAME"
+    fi
     callback_url="https://$organization_auth_domain/cdn-cgi/access/callback"
     info "Using the Keycloak callback registered for $callback_url."
 
@@ -562,15 +583,16 @@ configure_access() {
     idp_file="$WORK_DIR/access-keycloak-idp.json"
     jq -n \
         --arg client_secret "$oidc_client_secret" \
+        --arg domain "$ZONE_NAME" \
         '{
             name:"SwirlIT Keycloak",
             type:"oidc",
             config:{
                 client_id:"cloudflare-access",
                 client_secret:$client_secret,
-                auth_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/auth",
-                token_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/token",
-                certs_url:"https://keycloak.swirlit.dev/auth/realms/swirlit/protocol/openid-connect/certs",
+                auth_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/auth"),
+                token_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/token"),
+                certs_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/certs"),
                 pkce_enabled:true,
                 email_claim_name:"email",
                 claims:["groups", "preferred_username"],
@@ -817,6 +839,82 @@ certificate_is_usable() {
     [[ -n "$cert_public_key" && "$cert_public_key" == "$key_public_key" ]]
 }
 
+verify_registrar_and_dnssec() {
+    local rdap_response registrar_name desired_nameservers public_nameservers
+    local expected_ds_record expected_ds public_ds
+
+    rdap_response="$(curl --fail --location --silent --show-error \
+        --connect-timeout 10 --max-time 30 "https://rdap.org/domain/$ZONE_NAME" 2>/dev/null || true)"
+    registrar_name="$(jq -r '
+        .entities[]?
+        | select(any(.roles[]?; . == "registrar"))
+        | .vcardArray[1][]?
+        | select(.[0] == "fn")
+        | .[3]
+    ' <<< "$rdap_response" 2>/dev/null | head -n 1)"
+    desired_nameservers="$(printf '%s\n' "${ZONE_NAMESERVERS[@]}" | sed 's/\.$//; s/.*/\L&/' | sort -u)"
+    public_nameservers="$(dig +short NS "$ZONE_NAME" | sed 's/\.$//; s/.*/\L&/' | sort -u)"
+
+    if [[ "$public_nameservers" != "$desired_nameservers" ]]; then
+        warn "Registrar delegation is not yet reconciled${registrar_name:+ at $registrar_name}."
+        warn "Replace the registrar's current nameservers with exactly:"
+        printf '  - %s\n' "${ZONE_NAMESERVERS[@]}" >&2
+        if [[ "${registrar_name,,}" == *cloudflare* ]]; then
+            error "A Cloudflare Registrar domain should use these nameservers automatically; resolve the account/zone ownership mismatch and rerun."
+        fi
+        [[ -t 0 ]] || error "Registrar nameserver delegation requires interactive completion."
+        read -rp "Press Enter after saving the nameservers at the registrar, or Ctrl-C to stop: "
+        public_nameservers="$(dig +short NS "$ZONE_NAME" | sed 's/\.$//; s/.*/\L&/' | sort -u)"
+        [[ "$public_nameservers" == "$desired_nameservers" ]] || \
+            error "Public nameserver delegation has not propagated yet. Rerun this script after it does."
+    fi
+    info "Registrar nameserver delegation is correct${registrar_name:+ ($registrar_name)}."
+
+    [[ "$ENABLE_DNSSEC" == "true" ]] || return 0
+    expected_ds_record="$(jq -r '.result.ds // empty' <<< "$dnssec_response")"
+    expected_ds="$(awk '
+        {
+            start = 1
+            for (field = 1; field <= NF; field++) {
+                if (toupper($field) == "DS") {
+                    start = field + 1
+                    break
+                }
+            }
+            digest = ""
+            for (field = start + 3; field <= NF; field++) digest = digest $field
+            print $(start) " " $(start + 1) " " $(start + 2) " " toupper(digest)
+        }
+    ' <<< "$expected_ds_record")"
+    [[ -n "$expected_ds" ]] || error "Cloudflare did not return the DNSSEC DS record."
+    public_ds="$(dig +short DS "$ZONE_NAME" | awk '
+        {
+            digest = ""
+            for (field = 4; field <= NF; field++) digest = digest $field
+            print $1 " " $2 " " $3 " " toupper(digest)
+        }
+    ' | sort -u)"
+    if ! grep -Fxq "$expected_ds" <<< "$public_ds"; then
+        warn "Publish this DS record in the registrar's DNSSEC/DS section:"
+        printf '  %s\n' "$expected_ds_record" >&2
+        if [[ "${registrar_name,,}" == *cloudflare* ]]; then
+            error "Cloudflare Registrar has not published the DNSSEC record yet; rerun after propagation."
+        fi
+        [[ -t 0 ]] || error "Registrar DNSSEC publication requires interactive completion."
+        read -rp "Press Enter after saving the DS record at the registrar, or Ctrl-C to stop: "
+        public_ds="$(dig +short DS "$ZONE_NAME" | awk '
+            {
+                digest = ""
+                for (field = 4; field <= NF; field++) digest = digest $field
+                print $1 " " $2 " " $3 " " toupper(digest)
+            }
+        ' | sort -u)"
+        grep -Fxq "$expected_ds" <<< "$public_ds" || \
+            error "The public DS record has not propagated yet. Rerun this script after it does."
+    fi
+    info "Public DNSSEC delegation matches Cloudflare."
+}
+
 step "Validating the Cloudflare User API Token"
 token_response="$(cf_request GET /user/tokens/verify)"
 require_success "$token_response" "Token verification"
@@ -962,6 +1060,38 @@ for fqdn in "${DNS_HOSTS[@]}"; do
     info "Updated $fqdn -> $ORIGIN_IP (proxied)."
 done
 
+NODE_FQDN=""
+if [[ "$PUBLISH_NODE_DNS" == "true" ]]; then
+    NODE_FQDN="$CONTROL_PLANE_NODE_NAME.$ZONE_NAME"
+    [[ " ${DNS_HOSTS[*]} " != *" $NODE_FQDN "* ]] || \
+        error "The control-plane node name conflicts with a proxied application hostname: $NODE_FQDN"
+    record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$NODE_FQDN&per_page=100")"
+    require_success "$record_response" "DNS lookup for control-plane node $NODE_FQDN"
+    address_record_count="$(jq '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")] | length' <<< "$record_response")"
+    ((address_record_count <= 1)) || error "$NODE_FQDN has multiple address records."
+    desired_record_file="$WORK_DIR/dns-control-plane-node.json"
+    jq -n --arg name "$NODE_FQDN" --arg content "$ORIGIN_IP" \
+        '{type:"A",name:$name,content:$content,ttl:1,proxied:false,comment:"Managed control-plane node DNS for bm-cluster"}' \
+        > "$desired_record_file"
+    if ((address_record_count == 0)); then
+        update_response="$(cf_request POST "/zones/$ZONE_ID/dns_records" "$desired_record_file")"
+        require_success "$update_response" "Creating control-plane node DNS record $NODE_FQDN"
+        info "Created $NODE_FQDN -> $ORIGIN_IP (DNS only)."
+    else
+        current_record="$(jq -c '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")][0]' <<< "$record_response")"
+        if ! jq -e --arg content "$ORIGIN_IP" \
+            '.type == "A" and .content == $content and .proxied == false and .ttl == 1' \
+            <<< "$current_record" >/dev/null; then
+            record_id="$(jq -r '.id' <<< "$current_record")"
+            update_response="$(cf_request PUT "/zones/$ZONE_ID/dns_records/$record_id" "$desired_record_file")"
+            require_success "$update_response" "Updating control-plane node DNS record $NODE_FQDN"
+            info "Updated $NODE_FQDN -> $ORIGIN_IP (DNS only)."
+        else
+            info "DNS record already correct: $NODE_FQDN"
+        fi
+    fi
+fi
+
 step "Ensuring a wildcard Cloudflare Origin CA certificate"
 origin_cert="$WORK_DIR/origin.crt"
 origin_key="$WORK_DIR/origin.key"
@@ -1029,7 +1159,7 @@ set_zone_setting ipv6 on "IPv6 compatibility"
 # This zone serves REST APIs, Git webhooks, CLIs, and CI agents in addition to
 # browsers. Browser Integrity Check challenges legitimate non-browser clients;
 # authentication and Cloudflare's network-level protections remain in place.
-# The cluster-only swirlit.internal zone is resolved exclusively by CoreDNS and is
+# The selected cluster-only internal zone is resolved exclusively by CoreDNS and is
 # intentionally absent from every Cloudflare DNS and edge rule.
 set_zone_setting browser_check off "Browser Integrity Check for API compatibility"
 # These HTML-rewriting/content-blocking features are a poor fit for dashboards
@@ -1074,6 +1204,9 @@ if [[ "$ENABLE_DNSSEC" == "true" && "$dnssec_status" != "active" ]]; then
     jq -r '.result | "  Key tag: \(.key_tag)\n  Algorithm: \(.algorithm)\n  Digest type: \(.digest_algorithm)\n  Digest: \(.digest)\n  DS: \(.ds)"' <<< "$dnssec_response" >&2
 fi
 
+step "Verifying registrar delegation and public DNSSEC"
+verify_registrar_and_dnssec
+
 lock_origin_firewall
 
 step "Verifying Cloudflare and Kubernetes state"
@@ -1084,6 +1217,13 @@ for fqdn in "${DNS_HOSTS[@]}"; do
         '.result | length == 1 and .[0].content == $content and .[0].proxied == true' \
         <<< "$record_response" >/dev/null || error "Final DNS verification failed for $fqdn."
 done
+if [[ -n "$NODE_FQDN" ]]; then
+    record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?type=A&name=$NODE_FQDN&per_page=100")"
+    require_success "$record_response" "Final DNS verification for $NODE_FQDN"
+    jq -e --arg content "$ORIGIN_IP" \
+        '.result | length == 1 and .[0].content == $content and .[0].proxied == false' \
+        <<< "$record_response" >/dev/null || error "Final DNS verification failed for $NODE_FQDN."
+fi
 
 ssl_response="$(cf_request GET "/zones/$ZONE_ID/settings/ssl")"
 require_success "$ssl_response" "Final SSL setting verification"
@@ -1118,6 +1258,7 @@ echo ""
 echo "  Zone:          $ZONE_NAME ($ZONE_STATUS)"
 echo "  Origin:        $ORIGIN_IP"
 echo "  DNS records:   ${#DNS_HOSTS[@]} proxied A records"
+echo "  Node DNS:      ${NODE_FQDN:-disabled}"
 echo "  TLS mode:      Full (strict)"
 echo "  Minimum TLS:   $MIN_TLS_VERSION"
 echo "  TLS 1.3:       enabled (0-RTT disabled)"

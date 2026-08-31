@@ -65,7 +65,7 @@ data:
   settings.yaml: |
     title: Swirlit BM Cluster
     description: Applications, infrastructure, data, delivery, and observability
-    startUrl: https://dashboard.swirlit.dev
+    startUrl: https://dashboard.__PUBLIC_DOMAIN__
     theme: dark
     color: slate
     language: en
@@ -118,7 +118,7 @@ data:
     - Applications:
         - Odoo:
             icon: odoo.png
-            href: https://odoo.swirlit.dev
+            href: https://odoo.__PUBLIC_DOMAIN__
             description: ERP and CRM application
             namespace: apps
             podSelector: app=odoo
@@ -126,19 +126,19 @@ data:
     - DevOps & Delivery:
         - GitLab:
             icon: gitlab.png
-            href: https://gitlab.swirlit.dev
+            href: https://gitlab.__PUBLIC_DOMAIN__
             description: Source control, CI, artifacts, and collaboration
             namespace: infra
             podSelector: app=gitlab
         - Argo CD:
             icon: argo-cd.png
-            href: https://argocd.swirlit.dev
+            href: https://argocd.__PUBLIC_DOMAIN__
             description: GitOps continuous delivery
             namespace: infra
             podSelector: app.kubernetes.io/part-of=argocd
         - SonarQube:
             icon: sonarqube.png
-            href: https://sonarqube.swirlit.dev
+            href: https://sonarqube.__PUBLIC_DOMAIN__
             description: Code quality and security analysis
             namespace: infra
             podSelector: app=sonarqube
@@ -146,19 +146,19 @@ data:
     - Cluster Management:
         - Cluster Dashboard:
             icon: homepage.png
-            href: https://dashboard.swirlit.dev
+            href: https://dashboard.__PUBLIC_DOMAIN__
             description: This Homepage service catalog
             namespace: infra
             podSelector: app=homepage
         - Portainer:
             icon: portainer.png
-            href: https://portainer.swirlit.dev
+            href: https://portainer.__PUBLIC_DOMAIN__
             description: Kubernetes workload management
             namespace: infra
             podSelector: app=portainer
         - Longhorn:
             icon: longhorn.png
-            href: https://longhorn.swirlit.dev
+            href: https://longhorn.__PUBLIC_DOMAIN__
             description: Distributed persistent storage
             namespace: longhorn-system
             podSelector: app.kubernetes.io/instance=longhorn
@@ -182,13 +182,13 @@ data:
     - Data & Messaging:
         - DBGate:
             icon: mdi-database-cog-outline
-            href: https://dbgate.swirlit.dev
+            href: https://dbgate.__PUBLIC_DOMAIN__
             description: PostgreSQL, MongoDB, and Redis administration
             namespace: infra
             podSelector: app=dbgate
         - Kafka UI:
             icon: kafka.png
-            href: https://kafka.swirlit.dev
+            href: https://kafka.__PUBLIC_DOMAIN__
             description: Kafbat Kafka administration
             namespace: infra
             podSelector: app=kafka-ui
@@ -221,13 +221,13 @@ data:
     - Observability & Logging:
         - Grafana:
             icon: grafana.png
-            href: https://grafana.swirlit.dev
+            href: https://grafana.__PUBLIC_DOMAIN__
             description: Metrics dashboards and usage overview
             namespace: infra
             podSelector: app=grafana
         - Kibana:
             icon: kibana.png
-            href: https://kibana.swirlit.dev
+            href: https://kibana.__PUBLIC_DOMAIN__
             description: Kubernetes and application log discovery
             namespace: infra
             podSelector: app=kibana
@@ -265,13 +265,13 @@ data:
     - Security & Identity:
         - Keycloak:
             icon: keycloak.png
-            href: https://keycloak.swirlit.dev/auth/admin/master/console/
+            href: https://keycloak.__PUBLIC_DOMAIN__/auth/admin/master/console/
             description: Identity and access management
             namespace: infra
             podSelector: app=keycloak
         - Vault:
             icon: vault.png
-            href: https://vault.swirlit.dev
+            href: https://vault.__PUBLIC_DOMAIN__
             description: Secrets, policies, and Kubernetes authentication
             namespace: infra
             podSelector: app.kubernetes.io/name=vault
@@ -282,7 +282,7 @@ data:
             podSelector: app.kubernetes.io/instance=external-secrets
         - Cloudflare Edge:
             icon: cloudflare.png
-            href: https://dash.cloudflare.com/74ac0bc32cf6aa849e6842c18efc6643/swirlit.dev
+            href: https://dash.cloudflare.com/
             description: DNS, TLS, CDN, WAF, rate limiting, and Access
         - CrowdSec:
             icon: crowdsec.png
@@ -295,7 +295,7 @@ data:
             description: Every-node firewall and Cloudflare origin restriction
         - Lynis:
             icon: ubuntu-linux.png
-            description: Control-plane audit engine with transient remote worker scans
+            description: Monthly control-plane audits, Kibana reporting, and transient worker scans
 
     - Kubernetes System:
         - CoreDNS:
@@ -461,7 +461,7 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: HOMEPAGE_ALLOWED_HOSTS
-          value: "$(MY_POD_IP):3000,homepage.swirlit.internal:3000,dashboard.swirlit.dev"
+          value: "$(MY_POD_IP):3000,homepage.__INTERNAL_DNS_ZONE__:3000,dashboard.__PUBLIC_DOMAIN__"
         - name: LOG_TARGETS
           value: stdout
         ports:
@@ -563,17 +563,17 @@ metadata:
     nginx.ingress.kubernetes.io/session-cookie-samesite: Lax
     nginx.ingress.kubernetes.io/session-cookie-secure: "true"
     nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.swirlit.internal:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.swirlit.dev/oauth2/start?rd=https://$host$escaped_request_uri
+    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
     nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - dashboard.swirlit.dev
+    - dashboard.__PUBLIC_DOMAIN__
     secretName: swirlit-dev-tls
   rules:
-  - host: dashboard.swirlit.dev
+  - host: dashboard.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /

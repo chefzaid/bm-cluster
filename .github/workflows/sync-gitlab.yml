@@ -25,16 +25,18 @@ concurrency:
 jobs:
   sync-repository:
     name: Reconcile branches and tags
+    if: ${{ vars.GITLAB_API_URL != '' && vars.GITLAB_HOST != '' && vars.GITLAB_REPOSITORY != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       GITHUB_TOKEN: ${{ github.token }}
       GITHUB_ADMIN_TOKEN: ${{ secrets.REPOSITORY_SYNC_ADMIN_TOKEN }}
-      GITLAB_API_URL: https://gitlab.swirlit.dev/api/v4
-      GITLAB_PROJECT_ID: '2'
-      GITLAB_REPOSITORY: https://gitlab.swirlit.dev/swirlit/bm-cluster.git
+      GITLAB_API_URL: ${{ vars.GITLAB_API_URL }}
+      GITLAB_HOST: ${{ vars.GITLAB_HOST }}
+      GITLAB_REPOSITORY: ${{ vars.GITLAB_REPOSITORY }}
       GITLAB_USERNAME: ${{ secrets.GITLAB_SYNC_USERNAME }}
       GITLAB_TOKEN: ${{ secrets.GITLAB_SYNC_TOKEN }}
+      REPOSITORY_SYNC_EMAIL: ${{ vars.REPOSITORY_SYNC_EMAIL }}
     steps:
       - name: Reconcile GitHub and GitLab
         shell: bash
@@ -53,15 +55,35 @@ jobs:
             echo "REPOSITORY_SYNC_ADMIN_TOKEN is not configured" >&2
             exit 1
           }
+          [[ "${GITLAB_API_URL:-}" == https://*/api/v4 ]] || {
+            echo "GITLAB_API_URL repository variable is not configured" >&2
+            exit 1
+          }
+          [[ "${GITLAB_REPOSITORY:-}" == https://*.git ]] || {
+            echo "GITLAB_REPOSITORY repository variable is not configured" >&2
+            exit 1
+          }
+          [[ -n "${GITLAB_HOST:-}" ]] || {
+            echo "GITLAB_HOST repository variable is not configured" >&2
+            exit 1
+          }
 
           askpass="$RUNNER_TEMP/git-askpass"
           cat > "$askpass" <<'EOF'
           #!/bin/sh
           case "$1" in
-            *Username*github.com*|*github.com*Username*) printf '%s\n' 'x-access-token' ;;
-            *github.com*) printf '%s\n' "$GITHUB_TOKEN" ;;
-            *Username*gitlab.swirlit.dev*|*gitlab.swirlit.dev*Username*) printf '%s\n' "$GITLAB_USERNAME" ;;
-            *gitlab.swirlit.dev*) printf '%s\n' "$GITLAB_TOKEN" ;;
+            *github.com*)
+              case "$1" in
+                *Username*) printf '%s\n' 'x-access-token' ;;
+                *) printf '%s\n' "$GITHUB_TOKEN" ;;
+              esac
+              ;;
+            *"$GITLAB_HOST"*)
+              case "$1" in
+                *Username*) printf '%s\n' "$GITLAB_USERNAME" ;;
+                *) printf '%s\n' "$GITLAB_TOKEN" ;;
+              esac
+              ;;
             *) exit 1 ;;
           esac
           EOF
@@ -74,7 +96,7 @@ jobs:
           git init --quiet "$repository"
           cd "$repository"
           git config user.name 'SwirlIT repository sync'
-          git config user.email 'repository-sync@swirlit.dev'
+          git config user.email "${REPOSITORY_SYNC_EMAIL:-repository-sync@users.noreply.github.com}"
           git remote add github "https://github.com/${GITHUB_REPOSITORY}.git"
           git remote add gitlab "$GITLAB_REPOSITORY"
 
@@ -182,7 +204,7 @@ jobs:
                 --request POST \
                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                 --form-string "expires_at=$new_expiration" \
-                "$GITLAB_API_URL/projects/$GITLAB_PROJECT_ID/access_tokens/self/rotate"
+                "$GITLAB_API_URL/personal_access_tokens/self/rotate"
             )"
             new_token="$(printf '%s\n' "$rotated_token" | jq -er '.token')"
             printf '%s' "$new_token" |

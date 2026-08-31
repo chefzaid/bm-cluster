@@ -6,12 +6,23 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: http://gitlab.swirlit.internal/swirlit/bm-cluster.git
+    repoURL: __GITOPS_REPOSITORY_URL__
     targetRevision: main
     path: k8s
-    directory:
-      recurse: true
-      exclude: '{apps/**,addons/descheduler-run-job.yaml,platform/portainer-bootstrap-job.yaml}'
+    helm:
+      parameters:
+        - name: publicDomain
+          value: __PUBLIC_DOMAIN__
+        - name: internalDnsZone
+          value: __INTERNAL_DNS_ZONE__
+        - name: gitopsRepositoryURL
+          value: __GITOPS_REPOSITORY_URL__
+        - name: cloudflareAccessTeamName
+          value: __CLOUDFLARE_ACCESS_TEAM_NAME__
+        - name: appsEnabled
+          value: "__APPS_ENABLED__"
+        - name: deschedulerEnabled
+          value: "__DESCHEDULER_ENABLED__"
   destination:
     server: https://kubernetes.default.svc
     namespace: infra

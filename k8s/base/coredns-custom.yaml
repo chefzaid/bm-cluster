@@ -6,5 +6,5 @@ metadata:
 data:
   swirlit.override: |
     # Cluster services outside Infra require exact aliases before the suffix rule.
-    rewrite stop name exact longhorn.swirlit.internal. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
-    rewrite stop name suffix .swirlit.internal. .infra.svc.cluster.local. answer auto
+    rewrite stop name exact longhorn.__INTERNAL_DNS_ZONE__. longhorn-frontend.longhorn-system.svc.cluster.local. answer auto
+    rewrite stop name suffix .__INTERNAL_DNS_ZONE__. .infra.svc.cluster.local. answer auto

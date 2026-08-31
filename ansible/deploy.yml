@@ -9,6 +9,7 @@
     apps_namespace: apps
     repository_root: "{{ playbook_dir }}/.."
     k8s_dir: "{{ repository_root }}/k8s"
+    argocd_values_file: "{{ repository_root }}/config/argocd-values.yaml"
     platform_config_file: "{{ repository_root }}/config/platform.env"
     vault_values_file: "{{ repository_root }}/config/vault-values.yaml"
 
@@ -76,6 +77,21 @@
       {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS type=properties file=' ~ platform_config_file) }}
 
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
+    platform_domain: "{{ lookup('ansible.builtin.env', 'PLATFORM_DOMAIN') | lower }}"
+    internal_dns_zone: >-
+      {{ lookup('ansible.builtin.env', 'INTERNAL_DNS_ZONE') | default('internal.' ~ platform_domain, true) | lower }}
+    control_plane_node_name: >-
+      {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_NODE_NAME') | default(inventory_hostname, true) | lower }}
+    control_plane_scheduling_mode: >-
+      {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_SCHEDULABLE') | default('preserve', true) | lower }}
+    cloudflare_access_team_name: >-
+      {{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_TEAM_NAME') |
+         default('bm-cluster-' ~ (platform_domain | replace('.', '-')), true) | lower }}
+    gitops_repository_url: >-
+      {{ lookup('ansible.builtin.env', 'GITOPS_REPOSITORY_URL') |
+         default(lookup('ansible.builtin.pipe', 'git -C ' ~ repository_root ~ ' remote get-url github'), true) }}
+    gitlab_group_path: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_PATH') | default('swirlit', true) }}"
+    gitlab_project_name: "{{ lookup('ansible.builtin.env', 'GITLAB_PROJECT_NAME') | default('bm-cluster', true) }}"
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('ansible.builtin.env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     private_transport_enabled: "{{ manage_private_transport | default(false) | bool }}"
     private_transport_mode: >-
@@ -114,7 +130,20 @@
     odoo_enabled: "{{ apps_enabled and (install_odoo | default(true) | bool) }}"
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
     argocd_enabled: "{{ install_argocd | default(true) | bool }}"
+    offsite_backups_enabled: >-
+      {{ lookup('ansible.builtin.env', 'CONFIGURE_OFFSITE_BACKUPS') | default('false', true) | bool }}
+    backup_s3_endpoint: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_ENDPOINT') }}"
+    backup_s3_bucket: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_BUCKET') }}"
+    backup_s3_region: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_REGION') }}"
+    backup_s3_access_key: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_ACCESS_KEY') }}"
+    backup_s3_secret_key: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_SECRET_KEY') }}"
+    backup_repository_password: "{{ lookup('ansible.builtin.env', 'BACKUP_REPOSITORY_PASSWORD') }}"
     gitlab_admin_token: "{{ lookup('ansible.builtin.env', 'GITLAB_ADMIN_TOKEN') }}"
+    github_admin_token: "{{ lookup('ansible.builtin.env', 'GITHUB_ADMIN_TOKEN') }}"
+    repository_sync_enabled: >-
+      {{ lookup('ansible.builtin.env', 'CONFIGURE_REPOSITORY_SYNC') | default('false', true) | bool }}
+    github_owner: "{{ lookup('ansible.builtin.env', 'GITHUB_OWNER') }}"
+    github_repository: "{{ lookup('ansible.builtin.env', 'GITHUB_REPOSITORY') | default(gitlab_project_name, true) }}"
     keycloak_sso_bootstrap_username: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_USERNAME') }}"
     keycloak_sso_bootstrap_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_PASSWORD') }}"
 
@@ -129,9 +158,51 @@
     - name: Validate the shared platform contract
       ansible.builtin.assert:
         that:
-          - platform_contract_version == '3'
+          - platform_contract_version == '5'
           - server_exposure_mode in ['internet', 'local']
+          - platform_domain is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
+          - internal_dns_zone is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
+          - internal_dns_zone != platform_domain
+          - control_plane_node_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+          - control_plane_scheduling_mode in ['true', 'false', 'preserve']
+          - cloudflare_access_team_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+          - not argocd_enabled or gitops_repository_url is match('^https?://.*\\.git$')
         fail_msg: "The platform contract or server_exposure value is invalid."
+
+    - name: Create a private rendered-configuration directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: bm-cluster-rendered.
+      register: rendered_configuration
+
+    - name: Use the rendered Kubernetes and Argo CD configuration
+      ansible.builtin.set_fact:
+        k8s_dir: "{{ rendered_configuration.path }}/k8s"
+        argocd_values_file: "{{ rendered_configuration.path }}/config/argocd-values.yaml"
+
+    - name: Render domain-neutral cluster configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/render-cluster-config.sh"
+          - --output
+          - "{{ rendered_configuration.path }}"
+          - --domain
+          - "{{ platform_domain }}"
+          - --internal-domain
+          - "{{ internal_dns_zone }}"
+          - --gitops-repository
+          - "{{ gitops_repository_url }}"
+          - --gitlab-group
+          - "{{ gitlab_group_path }}"
+          - --gitlab-project
+          - "{{ gitlab_project_name }}"
+          - --cloudflare-access-team
+          - "{{ cloudflare_access_team_name }}"
+          - --apps-enabled
+          - "{{ apps_enabled | ternary('true', 'false') }}"
+          - --descheduler-enabled
+          - "{{ descheduler_enabled | ternary('true', 'false') }}"
+      changed_when: false
 
     - name: Validate automated Cloudflare inputs
       ansible.builtin.assert:
@@ -143,6 +214,35 @@
           Cloudflare automation requires internet exposure, CLOUDFLARE_API_TOKEN,
           and CLOUDFLARE_ACCESS_ALLOWED_EMAILS when Access is enabled.
       when: cloudflare_enabled
+
+    - name: Validate optional repository synchronization inputs
+      ansible.builtin.assert:
+        that:
+          - github_admin_token | length > 0
+          - github_owner | length > 0
+          - github_repository | length > 0
+        fail_msg: >-
+          Repository synchronization requires GITHUB_ADMIN_TOKEN, GITHUB_OWNER,
+          and GITHUB_REPOSITORY. GitLab administrator access is acquired locally
+          through gitlab-rails when GITLAB_ADMIN_TOKEN is not supplied.
+      no_log: true
+      when: repository_sync_enabled
+
+    - name: Validate optional off-node backup inputs
+      ansible.builtin.assert:
+        that:
+          - backup_s3_endpoint is match('^https://')
+          - backup_s3_bucket | length > 2
+          - backup_s3_region | length > 0
+          - backup_s3_access_key | length > 0
+          - backup_s3_secret_key | length > 0
+          - backup_repository_password | length >= 16
+        fail_msg: >-
+          Off-node backups require BACKUP_S3_ENDPOINT, BACKUP_S3_BUCKET,
+          BACKUP_S3_REGION, BACKUP_S3_ACCESS_KEY, BACKUP_S3_SECRET_KEY, and a
+          16-character BACKUP_REPOSITORY_PASSWORD.
+      no_log: true
+      when: offsite_backups_enabled
 
     - name: Validate non-interactive platform administrator inputs
       ansible.builtin.assert:
@@ -277,6 +377,9 @@
 
     - name: Configure K3s containerd for the internal registry alias
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-registry-mirror.sh"
+      environment:
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        K3S_REGISTRY_HOST: "registry.{{ platform_domain }}"
 
     - name: Configure cluster-only internal service aliases
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
@@ -289,11 +392,20 @@
         kubectl label nodes
         -l node-role.kubernetes.io/control-plane
         svccontroller.k3s.cattle.io/enablelb=true
-        node.swirlit.dev/role=control-plane
-        node.swirlit.dev/exposure={{ server_exposure_mode }}
+        node.bm-cluster.io/role=control-plane
+        node.bm-cluster.io/exposure={{ server_exposure_mode }}
         --overwrite
       register: node_labels
       changed_when: "'not labeled' not in node_labels.stdout"
+
+    - name: Reconcile control-plane scheduling and topology-dependent configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/reconcile-cluster-topology.sh"
+          - --control-plane-schedulable
+          - "{{ control_plane_scheduling_mode }}"
+      register: topology_reconciliation
+      changed_when: true
 
     - name: Apply Kubernetes admission and namespace security baseline
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/security-baseline.yaml
@@ -305,6 +417,15 @@
 
     - name: Configure daily consistent K3s recovery archives
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-backups.sh"
+      environment:
+        CONFIGURE_OFFSITE_BACKUPS: "{{ offsite_backups_enabled | ternary('true', 'false') }}"
+        BACKUP_S3_ENDPOINT: "{{ backup_s3_endpoint }}"
+        BACKUP_S3_BUCKET: "{{ backup_s3_bucket }}"
+        BACKUP_S3_REGION: "{{ backup_s3_region }}"
+        BACKUP_S3_ACCESS_KEY: "{{ backup_s3_access_key }}"
+        BACKUP_S3_SECRET_KEY: "{{ backup_s3_secret_key }}"
+        BACKUP_REPOSITORY_PASSWORD: "{{ backup_repository_password }}"
+      no_log: true
 
     - name: Apply role-aware control-plane host security policy
       ansible.builtin.command: >-
@@ -339,11 +460,13 @@
       changed_when: false
       when: longhorn_enabled or ingress_effective or vault_stack_effective or argocd_enabled
 
-    - name: Count Ready Kubernetes nodes for Longhorn replicas
+    - name: Count Ready worker nodes for Longhorn replicas
       ansible.builtin.shell: >-
-        kubectl get nodes --no-headers |
+        kubectl get nodes
+        -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master'
+        --no-headers |
         awk '$2 ~ /^Ready/ {count++} END {print count+0}'
-      register: ready_node_count
+      register: ready_worker_count
       changed_when: false
       when: longhorn_enabled
 
@@ -353,8 +476,8 @@
         --namespace longhorn-system
         --create-namespace
         --version {{ longhorn_chart_version }}
-        --set defaultSettings.defaultReplicaCount={{ [([ready_node_count.stdout | int, 1] | max), 3] | min }}
-        --set persistence.defaultClassReplicaCount={{ [([ready_node_count.stdout | int, 1] | max), 3] | min }}
+        --set defaultSettings.defaultReplicaCount={{ [ready_worker_count.stdout | int, 1] | max }}
+        --set persistence.defaultClassReplicaCount={{ [ready_worker_count.stdout | int, 1] | max }}
         --set defaultSettings.defaultDataLocality=best-effort
         --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1
         --set defaultSettings.storageMinimalAvailablePercentage=20
@@ -378,12 +501,29 @@
       changed_when: false
       when: longhorn_enabled
 
-    - name: Reconcile the live Longhorn replica setting
-      ansible.builtin.command: >-
-        kubectl patch settings.longhorn.io default-replica-count
-        -n longhorn-system --type=merge
-        -p '{"value":"{{ [([ready_node_count.stdout | int, 1] | max), 3] | min }}"}'
+    - name: Reconcile Longhorn storage scheduling and topology configuration
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/reconcile-cluster-topology.sh"
+          - --control-plane-schedulable
+          - "{{ control_plane_scheduling_mode }}"
       when: longhorn_enabled
+
+    - name: Configure recurring off-node Longhorn backups
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-k3s-backups.sh"
+      environment:
+        CONFIGURE_OFFSITE_BACKUPS: "true"
+        RUN_BACKUP_NOW: "false"
+        BACKUP_S3_ENDPOINT: "{{ backup_s3_endpoint }}"
+        BACKUP_S3_BUCKET: "{{ backup_s3_bucket }}"
+        BACKUP_S3_REGION: "{{ backup_s3_region }}"
+        BACKUP_S3_ACCESS_KEY: "{{ backup_s3_access_key }}"
+        BACKUP_S3_SECRET_KEY: "{{ backup_s3_secret_key }}"
+        BACKUP_REPOSITORY_PASSWORD: "{{ backup_repository_password }}"
+      no_log: true
+      when:
+        - longhorn_enabled
+        - offsite_backups_enabled
 
     - name: Install or upgrade NGINX Ingress
       ansible.builtin.command: >-
@@ -393,6 +533,9 @@
         --set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true
         --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'
+        --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane'
+        --set-string 'controller.tolerations[0].operator=Exists'
+        --set-string 'controller.tolerations[0].effect=NoSchedule'
         --wait --timeout {{ ingress_helm_timeout }}
       when: ingress_effective
 
@@ -401,6 +544,10 @@
       environment:
         CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
         CLOUDFLARE_ENABLE_ACCESS: "false"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
+        CONTROL_PLANE_NODE_NAME: "{{ control_plane_node_name }}"
+        CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
       no_log: true
       when: cloudflare_enabled
 
@@ -459,6 +606,7 @@
       environment:
         KEYCLOAK_SSO_BOOTSTRAP_USERNAME: "{{ keycloak_sso_bootstrap_username }}"
         KEYCLOAK_SSO_BOOTSTRAP_PASSWORD: "{{ keycloak_sso_bootstrap_password }}"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
       no_log: true
       when: vault_stack_effective
 
@@ -490,6 +638,13 @@
       loop: "{{ platform_manifests }}"
       register: platform_apply
       changed_when: "'created' in platform_apply.stdout or 'configured' in platform_apply.stdout"
+      when: platform_services_enabled
+
+    - name: Reconcile superseded RBAC, jobs, and unmounted legacy storage
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-legacy-resources.sh"
+      environment:
+        NAMESPACE: "{{ infra_namespace }}"
+        DELETE_LEGACY_PVCS: "true"
       when: platform_services_enabled
 
     - name: Wait for platform pods
@@ -527,24 +682,30 @@
       environment:
         CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
         CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "{{ cloudflare_access_emails }}"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
+        CONTROL_PLANE_NODE_NAME: "{{ control_plane_node_name }}"
+        CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
       no_log: true
       when:
         - cloudflare_enabled
         - platform_services_enabled
 
-    - name: Configure the bm-cluster GitLab project and Kubernetes runner
+    - name: Configure the GitLab project, Kubernetes runner, and optional repository sync
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-gitlab-ci.sh"
+      environment:
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        GITLAB_PUBLIC_URL: "https://gitlab.{{ platform_domain }}"
+        GITLAB_ADMIN_TOKEN: "{{ gitlab_admin_token }}"
+        GITHUB_ADMIN_TOKEN: "{{ github_admin_token }}"
+        GITHUB_OWNER: "{{ github_owner }}"
+        GITHUB_REPOSITORY: "{{ github_repository }}"
+        GITLAB_GROUP_PATH: "{{ gitlab_group_path }}"
+        GITLAB_PROJECT_PATH: "{{ gitlab_group_path }}/{{ gitlab_project_name }}"
+        GITLAB_PROJECT_NAME: "{{ gitlab_project_name }}"
+        CONFIGURE_REPOSITORY_SYNC: "{{ repository_sync_enabled | ternary('true', 'false') }}"
       no_log: true
-      when:
-        - platform_services_enabled
-        - gitlab_admin_token | length > 0
-
-    - name: Explain deferred GitLab runner activation
-      ansible.builtin.debug:
-        msg: Set GITLAB_ADMIN_TOKEN and run scripts/configure-gitlab-ci.sh to activate the instance runner.
-      when:
-        - platform_services_enabled
-        - gitlab_admin_token | length == 0
+      when: platform_services_enabled
 
     - name: Deploy Odoo and its ingress
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/odoo.yaml
@@ -577,7 +738,7 @@
         helm upgrade --install argocd argo/argo-cd
         --namespace {{ infra_namespace }}
         --version {{ argocd_chart_version }}
-        --values {{ repository_root }}/config/argocd-values.yaml
+        --values {{ argocd_values_file }}
         --set-string global.image.tag={{ argocd_image_tag }}
         --wait --timeout {{ argocd_helm_timeout }}
       when: argocd_enabled
@@ -597,3 +758,9 @@
     - name: Display final infrastructure pod status
       ansible.builtin.debug:
         msg: "{{ infrastructure_pods.stdout_lines }}"
+
+    - name: Remove rendered configuration directory
+      ansible.builtin.file:
+        path: "{{ rendered_configuration.path }}"
+        state: absent
+      changed_when: false

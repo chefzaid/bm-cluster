@@ -163,11 +163,11 @@ spec:
             - -c
             - |
               until curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" \
-                http://kibana.swirlit.internal:5601/api/status >/dev/null; do sleep 5; done
+                http://kibana.__INTERNAL_DNS_ZONE__:5601/api/status >/dev/null; do sleep 5; done
               response="$(curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" -X POST \
                 -H 'kbn-xsrf: namespace-observability-bootstrap' \
                 -F file=@/saved-objects/applications-namespace.ndjson \
-                'http://kibana.swirlit.internal:5601/api/saved_objects/_import?overwrite=true')"
+                'http://kibana.__INTERNAL_DNS_ZONE__:5601/api/saved_objects/_import?overwrite=true')"
               echo "$response"
               echo "$response" | grep -q '"success":true'
           securityContext:
@@ -189,3 +189,80 @@ spec:
         - name: saved-objects
           configMap:
             name: kibana-applications-namespace-saved-objects
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-lynis-saved-objects
+  namespace: infra
+data:
+  lynis.ndjson: |
+    {"type":"index-pattern","id":"lynis-audits","attributes":{"title":"lynis-audits-*","timeFieldName":"@timestamp","fields":"[]","fieldFormatMap":"{}","runtimeFieldMap":"{}","sourceFilters":"[]"},"references":[],"migrationVersion":{"index-pattern":"7.11.0"},"coreMigrationVersion":"7.17.0"}
+    {"type":"visualization","id":"lynis-hardening-index-trend","attributes":{"title":"Lynis Hardening Index Trend","description":"Monthly hardening index reported by Lynis.","uiStateJSON":"{}","version":1,"visState":"{\"title\":\"Lynis Hardening Index Trend\",\"type\":\"line\",\"params\":{\"type\":\"line\",\"grid\":{\"categoryLines\":false},\"categoryAxes\":[{\"id\":\"CategoryAxis-1\",\"type\":\"category\",\"position\":\"bottom\",\"show\":true,\"scale\":{\"type\":\"linear\"},\"labels\":{\"show\":true,\"filter\":true,\"truncate\":100},\"title\":{},\"style\":{}}],\"valueAxes\":[{\"id\":\"ValueAxis-1\",\"name\":\"LeftAxis-1\",\"type\":\"value\",\"position\":\"left\",\"show\":true,\"scale\":{\"type\":\"linear\",\"mode\":\"normal\"},\"labels\":{\"show\":true,\"rotate\":0,\"filter\":false,\"truncate\":100},\"title\":{\"text\":\"Hardening index\"},\"style\":{}}],\"seriesParams\":[{\"show\":true,\"type\":\"line\",\"mode\":\"normal\",\"data\":{\"label\":\"Average hardening index\",\"id\":\"1\"},\"valueAxis\":\"ValueAxis-1\",\"drawLinesBetweenPoints\":true,\"lineWidth\":2,\"interpolate\":\"linear\",\"showCircles\":true}],\"addTooltip\":true,\"detailedTooltip\":true,\"palette\":{\"type\":\"palette\",\"name\":\"default\"},\"addLegend\":false,\"legendPosition\":\"right\",\"fittingFunction\":\"linear\",\"times\":[],\"addTimeMarker\":false,\"labels\":{},\"radiusRatio\":9,\"thresholdLine\":{\"show\":false,\"value\":80,\"width\":1,\"style\":\"full\",\"color\":\"#E7664C\"}},\"aggs\":[{\"id\":\"1\",\"enabled\":true,\"type\":\"avg\",\"params\":{\"field\":\"lynis.numeric_value\"},\"schema\":\"metric\"},{\"id\":\"2\",\"enabled\":true,\"type\":\"date_histogram\",\"params\":{\"field\":\"@timestamp\",\"timeRange\":{\"from\":\"now-1y\",\"to\":\"now\"},\"useNormalizedEsInterval\":true,\"scaleMetricValues\":false,\"interval\":\"M\",\"drop_partials\":false,\"min_doc_count\":1,\"extended_bounds\":{}},\"schema\":\"segment\"}]}","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.key : \\\"hardening_index\\\"\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"visualization":"7.14.0"},"coreMigrationVersion":"7.17.0"}
+    {"type":"visualization","id":"lynis-findings-by-type","attributes":{"title":"Lynis Findings by Type","description":"Warnings and suggestions reported during the selected period.","uiStateJSON":"{}","version":1,"visState":"{\"title\":\"Lynis Findings by Type\",\"type\":\"pie\",\"params\":{\"type\":\"pie\",\"addTooltip\":true,\"addLegend\":true,\"legendPosition\":\"right\",\"isDonut\":true,\"labels\":{\"show\":true,\"values\":true,\"last_level\":true,\"truncate\":100}},\"aggs\":[{\"id\":\"1\",\"enabled\":true,\"type\":\"count\",\"params\":{},\"schema\":\"metric\"},{\"id\":\"2\",\"enabled\":true,\"type\":\"terms\",\"params\":{\"field\":\"lynis.finding_type\",\"orderBy\":\"1\",\"order\":\"desc\",\"size\":5,\"otherBucket\":false,\"otherBucketLabel\":\"Other\",\"missingBucket\":false,\"missingBucketLabel\":\"Missing\"},\"schema\":\"segment\"}]}","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.finding_type : *\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"visualization":"7.14.0"},"coreMigrationVersion":"7.17.0"}
+    {"type":"search","id":"lynis-findings","attributes":{"title":"Lynis Findings","description":"Actionable Lynis warnings and suggestions retained for twelve months.","columns":["@timestamp","host.name","lynis.finding_type","lynis.test_id","lynis.finding","lynis.detail","lynis.solution"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.finding_type : *\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"dashboard","id":"lynis-security-audits","attributes":{"title":"Lynis Security Audits","description":"Twelve-month view of monthly Lynis hardening scores, warnings, and suggestions.","hits":0,"timeRestore":true,"timeFrom":"now-1y","timeTo":"now","refreshInterval":{"pause":true,"value":0},"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":0,\"y\":0,\"w\":32,\"h\":14,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"},{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":32,\"y\":0,\"w\":16,\"h\":14,\"i\":\"2\"},\"panelIndex\":\"2\",\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"},{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":14,\"w\":48,\"h\":24,\"i\":\"3\"},\"panelIndex\":\"3\",\"embeddableConfig\":{},\"panelRefName\":\"panel_2\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"visualization","id":"lynis-hardening-index-trend"},{"name":"panel_1","type":"visualization","id":"lynis-findings-by-type"},{"name":"panel_2","type":"search","id":"lynis-findings"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-lynis-bootstrap
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: kibana-lynis-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: import-saved-objects
+          image: docker.io/curlimages/curl@sha256:9a1ed35addb45476afa911696297f8e115993df459278ed036182dd2cd22b67b
+          envFrom:
+            - secretRef:
+                name: kibana-bootstrap-credentials
+          command:
+            - sh
+            - -c
+            - |
+              until curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" \
+                http://kibana.__INTERNAL_DNS_ZONE__:5601/api/status >/dev/null; do sleep 5; done
+              response="$(curl -fsS --user "${KIBANA_BOOTSTRAP_USERNAME}:${KIBANA_BOOTSTRAP_PASSWORD}" -X POST \
+                -H 'kbn-xsrf: lynis-observability-bootstrap' \
+                -F file=@/saved-objects/lynis.ndjson \
+                'http://kibana.__INTERNAL_DNS_ZONE__:5601/api/saved_objects/_import?overwrite=true')"
+              echo "$response"
+              echo "$response" | grep -q '"success":true'
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: saved-objects
+              mountPath: /saved-objects
+              readOnly: true
+      volumes:
+        - name: saved-objects
+          configMap:
+            name: kibana-lynis-saved-objects

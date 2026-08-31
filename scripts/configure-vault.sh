@@ -6,6 +6,12 @@ VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_ADDR="http://127.0.0.1:8200"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PLATFORM_CONFIG="$REPO_ROOT/config/platform.env"
+if [[ -r "$PLATFORM_CONFIG" ]]; then
+  # shellcheck source=config/platform.env
+  source "$PLATFORM_CONFIG"
+fi
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
 SSO_ADMIN_LIBRARY="$SCRIPT_DIR/lib/sso-admin.sh"
 VAULT_STATE_DIR="${VAULT_STATE_DIR:-/var/lib/bm-cluster}"
 VAULT_UNSEAL_KEY_FILE="$VAULT_STATE_DIR/vault-unseal-key"
@@ -78,6 +84,8 @@ require_cmd jq
 require_cmd openssl
 require_cmd sudo
 require_cmd systemctl
+[[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
+  error "Set PLATFORM_DOMAIN to the cluster's public base domain."
 [[ -r "$SSO_ADMIN_LIBRARY" ]] || error "Shared SSO administrator library not found: $SSO_ADMIN_LIBRARY"
 # shellcheck source=scripts/lib/sso-admin.sh
 source "$SSO_ADMIN_LIBRARY"
@@ -257,6 +265,7 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak >/de
     jq -cn \
       --arg keycloak_user_password "$keycloak_user_password" \
       --arg keycloak_client_secret "$keycloak_client_secret" \
+      --arg platform_domain "$PLATFORM_DOMAIN" \
       '{
         realm: "application",
         enabled: true,
@@ -315,8 +324,8 @@ if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/keycloak >/de
             clientId: "application-web",
             enabled: true,
             publicClient: true,
-            redirectUris: ["https://app.swirlit.dev/*"],
-            webOrigins: ["https://app.swirlit.dev"],
+            redirectUris: [("https://app." + $platform_domain + "/*")],
+            webOrigins: [("https://app." + $platform_domain)],
             standardFlowEnabled: true,
             directAccessGrantsEnabled: true
           }
@@ -344,7 +353,7 @@ if [[ -n "$requested_sso_username" || -n "$requested_sso_password" ]]; then
   sso_admin_validate_username "$requested_sso_username" || error "$SSO_ADMIN_VALIDATION_ERROR"
   sso_admin_validate_password "$requested_sso_password" "$requested_sso_username" || \
     error "$SSO_ADMIN_VALIDATION_ERROR"
-  requested_sso_email="$(sso_admin_primary_email "$requested_sso_username")"
+  requested_sso_email="$(sso_admin_primary_email "$requested_sso_username" "$PLATFORM_DOMAIN")"
   requested_sso_display_name="Platform Administrator"
 
   if ! jq -e \
@@ -370,7 +379,7 @@ fi
 existing_sso_username="$(jq -r '.data.data.sso_bootstrap_username // empty' <<<"$keycloak_sso_secret_json")"
 default_sso_username="${requested_sso_username:-${existing_sso_username:-platform-admin}}"
 default_sso_password="${requested_sso_password:-$(generate_secret)}"
-default_sso_email="$(sso_admin_primary_email "$default_sso_username")"
+default_sso_email="$(sso_admin_primary_email "$default_sso_username" "$PLATFORM_DOMAIN")"
 declare -A keycloak_sso_defaults=(
   [sso_bootstrap_username]="$default_sso_username"
   [sso_bootstrap_password]="$default_sso_password"
@@ -405,7 +414,7 @@ fi
 
 info "Configuring Vault OIDC authentication against the SwirlIT Keycloak realm..."
 vault_cmd_auth "$root_token" write auth/oidc/config \
-  oidc_discovery_url="https://keycloak.swirlit.dev/auth/realms/swirlit" \
+  oidc_discovery_url="https://keycloak.$PLATFORM_DOMAIN/auth/realms/swirlit" \
   oidc_client_id="vault" \
   oidc_client_secret="$vault_oidc_client_secret" \
   default_role="platform-admin" >/dev/null
@@ -416,23 +425,20 @@ path "*" {
 }
 EOF
 
-cat <<'EOF' | vault_stdin_auth "$root_token" write auth/oidc/role/platform-admin >/dev/null
-{
-  "role_type": "oidc",
-  "bound_audiences": ["vault"],
-  "allowed_redirect_uris": [
-    "https://vault.swirlit.dev/ui/vault/auth/oidc/oidc/callback",
-    "http://localhost:8250/oidc/callback"
-  ],
-  "user_claim": "preferred_username",
-  "groups_claim": "groups",
-  "oidc_scopes": ["openid", "profile", "email", "groups"],
-  "bound_claims": {"groups": "platform-admins"},
-  "policies": ["platform-admin"],
-  "ttl": "1h",
-  "max_ttl": "8h"
-}
-EOF
+jq -n --arg redirect_uri "https://vault.$PLATFORM_DOMAIN/ui/vault/auth/oidc/oidc/callback" '
+  {
+    role_type: "oidc",
+    bound_audiences: ["vault"],
+    allowed_redirect_uris: [$redirect_uri, "http://localhost:8250/oidc/callback"],
+    user_claim: "preferred_username",
+    groups_claim: "groups",
+    oidc_scopes: ["openid", "profile", "email", "groups"],
+    bound_claims: {groups: "platform-admins"},
+    policies: ["platform-admin"],
+    ttl: "1h",
+    max_ttl: "8h"
+  }
+' | vault_stdin_auth "$root_token" write auth/oidc/role/platform-admin >/dev/null
 
 unset vault_oidc_client_secret
 unset keycloak_sso_secret_json keycloak_sso_defaults keycloak_sso_field

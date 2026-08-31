@@ -173,7 +173,7 @@ spec:
               key: SSO_DISPLAY_NAME
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
-            external_url 'https://gitlab.swirlit.dev'
+            external_url 'https://gitlab.__PUBLIC_DOMAIN__'
             gitlab_rails['nginx']['listen_port'] = 80
             gitlab_rails['nginx']['listen_https'] = false
             letsencrypt['enable'] = false
@@ -195,7 +195,7 @@ spec:
                   name: 'openid_connect',
                   scope: ['openid', 'profile', 'email', 'groups'],
                   response_type: 'code',
-                  issuer: 'https://keycloak.swirlit.dev/auth/realms/swirlit',
+                  issuer: 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit',
                   discovery: true,
                   client_auth_method: 'query',
                   uid_field: 'preferred_username',
@@ -203,12 +203,12 @@ spec:
                   client_options: {
                     identifier: 'gitlab',
                     secret: ENV['KEYCLOAK_CLIENT_SECRET'],
-                    redirect_uri: 'https://gitlab.swirlit.dev/users/auth/openid_connect/callback'
+                    redirect_uri: 'https://gitlab.__PUBLIC_DOMAIN__/users/auth/openid_connect/callback'
                   }
                 }
               }
             ]
-            registry_external_url 'https://registry.swirlit.dev'
+            registry_external_url 'https://registry.__PUBLIC_DOMAIN__'
             registry_nginx['listen_port'] = 5050
             registry_nginx['listen_https'] = false
             registry_nginx['proxy_set_headers'] = {

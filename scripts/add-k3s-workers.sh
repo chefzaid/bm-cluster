@@ -12,6 +12,13 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
+PROMPT_LIBRARY="$SCRIPT_DIR/lib/installer-prompts.sh"
+if [[ ! -r "$PROMPT_LIBRARY" ]]; then
+    echo "[ERROR] Shared installer prompt library not found: $PROMPT_LIBRARY" >&2
+    exit 1
+fi
+# shellcheck source=lib/installer-prompts.sh
+source "$PROMPT_LIBRARY"
 TRANSPORT_GUIDE_LIBRARY="$SCRIPT_DIR/lib/transport-guide.sh"
 if [[ ! -r "$TRANSPORT_GUIDE_LIBRARY" ]]; then
     echo "[ERROR] Shared transport guide not found: $TRANSPORT_GUIDE_LIBRARY" >&2
@@ -34,8 +41,11 @@ SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
+CLUSTER_TOPOLOGY_RECONCILER="$SCRIPT_DIR/reconcile-cluster-topology.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
 WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
+REQUESTED_WORKER_COUNT="${K3S_WORKER_COUNT:-}"
+CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 SERVER_URL=""
 SSH_USER="${USER:-}"
@@ -67,6 +77,20 @@ info()  { printf '\033[0;32m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*" >&2; }
 error() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
+control_plane_is_controller_only() {
+    kubectl get nodes -o json | jq -e '
+        [.items[] |
+            select((.metadata.labels | has("node-role.kubernetes.io/control-plane")) or
+                   (.metadata.labels | has("node-role.kubernetes.io/master")))] as $control_planes |
+        ($control_planes | length) > 0 and
+        all($control_planes[];
+            any(.spec.taints[]?;
+                (.key == "node-role.kubernetes.io/control-plane" or
+                 .key == "node-role.kubernetes.io/master") and
+                .effect == "NoSchedule"))
+    ' >/dev/null
+}
+
 usage() {
     cat <<'EOF'
 Add one or more Debian/Ubuntu machines to this K3s cluster as workers.
@@ -85,6 +109,9 @@ Options:
   --transport MODE          OVHcloud-only vrack, or hybrid/non-OVH tailscale
   --worker-ips CSV          Preconfigured OVHcloud vRack worker addresses
   --worker-hosts CSV        Tailscale bootstrap SSH hosts/IPs (one or more)
+  --worker-count COUNT      Number of workers to prompt for interactively
+  --control-plane-schedulable true|false|preserve
+                            Explicit post-enrollment control-plane scheduling mode
   --server-url URL          K3s URL using this control plane's private IPv4
   --ssh-user USER           Default SSH user (each server can override it)
   --ssh-port PORT           Default SSH port (each server can override it)
@@ -129,6 +156,10 @@ while [[ $# -gt 0 ]]; do
         --worker-ips=*)     WORKER_IPS="${1#*=}"; NON_INTERACTIVE=true ;;
         --worker-hosts)     shift; [[ $# -gt 0 ]] || error "Missing worker host list"; WORKER_HOSTS="$1"; NON_INTERACTIVE=true ;;
         --worker-hosts=*)   WORKER_HOSTS="${1#*=}"; NON_INTERACTIVE=true ;;
+        --worker-count)     shift; [[ $# -gt 0 ]] || error "Missing worker count"; REQUESTED_WORKER_COUNT="$1" ;;
+        --worker-count=*)   REQUESTED_WORKER_COUNT="${1#*=}" ;;
+        --control-plane-schedulable) shift; [[ $# -gt 0 ]] || error "Missing control-plane scheduling mode"; CONTROL_PLANE_SCHEDULABLE="$1" ;;
+        --control-plane-schedulable=*) CONTROL_PLANE_SCHEDULABLE="${1#*=}" ;;
         --server-url)       shift; [[ $# -gt 0 ]] || error "Missing value for --server-url"; SERVER_URL="$1" ;;
         --server-url=*)     SERVER_URL="${1#*=}" ;;
         --ssh-user)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-user"; SSH_USER="$1" ;;
@@ -172,10 +203,37 @@ done
 [[ -f "$K3S_APPARMOR_PROFILE" ]] || error "AppArmor profile not found: $K3S_APPARMOR_PROFILE"
 [[ -x "$TAILSCALE_CONFIGURATOR" ]] || error "Tailscale configurator not found or not executable: $TAILSCALE_CONFIGURATOR"
 [[ -x "$OVH_VRACK_CONFIGURATOR" ]] || error "OVHcloud vRack configurator not found or not executable: $OVH_VRACK_CONFIGURATOR"
+[[ -x "$CLUSTER_TOPOLOGY_RECONCILER" ]] || error "Cluster topology reconciler not found or not executable: $CLUSTER_TOPOLOGY_RECONCILER"
+[[ -z "$REQUESTED_WORKER_COUNT" || "$REQUESTED_WORKER_COUNT" =~ ^[1-9][0-9]*$ ]] || error "--worker-count must be a positive integer."
 command -v ssh >/dev/null 2>&1 || error "ssh is required."
 command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
+command -v jq >/dev/null 2>&1 || error "jq is required."
 kubectl cluster-info >/dev/null 2>&1 || error "Cannot reach the Kubernetes API with the current kubeconfig."
+if [[ -z "$CONTROL_PLANE_SCHEDULABLE" ]]; then
+    if control_plane_is_controller_only; then
+        CONTROL_PLANE_SCHEDULABLE=false
+        info "The control plane is already controller-only; preserving NoSchedule without another question."
+    else
+        [[ "$NON_INTERACTIVE" != "true" ]] || \
+            error "Set --control-plane-schedulable true|false|preserve for non-interactive enrollment."
+        installer_prompt_section "Post-enrollment control-plane role" \
+            "The change is applied only after every new worker is Ready."
+        if installer_prompt_yes_no \
+            "Switch the control plane to controller-only (NoSchedule) and keep Longhorn storage on workers?" \
+            Y false; then
+            CONTROL_PLANE_SCHEDULABLE=false
+        else
+            CONTROL_PLANE_SCHEDULABLE=true
+        fi
+    fi
+fi
+case "${CONTROL_PLANE_SCHEDULABLE,,}" in
+    1|true|yes|y|worker|controller-worker) CONTROL_PLANE_SCHEDULABLE=true ;;
+    0|false|no|n|controller|controller-only) CONTROL_PLANE_SCHEDULABLE=false ;;
+    preserve) CONTROL_PLANE_SCHEDULABLE=preserve ;;
+    *) error "--control-plane-schedulable must be true, false, or preserve." ;;
+esac
 [[ "$SSH_PORT" =~ ^[0-9]+$ && "$SSH_PORT" -ge 1 && "$SSH_PORT" -le 65535 ]] || error "Invalid SSH port: $SSH_PORT"
 [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
 if [[ $EUID -ne 0 ]]; then
@@ -183,31 +241,9 @@ if [[ $EUID -ne 0 ]]; then
     LOCAL_SUDO=(sudo)
 fi
 
-prompt() {
-    local variable_name="$1" prompt_text="$2" default_value="${3:-}" answer=""
-    read -rp "$prompt_text${default_value:+ [$default_value]}: " answer
-    printf -v "$variable_name" '%s' "${answer:-$default_value}"
-}
-
 select_transport() {
-    local answer=""
-    if [[ -n "$NODE_TRANSPORT" ]]; then
-        NODE_TRANSPORT="$(normalize_node_transport "$NODE_TRANSPORT")" || error "Transport must be vrack or tailscale."
-        return
-    fi
-    [[ "$NON_INTERACTIVE" != "true" ]] || error "--transport is required in non-interactive mode."
-    printf '%s\n' \
-        "Select the private node transport:" \
-        "  1) OVHcloud vRack (OVHcloud-only)" \
-        "  2) Tailscale (hybrid cloud or non-OVHcloud providers)"
-    while true; do
-        read -rp "Select 1 or 2 [1]: " answer
-        case "${answer:-1}" in
-            1|vrack|vRack|lan) NODE_TRANSPORT=vrack; return ;;
-            2|tailscale|ts) NODE_TRANSPORT=tailscale; return ;;
-            *) warn "Enter 1 for vRack or 2 for Tailscale." ;;
-        esac
-    done
+    installer_select_node_transport NODE_TRANSPORT "$NODE_TRANSPORT" vrack "$NON_INTERACTIVE" || \
+        error "Set --transport to vrack or tailscale."
 }
 
 detect_private_ip() {
@@ -224,6 +260,10 @@ detect_private_ip() {
     return 1
 }
 
+if [[ "$NON_INTERACTIVE" != "true" ]]; then
+    installer_prompt_section "Private worker transport" \
+        "Use one transport consistently for this control plane and all workers."
+fi
 select_transport
 if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
     if [[ "$TAILSCALE_API_TOKEN_STDIN" == "true" ]]; then
@@ -281,8 +321,7 @@ elif [[ -n "${K3S_JOIN_TOKEN:-}" ]]; then
     JOIN_TOKEN="$K3S_JOIN_TOKEN"
 else
     [[ "$NON_INTERACTIVE" != "true" ]] || error "Cannot read the server node token. Set K3S_JOIN_TOKEN or run on the control plane."
-    read -rsp "K3s join token (input hidden): " JOIN_TOKEN
-    printf '\n'
+    installer_prompt_secret JOIN_TOKEN "K3s join token (input hidden)"
 fi
 [[ -n "$JOIN_TOKEN" ]] || error "The K3s join token is empty."
 cleanup_credentials() {
@@ -296,24 +335,26 @@ cleanup_credentials() {
 trap cleanup_credentials EXIT HUP INT TERM
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    prompt SERVER_URL "K3s URL using this control plane's private IPv4 address" "$SERVER_URL"
-    prompt SSH_USER "Default worker SSH user" "$SSH_USER"
-    prompt SSH_PORT "Worker SSH port" "$SSH_PORT"
-    prompt IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
+    installer_prompt_section "Worker enrollment defaults" \
+        "These connection, network, label, and version values apply to every worker."
+    installer_prompt_value SERVER_URL "K3s URL using this control plane's private IPv4 address" "$SERVER_URL"
+    installer_prompt_value SSH_USER "Default worker SSH user" "$SSH_USER"
+    installer_prompt_value SSH_PORT "Worker SSH port" "$SSH_PORT"
+    installer_prompt_value IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
     [[ -z "$IDENTITY_FILE" || -f "$IDENTITY_FILE" ]] || error "SSH identity file does not exist: $IDENTITY_FILE"
     if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
-        prompt NODE_NETWORK_CIDR "Trusted vRack/private node CIDR (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
+        installer_prompt_value NODE_NETWORK_CIDR "Trusted vRack/private node CIDR (e.g. 10.0.0.0/24)" "$NODE_NETWORK_CIDR"
     fi
-    prompt COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
-    prompt COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
-    prompt K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
+    installer_prompt_value COMMON_LABELS "Labels for every worker, comma-separated (optional)" "$COMMON_LABELS"
+    installer_prompt_value COMMON_TAINTS "Taints for every worker, comma-separated (optional)" "$COMMON_TAINTS"
+    installer_prompt_value K3S_VERSION "Exact worker K3s version" "$K3S_VERSION"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
-        prompt NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)"
+        installer_prompt_value NODE_NETWORK_CIDR "Trusted private node CIDR required for worker UFW (e.g. 10.0.0.0/24)"
     done
 
-    worker_count=""
+    worker_count="$REQUESTED_WORKER_COUNT"
     while [[ ! "$worker_count" =~ ^[1-9][0-9]*$ ]]; do
-        prompt worker_count "Number of workers to add"
+        installer_prompt_value worker_count "Number of workers to add"
         [[ "$worker_count" =~ ^[1-9][0-9]*$ ]] || warn "Enter a positive whole number."
     done
 else
@@ -626,8 +667,8 @@ install_worker() {
     [[ "$node_registered" == "true" ]] || error "Worker '$node_name' did not register within 60 seconds."
     kubectl wait --for=condition=Ready "node/$node_name" --timeout=5m
     kubectl label "node/$node_name" \
-        node.swirlit.dev/role=worker \
-        node.swirlit.dev/exposure=local \
+        node.bm-cluster.io/role=worker \
+        node.bm-cluster.io/exposure=local \
         --overwrite >/dev/null
     kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb- >/dev/null 2>&1 || true
 }
@@ -669,17 +710,18 @@ if [[ "$NON_INTERACTIVE" == "true" ]]; then
     done
 else
     for ((index=1; index<=worker_count; index++)); do
-        printf '\nWorker %d of %d\n' "$index" "$worker_count"
+        installer_prompt_section "Worker $index of $worker_count" \
+            "Configure this server's SSH bootstrap, private network, and Kubernetes identity."
         worker_host=""
         if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
             worker_ssh_user="$DEFAULT_WORKER_SSH_USER"
             worker_ssh_port="$DEFAULT_WORKER_SSH_PORT"
             worker_identity_file="$DEFAULT_WORKER_IDENTITY_FILE"
-            prompt worker_host "Existing server IP or DNS name reachable over SSH (bootstrap only)"
+            installer_prompt_value worker_host "Existing server IP or DNS name reachable over SSH (bootstrap only)"
             [[ -n "$worker_host" ]] || error "A worker bootstrap SSH host is required."
-            prompt worker_ssh_user "SSH user for this server" "$worker_ssh_user"
-            prompt worker_ssh_port "SSH port for this server" "$worker_ssh_port"
-            prompt worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
+            installer_prompt_value worker_ssh_user "SSH user for this server" "$worker_ssh_user"
+            installer_prompt_value worker_ssh_port "SSH port for this server" "$worker_ssh_port"
+            installer_prompt_value worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
             [[ "$worker_identity_file" != "-" ]] || worker_identity_file=""
             SSH_USER="$worker_ssh_user"
             SSH_PORT="$worker_ssh_port"
@@ -690,7 +732,7 @@ else
             check_bootstrap_target "$bootstrap_target"
             detected_tailscale_name="$(remote_hostname "$bootstrap_target")"
             requested_tailscale_name=""
-            prompt requested_tailscale_name "Tailscale hostname for this server" "$detected_tailscale_name"
+            installer_prompt_value requested_tailscale_name "Tailscale hostname for this server" "$detected_tailscale_name"
             provision_tailscale_target "$bootstrap_target" "$requested_tailscale_name"
             target="$TAILSCALE_TARGET"
             worker_host="$TAILSCALE_WORKER_IP"
@@ -699,11 +741,11 @@ else
             worker_ssh_user="$DEFAULT_WORKER_SSH_USER"
             worker_ssh_port="$DEFAULT_WORKER_SSH_PORT"
             worker_identity_file="$DEFAULT_WORKER_IDENTITY_FILE"
-            prompt bootstrap_host "Existing OVHcloud server IP or DNS name reachable over SSH (bootstrap only)"
+            installer_prompt_value bootstrap_host "Existing OVHcloud server IP or DNS name reachable over SSH (bootstrap only)"
             [[ -n "$bootstrap_host" ]] || error "A worker bootstrap SSH host is required."
-            prompt worker_ssh_user "SSH user for this server" "$worker_ssh_user"
-            prompt worker_ssh_port "SSH port for this server" "$worker_ssh_port"
-            prompt worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
+            installer_prompt_value worker_ssh_user "SSH user for this server" "$worker_ssh_user"
+            installer_prompt_value worker_ssh_port "SSH port for this server" "$worker_ssh_port"
+            installer_prompt_value worker_identity_file "SSH private key for this server ('-' for agent/config)" "$worker_identity_file"
             [[ "$worker_identity_file" != "-" ]] || worker_identity_file=""
             SSH_USER="$worker_ssh_user"
             SSH_PORT="$worker_ssh_port"
@@ -714,24 +756,24 @@ else
             detected_name="$(remote_hostname "$bootstrap_target")"
             ovh_server=""
             if [[ "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]]; then
-                prompt ovh_server "OVHcloud Dedicated Server service name for this worker"
+                installer_prompt_value ovh_server "OVHcloud Dedicated Server service name for this worker"
             fi
             worker_host=""
             private_interface=""
             private_interface_mac=""
             vlan_id=""
-            prompt worker_host "Unique worker vRack RFC1918 address"
+            installer_prompt_value worker_host "Unique worker vRack RFC1918 address"
             if ! trusted_private_ipv4 "$worker_host" || tailscale_ipv4 "$worker_host"; then
                 error "vRack worker IP must be an RFC1918 IPv4 literal: $worker_host"
             fi
             cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_host" || error "Worker IP $worker_host is outside $NODE_NETWORK_CIDR"
             printf 'Interfaces reported by %s:\n' "$bootstrap_target"
             ssh "${ssh_options[@]}" "$bootstrap_target" 'ip -br link show'
-            prompt private_interface "OVHcloud private NIC name (blank to match API-reported MAC)"
-            prompt private_interface_mac "Expected OVHcloud private NIC MAC (recommended if API attachment is disabled)"
+            installer_prompt_value private_interface "OVHcloud private NIC name (blank to match API-reported MAC)"
+            installer_prompt_value private_interface_mac "Expected OVHcloud private NIC MAC (recommended if API attachment is disabled)"
             [[ -n "$private_interface" || -n "$private_interface_mac" || "$OVH_VRACK_AUTOMATE_ACCOUNT" == "true" ]] || \
                 error "Provide the OVHcloud private NIC name or MAC."
-            prompt vlan_id "Optional vRack VLAN ID (blank for untagged VLAN 0)"
+            installer_prompt_value vlan_id "Optional vRack VLAN ID (blank for untagged VLAN 0)"
             provision_vrack_target "$bootstrap_target" "$worker_host" "$private_interface" "$private_interface_mac" "$vlan_id" "$ovh_server"
             target="$VRACK_TARGET"
         fi
@@ -742,22 +784,16 @@ else
         worker_name=""
         worker_labels=""
         worker_taints=""
-        prompt worker_name "Unique Kubernetes node name" "$detected_name"
-        prompt worker_labels "Node labels, comma-separated (optional)" "$COMMON_LABELS"
-        prompt worker_taints "Node taints, comma-separated (optional)" "$COMMON_TAINTS"
+        installer_prompt_value worker_name "Unique Kubernetes node name" "$detected_name"
+        installer_prompt_value worker_labels "Node labels, comma-separated (optional)" "$COMMON_LABELS"
+        installer_prompt_value worker_taints "Node taints, comma-separated (optional)" "$COMMON_TAINTS"
         install_worker "$target" "$worker_name" "$worker_host" "$worker_labels" "$worker_taints" "$TARGET_CONTROL_PLANE_IP"
     done
 fi
 
-ready_nodes="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 ~ /^Ready/ {count++} END {print count+0}')"
-replica_count="$ready_nodes"
-(( replica_count > 3 )) && replica_count=3
-(( replica_count < 1 )) && replica_count=1
-if kubectl -n longhorn-system get settings.longhorn.io default-replica-count >/dev/null 2>&1; then
-    kubectl -n longhorn-system patch settings.longhorn.io default-replica-count \
-        --type=merge -p "{\"value\":\"$replica_count\"}" >/dev/null
-    info "Longhorn's default for new volumes is now $replica_count replica(s)."
-fi
+"$CLUSTER_TOPOLOGY_RECONCILER" \
+    --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
+    --update-longhorn-helm
 
 info "Worker enrollment complete."
 kubectl get nodes -o wide

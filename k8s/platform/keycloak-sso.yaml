@@ -363,43 +363,43 @@ data:
     }
 
     ensure_client oauth2-proxy false "$OAUTH2_PROXY_CLIENT_SECRET" \
-      '["https://keycloak.swirlit.dev/oauth2/callback"]' \
-      '["https://*.swirlit.dev"]' 'https://keycloak.swirlit.dev'
+      '["https://keycloak.__PUBLIC_DOMAIN__/oauth2/callback"]' \
+      '["https://*.__PUBLIC_DOMAIN__"]' 'https://keycloak.__PUBLIC_DOMAIN__'
     ensure_client gitlab false "$GITLAB_CLIENT_SECRET" \
-      '["https://gitlab.swirlit.dev/users/auth/openid_connect/callback"]' \
-      '["https://gitlab.swirlit.dev"]' 'https://gitlab.swirlit.dev'
+      '["https://gitlab.__PUBLIC_DOMAIN__/users/auth/openid_connect/callback"]' \
+      '["https://gitlab.__PUBLIC_DOMAIN__"]' 'https://gitlab.__PUBLIC_DOMAIN__'
     ensure_client cloudflare-access false "$CLOUDFLARE_ACCESS_CLIENT_SECRET" \
-      '["https://swirlit.cloudflareaccess.com/cdn-cgi/access/callback"]' \
-      '["https://swirlit.cloudflareaccess.com"]' 'https://swirlit.cloudflareaccess.com'
+      '["https://__CLOUDFLARE_ACCESS_TEAM_NAME__.cloudflareaccess.com/cdn-cgi/access/callback"]' \
+      '["https://__CLOUDFLARE_ACCESS_TEAM_NAME__.cloudflareaccess.com"]' 'https://__CLOUDFLARE_ACCESS_TEAM_NAME__.cloudflareaccess.com'
     ensure_client grafana false "$GRAFANA_CLIENT_SECRET" \
-      '["https://grafana.swirlit.dev/login/generic_oauth"]' \
-      '["https://grafana.swirlit.dev"]' 'https://grafana.swirlit.dev'
+      '["https://grafana.__PUBLIC_DOMAIN__/login/generic_oauth"]' \
+      '["https://grafana.__PUBLIC_DOMAIN__"]' 'https://grafana.__PUBLIC_DOMAIN__'
     ensure_client vault false "$VAULT_CLIENT_SECRET" \
-      '["https://vault.swirlit.dev/ui/vault/auth/oidc/oidc/callback","http://localhost:8250/oidc/callback"]' \
-      '["https://vault.swirlit.dev"]' 'https://vault.swirlit.dev'
+      '["https://vault.__PUBLIC_DOMAIN__/ui/vault/auth/oidc/oidc/callback","http://localhost:8250/oidc/callback"]' \
+      '["https://vault.__PUBLIC_DOMAIN__"]' 'https://vault.__PUBLIC_DOMAIN__'
     ensure_client kafka-ui false "$KAFKA_UI_CLIENT_SECRET" \
-      '["https://kafka.swirlit.dev/login/oauth2/code/keycloak"]' \
-      '["https://kafka.swirlit.dev"]' 'https://kafka.swirlit.dev'
+      '["https://kafka.__PUBLIC_DOMAIN__/login/oauth2/code/keycloak"]' \
+      '["https://kafka.__PUBLIC_DOMAIN__"]' 'https://kafka.__PUBLIC_DOMAIN__'
     ensure_client portainer false "$PORTAINER_CLIENT_SECRET" \
-      '["https://portainer.swirlit.dev"]' \
-      '["https://portainer.swirlit.dev"]' 'https://portainer.swirlit.dev'
+      '["https://portainer.__PUBLIC_DOMAIN__"]' \
+      '["https://portainer.__PUBLIC_DOMAIN__"]' 'https://portainer.__PUBLIC_DOMAIN__'
     # Odoo 19's bundled auth_oauth module uses the OAuth2 implicit response.
     # It therefore has no safe way to hold a client secret and is public.
     ensure_client odoo true '' \
-      '["https://odoo.swirlit.dev/auth_oauth/signin"]' \
-      '["https://odoo.swirlit.dev"]' 'https://odoo.swirlit.dev' true
+      '["https://odoo.__PUBLIC_DOMAIN__/auth_oauth/signin"]' \
+      '["https://odoo.__PUBLIC_DOMAIN__"]' 'https://odoo.__PUBLIC_DOMAIN__' true
     ensure_client argocd true '' \
-      '["https://argocd.swirlit.dev/auth/callback","https://argocd.swirlit.dev/pkce/verify","http://localhost:8085/auth/callback"]' \
-      '["https://argocd.swirlit.dev"]' 'https://argocd.swirlit.dev'
+      '["https://argocd.__PUBLIC_DOMAIN__/auth/callback","https://argocd.__PUBLIC_DOMAIN__/pkce/verify","http://localhost:8085/auth/callback"]' \
+      '["https://argocd.__PUBLIC_DOMAIN__"]' 'https://argocd.__PUBLIC_DOMAIN__'
     ensure_client devapp-web true '' \
-      '["https://devapp.swirlit.dev/*"]' \
-      '["https://devapp.swirlit.dev"]' 'https://devapp.swirlit.dev'
+      '["https://devapp.__PUBLIC_DOMAIN__/*"]' \
+      '["https://devapp.__PUBLIC_DOMAIN__"]' 'https://devapp.__PUBLIC_DOMAIN__'
     ensure_client thoughty-web true '' \
-      '["https://thoughty.swirlit.dev/*"]' \
-      '["https://thoughty.swirlit.dev"]' 'https://thoughty.swirlit.dev'
+      '["https://thoughty.__PUBLIC_DOMAIN__/*"]' \
+      '["https://thoughty.__PUBLIC_DOMAIN__"]' 'https://thoughty.__PUBLIC_DOMAIN__'
     ensure_client indezy-web true '' \
-      '["https://indezy.swirlit.dev/*"]' \
-      '["https://indezy.swirlit.dev"]' 'https://indezy.swirlit.dev'
+      '["https://indezy.__PUBLIC_DOMAIN__/*"]' \
+      '["https://indezy.__PUBLIC_DOMAIN__"]' 'https://indezy.__PUBLIC_DOMAIN__'
 
     expect_success "$(request GET "realms/$realm/groups?search=platform-admins&exact=true")"
     group_id="$(extract_id)"
@@ -533,6 +533,8 @@ data:
     master_admin_role="$(tr -d '\n' < "$response_file")"
     expect_success "$(request POST "realms/master/users/$master_user_id/role-mappings/realm" "[$master_admin_role]")"
 
+    unset token_response access_token
+
     echo "Keycloak realm '$realm' reconciled."
     echo "Keycloak master administrator '$SSO_BOOTSTRAP_USERNAME' reconciled."
 
@@ -638,17 +640,17 @@ spec:
           image: quay.io/oauth2-proxy/oauth2-proxy@sha256:87182a111468b419c262d690728df9fd0959de6e56c05f11f58b863f63d90081
           args:
             - --provider=keycloak-oidc
-            - --oidc-issuer-url=https://keycloak.swirlit.dev/auth/realms/swirlit
+            - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
             - --client-id=oauth2-proxy
-            - --redirect-url=https://keycloak.swirlit.dev/oauth2/callback
+            - --redirect-url=https://keycloak.__PUBLIC_DOMAIN__/oauth2/callback
             - --http-address=0.0.0.0:4180
             - --upstream=static://202
             - --email-domain=*
             - --allowed-group=platform-admins
             - --scope=openid profile email
             - --code-challenge-method=S256
-            - --cookie-domain=.swirlit.dev
-            - --whitelist-domain=.swirlit.dev
+            - --cookie-domain=.__PUBLIC_DOMAIN__
+            - --whitelist-domain=.__PUBLIC_DOMAIN__
             - --cookie-secure=true
             - --cookie-samesite=lax
             - --cookie-refresh=1h
@@ -658,7 +660,7 @@ spec:
             # shared internal Redis service and keep only a ticket in the
             # cross-subdomain cookie; this also makes both replicas consistent.
             - --session-store-type=redis
-            - --redis-connection-url=redis://redis.swirlit.internal:6379/1
+            - --redis-connection-url=redis://redis.__INTERNAL_DNS_ZONE__:6379/1
             - --reverse-proxy=true
             - --set-xauthrequest=true
             - --pass-access-token=true
@@ -715,10 +717,10 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [keycloak.swirlit.dev]
+    - hosts: [keycloak.__PUBLIC_DOMAIN__]
       secretName: swirlit-dev-tls
   rules:
-    - host: keycloak.swirlit.dev
+    - host: keycloak.__PUBLIC_DOMAIN__
       http:
         paths:
           - path: /oauth2

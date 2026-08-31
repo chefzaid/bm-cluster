@@ -7,6 +7,14 @@ set +x
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTROL_PLANE_INSTALLER="$SCRIPT_DIR/scripts/add-k3s-workers.sh"
 LOCAL_WORKER_INSTALLER="$SCRIPT_DIR/scripts/install-k3s-worker.sh"
+PROMPT_LIBRARY="$SCRIPT_DIR/scripts/lib/installer-prompts.sh"
+
+[[ -r "$PROMPT_LIBRARY" ]] || {
+    printf '\033[0;31m[ERROR]\033[0m Shared installer prompt library is missing: %s\n' "$PROMPT_LIBRARY" >&2
+    exit 1
+}
+# shellcheck source=scripts/lib/installer-prompts.sh
+source "$PROMPT_LIBRARY"
 
 error() { printf '\033[0;31m[ERROR]\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -65,6 +73,8 @@ case "${1:-}" in
 esac
 
 if [[ -z "$mode" ]]; then
+    installer_prompt_section "Worker installer mode" \
+        "Choose whether this assistant runs from the control plane or the worker."
     printf '%s\n' \
         "Where are you running this installer?" \
         "  1) On the control plane - add one or more workers remotely over SSH" \
