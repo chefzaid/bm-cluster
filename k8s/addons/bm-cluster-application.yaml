@@ -32,6 +32,7 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
+      - SkipDryRunOnMissingResource=true
       - PruneLast=true
       - RespectIgnoreDifferences=true
   revisionHistoryLimit: 10

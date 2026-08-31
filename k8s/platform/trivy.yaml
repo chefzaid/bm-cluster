@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-trivy-security-dashboard
+  namespace: infra
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: trivy-operator
+    app.kubernetes.io/part-of: bm-cluster
+data:
+  trivy-security.json: |
+    {
+      "uid": "trivy-security",
+      "title": "Trivy Security Reports",
+      "description": "Continuously generated vulnerability, configuration, RBAC, exposed-secret, infrastructure, and compliance findings from Trivy Operator.",
+      "tags": ["trivy", "security", "kubernetes", "provisioned"],
+      "timezone": "browser",
+      "schemaVersion": 41,
+      "version": 1,
+      "refresh": "1m",
+      "time": {"from": "now-24h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "label": "Namespace",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(trivy_image_vulnerabilities, namespace)", "refId": "TrivyNamespace"},
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "refresh": 1,
+            "current": {"text": "All", "value": ["$__all"]}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Critical Vulnerabilities",
+          "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"Critical\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "High Vulnerabilities",
+          "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(trivy_image_vulnerabilities{namespace=~\"$namespace\",severity=\"High\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "High/Critical Misconfigurations",
+          "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(trivy_resource_configaudits{namespace=~\"$namespace\",severity=~\"High|Critical\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "Exposed Secrets",
+          "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(trivy_image_exposedsecrets{namespace=~\"$namespace\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 5,
+          "type": "stat",
+          "title": "Failed Compliance Controls",
+          "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum(trivy_cluster_compliance{status=\"Fail\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 6,
+          "type": "stat",
+          "title": "Trivy Metrics Target",
+          "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "max(up{namespace=\"infra\",pod=~\"trivy-operator.*\"}) or vector(0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}], "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
+        },
+        {
+          "id": 7,
+          "type": "bargauge",
+          "title": "Vulnerabilities by Severity",
+          "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (severity) (trivy_image_vulnerabilities{namespace=~\"$namespace\"})", "legendFormat": "{{severity}}", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+          "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true}
+        },
+        {
+          "id": 8,
+          "type": "bargauge",
+          "title": "Configuration Findings by Severity",
+          "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (severity) (trivy_resource_configaudits{namespace=~\"$namespace\"})", "legendFormat": "{{severity}}", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+          "options": {"orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true}
+        },
+        {
+          "id": 9,
+          "type": "table",
+          "title": "Vulnerability Report Summary by Workload",
+          "gridPos": {"x": 0, "y": 12, "w": 24, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "sum by (namespace, resource_kind, resource_name, container_name, severity) (trivy_image_vulnerabilities{namespace=~\"$namespace\"})", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 10,
+          "type": "table",
+          "title": "Detailed High/Critical Vulnerabilities",
+          "gridPos": {"x": 0, "y": 21, "w": 24, "h": 11},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_vulnerability_id{namespace=~\"$namespace\",severity=~\"High|Critical\"}", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 11,
+          "type": "table",
+          "title": "Configuration Audit Findings",
+          "gridPos": {"x": 0, "y": 32, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_configaudits_info{namespace=~\"$namespace\",config_audit_success=\"false\"}", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 12,
+          "type": "table",
+          "title": "RBAC Assessment Findings",
+          "gridPos": {"x": 12, "y": 32, "w": 12, "h": 10},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_rbacassessments_info{namespace=~\"$namespace\",rbac_assessment_success=\"false\"}", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 13,
+          "type": "table",
+          "title": "Exposed Secret Findings",
+          "gridPos": {"x": 0, "y": 42, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_exposedsecrets_info{namespace=~\"$namespace\"}", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 14,
+          "type": "table",
+          "title": "Infrastructure Assessment Findings",
+          "gridPos": {"x": 12, "y": 42, "w": 12, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_infraassessments_info{namespace=~\"$namespace\",infra_assessment_success=\"false\"}", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        },
+        {
+          "id": 15,
+          "type": "table",
+          "title": "Cluster Compliance Reports",
+          "gridPos": {"x": 0, "y": 51, "w": 24, "h": 9},
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "targets": [{"refId": "A", "expr": "trivy_compliance_info", "instant": true, "format": "table"}],
+          "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
+          "options": {"showHeader": true, "cellHeight": "sm"}
+        }
+      ]
+    }

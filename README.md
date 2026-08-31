@@ -12,6 +12,7 @@ Odoo.
 - PostgreSQL, MongoDB, Redis, and Kafka in KRaft mode
 - Keycloak, GitLab CI/CD, GitLab Container and Package Registries, ArgoCD, and SonarQube
 - Prometheus, Grafana, Elasticsearch, Logstash, Kibana, Fluent Bit, and Filebeat
+- Trivy Operator with continuous vulnerability, configuration, RBAC, exposed-secret, infrastructure, and compliance reports
 - DBGate, Kafbat UI, Portainer CE, and Odoo Community
 - Homepage service catalog and Kubernetes status dashboard
 - UFW on every node, Fail2ban and CrowdSec on the internet-facing control plane, and control-plane Lynis audits
@@ -28,6 +29,9 @@ values into namespace-scoped Kubernetes Secrets. Longhorn provides persistent
 storage. Prometheus collects node, Kubernetes object, pod, container, and
 annotation-enabled application metrics; Grafana includes a provisioned cluster
 dashboard and loads application-owned dashboards from labeled ConfigMaps.
+Trivy Operator continuously scans cluster workloads and controls, keeps its
+Kubernetes-native reports current, and publishes both summary and detailed
+finding metrics to the provisioned **Trivy Security Reports** Grafana dashboard.
 Fluent Bit ships Kubernetes container logs with namespace, pod, container, and
 label metadata to Elasticsearch for Kibana discovery. A control-plane Filebeat
 agent separately ships structured Lynis audit records through Logstash.
@@ -143,8 +147,10 @@ The three application repositories use one bootstrap and operator-reconciliation
 Each application pipeline exposes ordered `build`, `verify`, `release`, and
 `version` stages. Compilation and package validation are required; unit tests
 and the 80 percent coverage policy fail only the non-blocking test job. Manual
-E2E remains independent; quality/security reporting is an optional manual branch
-in standard mode and runs automatically as a non-blocking branch in full mode.
+E2E remains independent; `02-quality` and the separately runnable `03-security`
+Trivy scan are optional manual branches in standard mode and run automatically
+as non-blocking branches in full mode. Numeric naming places security after
+quality in the verify-stage display without making it depend on quality.
 Release depends on the required build path, deploy depends on release, and the
 manual major-version action is never allowed to fail silently.
 
@@ -547,6 +553,14 @@ and copies the Kubernetes `app` label to a keyword field. Kibana provisions an
 tails `/var/log/lynis-report.dat` on the control plane, Logstash parses its
 key/value and warning/suggestion fields, and Kibana provisions a **Lynis
 Security Audits** dashboard with a hardening-index trend and finding details.
+Trivy Operator runs in `infra`, scans current workload revisions across all
+namespaces, and refreshes image/SBOM, configuration, RBAC, exposed-secret,
+infrastructure, and cluster-compliance reports. Prometheus scrapes its annotated
+metrics endpoint; Grafana's **Trivy Security Reports** dashboard shows severity
+totals plus workload, CVE/package/fix, policy, RBAC, secret-metadata,
+infrastructure, and compliance detail. The dashboard never exposes discovered
+secret values. Inspect the source reports directly with, for example,
+`kubectl get vulnerabilityreports,configauditreports,exposedsecretreports -A`.
 This keeps
 platform discovery independent of application names; app repositories own their
 metrics endpoints, structured stdout format, and optional detailed dashboards.
@@ -771,7 +785,7 @@ EditorConfig and Git attributes keep text formatting portable.
 | `k8s/platform/` | Infrastructure services, observability, ingress, Vault integration, and bootstrap jobs |
 | `k8s/apps/` | Repository-owned application resources |
 | `k8s/addons/` | Optional cluster add-ons and their manually triggered jobs |
-| `k8s/Chart.yaml` | Argo CD Helm entry point that renders the selected public/private domains |
+| `k8s/Chart.yaml` | Argo CD Helm entry point that renders the selected public/private domains and vendors the pinned Trivy Operator dependency |
 | `ansible/` | Ansible deployment entry point |
 
 ## Security notes
@@ -779,6 +793,7 @@ EditorConfig and Git attributes keep text formatting portable.
 - Keep PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and Prometheus internal.
 - Keep `internal.<your-domain>` in CoreDNS only; never publish it through Cloudflare or public DNS.
 - Keep administrative UI hostnames behind Cloudflare Access.
+- Review Trivy's Grafana findings and Kubernetes report resources regularly; keep the scanner/operator images and vendored chart pinned during upgrades.
 - Keep both Vault audit devices enabled and alert on audit-write failures or audit-volume pressure.
 - Revoke short-lived setup tokens after use and rotate bootstrap credentials.
 - Keep only required public ports open and update Kubernetes workloads regularly.

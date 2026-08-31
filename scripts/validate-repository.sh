@@ -522,6 +522,20 @@ else
     fail "Prometheus alerts proactively route to the managed GitLab endpoint"
 fi
 
+if grep -Fq 'name: trivy-operator' "$K8S_ROOT/Chart.yaml" &&
+   grep -Fq 'version: 0.36.0' "$K8S_ROOT/Chart.yaml" &&
+   grep -Fq 'trivy-operator-0.36.0.tgz' < <(find "$K8S_ROOT/charts" -maxdepth 1 -type f -printf '%f\n') &&
+   grep -Fq 'metricsVulnIdEnabled: true' "$K8S_ROOT/values.yaml" &&
+   grep -Fq 'prometheus.io/scrape: "true"' "$K8S_ROOT/values.yaml" &&
+   grep -Fq '0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9' "$K8S_ROOT/values.yaml" &&
+   grep -Fq 'name: grafana-trivy-security-dashboard' "$K8S_ROOT/platform/trivy.yaml" &&
+   grep -Fq 'trivy_vulnerability_id' "$K8S_ROOT/platform/trivy.yaml" &&
+   grep -Fq 'trivy_compliance_info' "$K8S_ROOT/platform/trivy.yaml"; then
+    pass "Trivy Operator is pinned and its detailed findings are provisioned in Grafana"
+else
+    fail "Trivy Operator is pinned and its detailed findings are provisioned in Grafana"
+fi
+
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |
     awk 'index($0, ".__PUBLIC_DOMAIN__") == length($0) - length(".__PUBLIC_DOMAIN__") + 1 {sub("\\.__PUBLIC_DOMAIN__$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"

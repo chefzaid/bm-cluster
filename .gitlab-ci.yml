@@ -62,6 +62,9 @@ verify:gitops:
 
 verify:delivery-platform:
   stage: verify
+  needs:
+    - job: verify:gitops
+      artifacts: false
   image: "docker.io/library/alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
   cache:
     key: bm-cluster-alpine-tools-v1
@@ -76,12 +79,22 @@ verify:delivery-platform:
     - curl --fail --silent --show-error http://gitlab.infra.svc.cluster.local/-/readiness >/dev/null
     - curl --fail --silent --show-error http://prometheus.infra.svc.cluster.local:9090/-/ready >/dev/null
     - curl --fail --silent --show-error http://grafana.infra.svc.cluster.local:3000/api/health | jq -e '.database == "ok"' >/dev/null
+    - kubectl rollout status deployment/trivy-operator -n infra --timeout=300s
+    - kubectl rollout status statefulset/trivy-server -n infra --timeout=300s
+    - kubectl get crd vulnerabilityreports.aquasecurity.github.io configauditreports.aquasecurity.github.io exposedsecretreports.aquasecurity.github.io >/dev/null
+    - kubectl get configmap grafana-trivy-security-dashboard -n infra >/dev/null
+    - curl --fail --silent --show-error http://trivy-operator.infra.svc.cluster.local/metrics | grep -q '^trivy_'
     - curl --fail --silent --show-error --user "$ELASTICSEARCH_CI_USERNAME:$ELASTICSEARCH_CI_PASSWORD" http://elasticsearch.infra.svc.cluster.local:9200/_cluster/health | jq -e '.status == "green" or .status == "yellow"' >/dev/null
     - test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://gitlab-registry.infra.svc.cluster.local:5050/v2/)" = "401"
     - kubectl get configmap grafana-gitlab-delivery-dashboard -n infra >/dev/null
     - |
       curl --get --fail --silent --show-error \
         --data-urlencode 'query=max(up{namespace="infra",app="gitlab"})' \
+        http://prometheus.infra.svc.cluster.local:9090/api/v1/query |
+        jq -e '.status == "success" and (.data.result[0].value[1] | tonumber) == 1' >/dev/null
+    - |
+      curl --get --fail --silent --show-error \
+        --data-urlencode 'query=max(up{namespace="infra",pod=~"trivy-operator.*"})' \
         http://prometheus.infra.svc.cluster.local:9090/api/v1/query |
         jq -e '.status == "success" and (.data.result[0].value[1] | tonumber) == 1' >/dev/null
     - |
