@@ -193,6 +193,11 @@ spec:
             gitlab_rails['gitlab_shell_ssh_port'] = 22
             gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '10.42.0.0/16']
             gitlab_rails['dependency_proxy_enabled'] = true
+            # This single-node installation serves a small team. GitLab's
+            # automatic sizing sees the host CPU count and otherwise starts
+            # eight ~1 GiB Puma workers, leaving too little memory for CI.
+            puma['worker_processes'] = 2
+            sidekiq['concurrency'] = 10
             # No GitLab Kubernetes agents are registered. Disable KAS so the
             # single-node instance does not continuously probe an unused API.
             gitlab_rails['gitlab_kas_enabled'] = false

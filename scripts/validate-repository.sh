@@ -503,12 +503,14 @@ else
     fail "Kibana maps Keycloak administrators to distinct native Elastic sessions"
 fi
 
-if grep -Fq "gitlab_rails['gitlab_kas_enabled'] = false" "$K8S_ROOT/platform/gitlab.yaml" &&
+if grep -Fq "puma['worker_processes'] = 2" "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq "sidekiq['concurrency'] = 10" "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq "gitlab_rails['gitlab_kas_enabled'] = false" "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq "gitlab_kas['enable'] = false" "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'publishNotReadyAddresses: true' "$K8S_ROOT/platform/gitlab.yaml"; then
-    pass "unused GitLab KAS is disabled and Registry readiness is decoupled from Rails"
+    pass "GitLab is right-sized, unused KAS is disabled, and Registry readiness is decoupled from Rails"
 else
-    fail "unused GitLab KAS is disabled and Registry readiness is decoupled from Rails"
+    fail "GitLab is right-sized, unused KAS is disabled, and Registry readiness is decoupled from Rails"
 fi
 
 if grep -Fq 'name: alertmanager-config' "$K8S_ROOT/platform/monitoring.yaml" &&
