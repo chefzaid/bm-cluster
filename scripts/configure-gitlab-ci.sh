@@ -14,11 +14,9 @@ RUNNER_DESCRIPTION="${RUNNER_DESCRIPTION:-bm-cluster-kubernetes}"
 RUNNER_TAGS="${RUNNER_TAGS:-bm-cluster,kubernetes}"
 RETENTION_TOKEN_NAME="${RETENTION_TOKEN_NAME:-bm-cluster-registry-retention}"
 RETENTION_TOKEN_LIFETIME_DAYS="${RETENTION_TOKEN_LIFETIME_DAYS:-364}"
-# GitLab requires max_artifacts_size to be a positive signed 32-bit integer;
-# unlike its ingress setting, zero means zero bytes rather than unlimited. Use
-# the largest value GitLab can store so artifact uploads are constrained only
-# by the instance's available storage.
-MAX_ARTIFACTS_SIZE_MB=2147483647
+# Bound a single job artifact archive so a malformed path or unexpectedly large
+# report cannot exhaust the self-hosted GitLab data volume in one upload.
+MAX_ARTIFACTS_SIZE_MB="${MAX_ARTIFACTS_SIZE_MB:-512}"
 VAULT_POD="${VAULT_POD:-vault-0}"
 VAULT_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +31,8 @@ for command_name in curl jq kubectl sudo; do
 done
 [[ "$CONFIGURE_REPOSITORY_SYNC" =~ ^(true|false)$ ]] || \
   fail "CONFIGURE_REPOSITORY_SYNC must be true or false"
+[[ "$MAX_ARTIFACTS_SIZE_MB" =~ ^[1-9][0-9]*$ ]] || \
+  fail "MAX_ARTIFACTS_SIZE_MB must be a positive integer"
 [[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
 source "$GITLAB_TOKEN_LIBRARY"

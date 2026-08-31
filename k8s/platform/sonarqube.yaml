@@ -83,18 +83,49 @@ spec:
                 --set=sso_display_name="$SSO_DISPLAY_NAME" <<'SQL'
               UPDATE users
               SET login = :'sso_email',
-                  name = :'sso_display_name',
+                  name = CASE
+                    WHEN name IS NULL OR btrim(name) = '' OR name IN (login, email)
+                      THEN :'sso_display_name'
+                    ELSE name
+                  END,
                   email = :'sso_email',
                   external_login = :'sso_email',
                   external_id = :'sso_email',
                   external_identity_provider = 'sonarqube',
                   updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
               WHERE email = :'sso_email'
-                AND login <> :'sso_email'
                 AND external_identity_provider = 'sonarqube'
                 AND NOT EXISTS (
-                  SELECT 1 FROM users WHERE login = :'sso_email'
+                  SELECT 1 FROM users target
+                  WHERE target.login = :'sso_email'
+                    AND target.uuid <> users.uuid
                 );
+
+              -- Header SSO refreshes groups and email every five minutes. Keep
+              -- that security behavior while preventing its email-valued name
+              -- header from destroying a locally edited display name.
+              CREATE OR REPLACE FUNCTION bm_cluster_preserve_delegated_full_name()
+              RETURNS trigger
+              LANGUAGE plpgsql
+              AS '
+              BEGIN
+                IF OLD.external_identity_provider = ''sonarqube''
+                   AND NEW.external_identity_provider = ''sonarqube''
+                   AND NEW.name IN (NEW.login, NEW.email)
+                   AND OLD.name IS NOT NULL
+                   AND btrim(OLD.name) <> ''''
+                   AND OLD.name NOT IN (OLD.login, OLD.email) THEN
+                  NEW.name := OLD.name;
+                END IF;
+                RETURN NEW;
+              END;
+              ';
+
+              DROP TRIGGER IF EXISTS bm_cluster_preserve_delegated_full_name ON users;
+              CREATE TRIGGER bm_cluster_preserve_delegated_full_name
+              BEFORE UPDATE OF name ON users
+              FOR EACH ROW
+              EXECUTE FUNCTION bm_cluster_preserve_delegated_full_name();
               SQL
           resources:
             requests:

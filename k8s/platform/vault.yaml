@@ -507,6 +507,32 @@ spec:
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
+  name: kibana-keycloak-proxy-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: kibana-keycloak-proxy-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: KIBANA_PROXY_USERNAME
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_keycloak_proxy_username
+    - secretKey: KIBANA_PROXY_PASSWORD
+      remoteRef:
+        key: infra/elasticsearch
+        property: kibana_keycloak_proxy_password
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
   name: kibana-bootstrap-credentials
   namespace: apps
   annotations:

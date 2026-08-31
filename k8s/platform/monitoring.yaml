@@ -1,3 +1,25 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: monitoring-alert-credentials
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: monitoring-alert-credentials
+    creationPolicy: Owner
+  data:
+    - secretKey: token
+      remoteRef:
+        key: infra/monitoring
+        property: gitlab_alert_token
+
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -288,6 +310,14 @@ data:
       scrape_interval: 15s
       evaluation_interval: 15s
 
+    rule_files:
+      - /etc/prometheus/rules.yaml
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ["alertmanager.__INTERNAL_DNS_ZONE__:9093"]
+
     scrape_configs:
       - job_name: prometheus
         static_configs:
@@ -376,6 +406,233 @@ data:
             target_label: node
           - source_labels: [__meta_kubernetes_pod_label_app]
             target_label: app
+
+  rules.yaml: |
+    groups:
+      - name: bm-cluster.capacity
+        rules:
+          - alert: NodeFilesystemSpaceLow
+            expr: |
+              (
+                node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+                /
+                node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}
+              ) < 0.20
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Filesystem free space is below 20%
+              description: '{{ $labels.instance }} mount {{ $labels.mountpoint }} has {{ $value | humanizePercentage }} free.'
+          - alert: NodeFilesystemSpaceCritical
+            expr: |
+              (
+                node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+                /
+                node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}
+              ) < 0.10
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: Filesystem free space is below 10%
+              description: '{{ $labels.instance }} mount {{ $labels.mountpoint }} is critically low on space.'
+          - alert: NodeFilesystemFillingWithinDay
+            expr: |
+              predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}[6h], 24 * 3600) < 0
+              and node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"} < 0.30
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: Filesystem is predicted to fill within 24 hours
+              description: '{{ $labels.instance }} mount {{ $labels.mountpoint }} is consuming its remaining space quickly.'
+      - name: bm-cluster.kubernetes
+        rules:
+          - alert: KubernetesDeploymentUnavailable
+            expr: kube_deployment_spec_replicas > kube_deployment_status_replicas_available
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: Kubernetes Deployment has unavailable replicas
+              description: '{{ $labels.namespace }}/{{ $labels.deployment }} has fewer available replicas than desired.'
+          - alert: KubernetesStatefulSetUnavailable
+            expr: kube_statefulset_replicas > kube_statefulset_status_replicas_ready
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: Kubernetes StatefulSet has unavailable replicas
+              description: '{{ $labels.namespace }}/{{ $labels.statefulset }} has fewer ready replicas than desired.'
+          - alert: KubernetesPodCrashLooping
+            expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[10m]) > 0
+            for: 10m
+            labels:
+              severity: critical
+            annotations:
+              summary: Pod is crash-looping
+              description: '{{ $labels.namespace }}/{{ $labels.pod }} container {{ $labels.container }} is in CrashLoopBackOff.'
+          - alert: KubernetesContainerOOMKilled
+            expr: increase(kube_pod_container_status_restarts_total[15m]) > 0 and on(namespace, pod, container) kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+            labels:
+              severity: warning
+            annotations:
+              summary: Container restarted after an OOM kill
+              description: '{{ $labels.namespace }}/{{ $labels.pod }} container {{ $labels.container }} exhausted its memory limit.'
+          - alert: KubernetesPersistentVolumeReleased
+            expr: kube_persistentvolume_status_phase{phase="Released"} == 1
+            for: 30m
+            labels:
+              severity: warning
+            annotations:
+              summary: Released persistent volume still consumes storage
+              description: 'PersistentVolume {{ $labels.persistentvolume }} has remained Released for at least 30 minutes.'
+          - alert: KubernetesPersistentVolumeClaimPending
+            expr: kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+            for: 15m
+            labels:
+              severity: critical
+            annotations:
+              summary: PersistentVolumeClaim is pending
+              description: '{{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} has not bound to storage.'
+          - alert: KubernetesJobFailed
+            expr: kube_job_status_failed > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Kubernetes Job failed
+              description: '{{ $labels.namespace }}/{{ $labels.job_name }} has a failed execution.'
+      - name: bm-cluster.monitoring
+        rules:
+          - alert: PrometheusTargetDown
+            expr: up == 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: Prometheus target is down
+              description: '{{ $labels.job }} target {{ $labels.instance }} has been unreachable for ten minutes.'
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: infra
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: gitlab
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+    receivers:
+      - name: gitlab
+        webhook_configs:
+          - send_resolved: true
+            url: http://gitlab.__INTERNAL_DNS_ZONE__/swirlit/bm-cluster/alerts/notify/cluster-prometheus/clusterprometheus.json
+            http_config:
+              authorization:
+                type: Bearer
+                credentials_file: /etc/alertmanager/secrets/token
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: infra
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: http
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: infra
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: quay.io/prometheus/alertmanager@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: http
+              containerPort: 9093
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/alertmanager.yml
+              subPath: alertmanager.yml
+              readOnly: true
+            - name: credentials
+              mountPath: /etc/alertmanager/secrets
+              readOnly: true
+            - name: data
+              mountPath: /alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: credentials
+          secret:
+            secretName: monitoring-alert-credentials
+            items:
+              - key: token
+                path: token
+        - name: data
+          emptyDir:
+            sizeLimit: 128Mi
 
 ---
 apiVersion: v1
@@ -474,6 +731,9 @@ spec:
             - name: config
               mountPath: /etc/prometheus/prometheus.yml
               subPath: prometheus.yml
+            - name: config
+              mountPath: /etc/prometheus/rules.yaml
+              subPath: rules.yaml
             - name: data
               mountPath: /prometheus
       volumes:

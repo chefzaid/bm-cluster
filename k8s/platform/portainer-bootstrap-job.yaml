@@ -1,10 +1,14 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: portainer-bootstrap-
+  name: portainer-bootstrap
   namespace: infra
   labels:
     app: portainer-bootstrap
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
 spec:
   backoffLimit: 6
   activeDeadlineSeconds: 360
@@ -98,24 +102,58 @@ spec:
 
               headers = {"Authorization": "Bearer " + token}
 
-              # Pre-create the bootstrap identity as an administrator. Portainer
+              def api(path, method="GET", payload=None, timeout=10):
+                  body = None if payload is None else json.dumps(payload).encode()
+                  request = urllib.request.Request(
+                      base_url + path,
+                      data=body,
+                      headers={
+                          **headers,
+                          **({"Content-Type": "application/json"} if body is not None else {}),
+                      },
+                      method=method,
+                  )
+                  response = urllib.request.urlopen(request, timeout=timeout)
+                  raw = response.read()
+                  return json.loads(raw) if raw else None
+
+              # Reconcile the bootstrap identity as an administrator. Portainer
               # links the matching preferred_username after the OAuth callback.
-              user_body = json.dumps({
+              # Subsequent GitOps syncs also reassert its role and managed
+              # credential instead of treating a 409 as success.
+              settings = api("/settings")
+              user_body = {
                   "Username": sso_username,
-                  "Password": sso_password,
+                  # Portainer only permits a password during creation while
+                  # internal authentication is active. The authenticated update
+                  # below works after OAuth has become authoritative.
+                  "Password": sso_password if settings["AuthenticationMethod"] == 1 else "",
                   "Role": 1,
-              }).encode()
-              request = urllib.request.Request(
-                  base_url + "/users",
-                  data=user_body,
-                  headers={**headers, "Content-Type": "application/json"},
-              )
+              }
               try:
-                  urllib.request.urlopen(request, timeout=10).read()
+                  managed_user = api("/users", "POST", user_body)
                   print("Created the Portainer SSO administrator.")
               except urllib.error.HTTPError as error:
                   if error.code != 409:
                       raise
+
+                  managed_user = next(
+                      (item for item in api("/users") if item["Username"] == sso_username),
+                      None,
+                  )
+                  if managed_user is None:
+                      raise RuntimeError("Portainer reported an existing SSO user that could not be found")
+
+              api(
+                  f"/users/{managed_user['Id']}",
+                  "PUT",
+                  {
+                      "Username": sso_username,
+                      "NewPassword": sso_password,
+                      "Role": 1,
+                  },
+              )
+              print("Reconciled the Portainer SSO administrator role and credential.")
 
               oauth_body = json.dumps({
                   "AuthenticationMethod": 3,
@@ -136,13 +174,7 @@ spec:
                       "AuthStyle": 0,
                   },
               }).encode()
-              request = urllib.request.Request(
-                  base_url + "/settings",
-                  data=oauth_body,
-                  headers={**headers, "Content-Type": "application/json"},
-                  method="PUT",
-              )
-              urllib.request.urlopen(request, timeout=10).read()
+              api("/settings", "PUT", json.loads(oauth_body))
               print("Configured Portainer Keycloak OAuth SSO.")
 
               request = urllib.request.Request(base_url + "/endpoints", headers=headers)

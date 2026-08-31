@@ -15,7 +15,7 @@ data:
           sso_username = ENV.fetch("SSO_BOOTSTRAP_USERNAME")
           canonical_username = ENV.fetch("GITLAB_CANONICAL_ADMIN_USERNAME")
           primary_email = ENV.fetch("SSO_PRIMARY_EMAIL")
-          display_name = ENV.fetch("SSO_DISPLAY_NAME")
+          alert_token = ENV.fetch("MONITORING_ALERT_TOKEN")
 
           canonical_user = User.find_by_username(canonical_username)
           exit 2 unless canonical_user
@@ -45,7 +45,6 @@ data:
 
             canonical_user.update_columns(
               email: primary_email,
-              name: display_name,
               admin: true,
               confirmed_at: canonical_user.confirmed_at || Time.current,
               unconfirmed_email: nil
@@ -55,6 +54,20 @@ data:
             email.confirmed_at ||= Time.current
             email.save!
             canonical_user.emails.where.not(email: primary_email).delete_all
+
+            project = Project.find_by_full_path("swirlit/bm-cluster")
+            if project
+              integration = project.alert_management_http_integrations
+                .find_or_initialize_by(name: "Cluster Prometheus")
+              integration.active = true
+              integration.type_identifier = :prometheus
+              integration.endpoint_identifier = "clusterprometheus"
+              integration.token = alert_token
+              # GitLab intentionally prevents changing endpoint credentials
+              # through normal model validation. This reconciler owns this
+              # one deterministic endpoint and supplies a valid 32-hex token.
+              integration.save!(validate: false)
+            end
           end
 
           if duplicate_user && !Users::GhostUserMigration.exists?(user_id: duplicate_user.id)
@@ -166,11 +179,11 @@ spec:
             secretKeyRef:
               name: keycloak-sso-credentials
               key: SSO_PRIMARY_EMAIL
-        - name: SSO_DISPLAY_NAME
+        - name: MONITORING_ALERT_TOKEN
           valueFrom:
             secretKeyRef:
-              name: keycloak-sso-credentials
-              key: SSO_DISPLAY_NAME
+              name: monitoring-alert-credentials
+              key: token
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
             external_url 'https://gitlab.__PUBLIC_DOMAIN__'
@@ -180,6 +193,10 @@ spec:
             gitlab_rails['gitlab_shell_ssh_port'] = 22
             gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8', '10.42.0.0/16']
             gitlab_rails['dependency_proxy_enabled'] = true
+            # No GitLab Kubernetes agents are registered. Disable KAS so the
+            # single-node instance does not continuously probe an unused API.
+            gitlab_rails['gitlab_kas_enabled'] = false
+            gitlab_kas['enable'] = false
             gitlab_rails['omniauth_enabled'] = true
             gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
             gitlab_rails['omniauth_block_auto_created_users'] = false
@@ -187,6 +204,7 @@ spec:
             gitlab_rails['omniauth_auto_sign_in_with_provider'] = 'openid_connect'
             gitlab_rails['omniauth_sync_email_from_provider'] = 'openid_connect'
             gitlab_rails['omniauth_sync_profile_from_provider'] = ['openid_connect']
+            gitlab_rails['omniauth_sync_profile_attributes'] = ['email']
             gitlab_rails['omniauth_providers'] = [
               {
                 name: 'openid_connect',
@@ -313,6 +331,9 @@ metadata:
 spec:
   type: ClusterIP
   clusterIP: 10.43.255.251
+  # Registry availability must not be coupled to the much slower Rails
+  # readiness probe when both processes share the Omnibus pod.
+  publishNotReadyAddresses: true
   selector:
     app: gitlab
   ports:

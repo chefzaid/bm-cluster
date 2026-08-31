@@ -21,9 +21,7 @@
 {{ include "bm-cluster.render" (list $ $path) }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "platform/*.yaml" }}
-{{- if ne $path "platform/portainer-bootstrap-job.yaml" }}
 {{ include "bm-cluster.render" (list $ $path) }}
-{{- end }}
 {{- end }}
 {{- if .Values.appsEnabled }}
 {{- range $path, $_ := .Files.Glob "apps/*.yaml" }}

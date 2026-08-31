@@ -331,7 +331,8 @@ spec:
 
               admin = env.ref('base.user_admin')
               admin.write({
-                  'login': 'admin',
+                  'login': os.environ['SSO_PRIMARY_EMAIL'],
+                  'email': os.environ['SSO_PRIMARY_EMAIL'],
                   'password': os.environ['ODOO_ADMIN_PASSWORD'],
               })
               params = env['ir.config_parameter'].sudo()
@@ -388,6 +389,11 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_ADMIN_PASSWORD
+            - name: SSO_PRIMARY_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: odoo-secret
+                  key: SSO_PRIMARY_EMAIL
           resources:
             requests:
               cpu: 100m

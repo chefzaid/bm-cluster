@@ -75,6 +75,8 @@
       {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_MESH_NAME type=properties file=' ~ platform_config_file) }}
     default_tailscale_key_expiry: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_TAILSCALE_AUTH_KEY_EXPIRY_SECONDS type=properties file=' ~ platform_config_file) }}
+    default_cloudflare_node_dns_label: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_CLOUDFLARE_NODE_DNS_LABEL type=properties file=' ~ platform_config_file) }}
 
     server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
     platform_domain: "{{ lookup('ansible.builtin.env', 'PLATFORM_DOMAIN') | lower }}"
@@ -82,6 +84,9 @@
       {{ lookup('ansible.builtin.env', 'INTERNAL_DNS_ZONE') | default('internal.' ~ platform_domain, true) | lower }}
     control_plane_node_name: >-
       {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_NODE_NAME') | default(inventory_hostname, true) | lower }}
+    cloudflare_node_dns_label: >-
+      {{ lookup('ansible.builtin.env', 'CLOUDFLARE_NODE_DNS_LABEL') |
+         default(default_cloudflare_node_dns_label, true) | lower }}
     control_plane_scheduling_mode: >-
       {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_SCHEDULABLE') | default('preserve', true) | lower }}
     cloudflare_access_team_name: >-
@@ -146,6 +151,9 @@
     github_repository: "{{ lookup('ansible.builtin.env', 'GITHUB_REPOSITORY') | default(gitlab_project_name, true) }}"
     keycloak_sso_bootstrap_username: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_USERNAME') }}"
     keycloak_sso_bootstrap_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_PASSWORD') }}"
+    rotate_local_admin_passwords_enabled: >-
+      {{ lookup('ansible.builtin.env', 'ROTATE_LOCAL_ADMIN_PASSWORDS') | default('false', true) | bool }}
+    local_admin_password: "{{ lookup('ansible.builtin.env', 'LOCAL_ADMIN_PASSWORD') }}"
 
     data_stores_effective: "{{ data_stores_enabled or platform_services_enabled or odoo_enabled }}"
     vault_stack_effective: "{{ vault_stack_enabled or data_stores_effective }}"
@@ -158,12 +166,13 @@
     - name: Validate the shared platform contract
       ansible.builtin.assert:
         that:
-          - platform_contract_version == '5'
+          - platform_contract_version == '6'
           - server_exposure_mode in ['internet', 'local']
           - platform_domain is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
           - internal_dns_zone is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
           - internal_dns_zone != platform_domain
           - control_plane_node_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
+          - cloudflare_node_dns_label is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - control_plane_scheduling_mode in ['true', 'false', 'preserve']
           - cloudflare_access_team_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - not argocd_enabled or gitops_repository_url is match('^https?://.*\\.git$')
@@ -255,6 +264,18 @@
           detailed username and password-policy validation.
       no_log: true
       when: platform_services_enabled
+
+    - name: Validate optional local administrator password alignment input
+      ansible.builtin.assert:
+        that:
+          - local_admin_password | length > 0
+        fail_msg: >-
+          Set LOCAL_ADMIN_PASSWORD when ROTATE_LOCAL_ADMIN_PASSWORDS=true.
+          The rotation script performs the detailed password-policy validation.
+      no_log: true
+      when:
+        - platform_services_enabled
+        - rotate_local_admin_passwords_enabled
 
     - name: Validate private transport inputs
       ansible.builtin.assert:
@@ -546,7 +567,7 @@
         CLOUDFLARE_ENABLE_ACCESS: "false"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
         INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
-        CONTROL_PLANE_NODE_NAME: "{{ control_plane_node_name }}"
+        CLOUDFLARE_NODE_DNS_LABEL: "{{ cloudflare_node_dns_label }}"
         CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
       no_log: true
       when: cloudflare_enabled
@@ -677,6 +698,21 @@
       changed_when: false
       when: platform_services_enabled
 
+    - name: Align infrastructure-local administrator passwords
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/rotate-local-admin-passwords.sh"
+          - --password-stdin
+        stdin: "{{ local_admin_password }}\n"
+      environment:
+        NAMESPACE: "{{ infra_namespace }}"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+      changed_when: true
+      no_log: true
+      when:
+        - platform_services_enabled
+        - rotate_local_admin_passwords_enabled
+
     - name: Connect Cloudflare Access to Keycloak
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-cloudflare.sh"
       environment:
@@ -684,7 +720,7 @@
         CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "{{ cloudflare_access_emails }}"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
         INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
-        CONTROL_PLANE_NODE_NAME: "{{ control_plane_node_name }}"
+        CLOUDFLARE_NODE_DNS_LABEL: "{{ cloudflare_node_dns_label }}"
         CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
       no_log: true
       when:

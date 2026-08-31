@@ -359,6 +359,8 @@ spec:
           envFrom:
             - secretRef:
                 name: elasticsearch-security-bootstrap
+            - secretRef:
+                name: kibana-keycloak-proxy-credentials
           command:
             - sh
             - -c
@@ -408,12 +410,17 @@ spec:
                 -X PUT -H 'Content-Type: application/json' \
                 --data-binary '{"cluster":["monitor"],"indices":[{"names":["kubernetes-logs-*","app-logs-*","lynis-audits-*"],"privileges":["read","view_index_metadata"]}]}' \
                 "${endpoint}/_security/role/logs_reader" >/dev/null
+              curl -fsS --user "elastic:${ELASTIC_PASSWORD}" \
+                -X PUT -H 'Content-Type: application/json' \
+                --data-binary '{"cluster":[],"indices":[],"applications":[],"run_as":[],"metadata":{"managed_by":"bm-cluster"}}' \
+                "${endpoint}/_security/role/kibana_keycloak_proxy" >/dev/null
 
               put_user admin "$ADMIN_PASSWORD" '["superuser"]' 'Platform Administrator'
               put_user logstash_writer "$LOGSTASH_WRITER_PASSWORD" '["logs_writer"]' 'Logstash Writer'
               put_user fluent_bit_writer "$FLUENT_BIT_WRITER_PASSWORD" '["logs_writer"]' 'Fluent Bit Writer'
               put_user grafana_reader "$GRAFANA_READER_PASSWORD" '["logs_reader"]' 'Grafana Logs Reader'
               put_user kibana_dashboard_bootstrap "$KIBANA_BOOTSTRAP_PASSWORD" '["kibana_admin"]' 'Kibana Dashboard Bootstrap'
+              put_user "$KIBANA_PROXY_USERNAME" "$KIBANA_PROXY_PASSWORD" '["kibana_keycloak_proxy"]' 'Kibana Keycloak Proxy'
               put_user ci_observer "$CI_OBSERVER_PASSWORD" '["logs_reader"]' 'CI Delivery Observer'
           securityContext:
             allowPrivilegeEscalation: false
@@ -426,6 +433,356 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-keycloak-user-sync
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  sync.mjs: |
+    const keycloak = process.env.KEYCLOAK_URL ?? "http://keycloak:8080/auth";
+    const realm = process.env.KEYCLOAK_REALM ?? "swirlit";
+    const groupName = process.env.KEYCLOAK_GROUP ?? "platform-admins";
+    const elasticsearch = process.env.ELASTICSEARCH_URL ?? "http://elasticsearch.__INTERNAL_DNS_ZONE__:9200";
+    const managedBy = "bm-cluster-keycloak-sync";
+    const ownershipIndex = "bm-cluster-kibana-identity-ownership-v1";
+    const elasticAuthorization = `Basic ${Buffer.from(`elastic:${required("ELASTIC_PASSWORD")}`).toString("base64")}`;
+
+    function required(name) {
+      const value = process.env[name];
+      if (!value) throw new Error(`${name} is required`);
+      return value;
+    }
+
+    async function request(url, options = {}) {
+      const response = await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(30_000),
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`${options.method ?? "GET"} ${url} returned ${response.status}: ${text.slice(0, 500)}`);
+      }
+      return text ? JSON.parse(text) : null;
+    }
+
+    async function keycloakToken() {
+      const body = new URLSearchParams({
+        client_id: "admin-cli",
+        grant_type: "password",
+        username: required("KC_BOOTSTRAP_ADMIN_USERNAME"),
+        password: required("KC_BOOTSTRAP_ADMIN_PASSWORD"),
+      });
+      const token = await request(`${keycloak}/realms/master/protocol/openid-connect/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      return token.access_token;
+    }
+
+    async function keycloakRequest(token, path) {
+      return request(`${keycloak}/admin/realms/${encodeURIComponent(realm)}/${path}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+
+    async function groupMembers(token) {
+      const groups = await keycloakRequest(
+        token,
+        `groups?search=${encodeURIComponent(groupName)}&exact=true&briefRepresentation=true`,
+      );
+      const group = groups.find((candidate) => candidate.name === groupName);
+      if (!group) throw new Error(`Keycloak group ${groupName} does not exist in realm ${realm}`);
+
+      const members = [];
+      for (let first = 0; ; first += 100) {
+        const page = await keycloakRequest(
+          token,
+          `groups/${encodeURIComponent(group.id)}/members?first=${first}&max=100&briefRepresentation=false`,
+        );
+        members.push(...page);
+        if (page.length < 100) break;
+      }
+      return members;
+    }
+
+    async function elasticRequest(path, method = "GET", body) {
+      const response = await elasticFetch(path, method, body);
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(`${method} ${elasticsearch}${path} returned ${response.status}: ${response.text.slice(0, 500)}`);
+      }
+      return response.data;
+    }
+
+    async function elasticFetch(path, method = "GET", body) {
+      const response = await fetch(`${elasticsearch}${path}`, {
+        method,
+        headers: {
+          Authorization: elasticAuthorization,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const text = await response.text();
+      return {
+        status: response.status,
+        text,
+        data: text ? JSON.parse(text) : null,
+      };
+    }
+
+    async function ensureOwnershipIndex() {
+      const existing = await elasticFetch(`/${ownershipIndex}`);
+      if (existing.status >= 200 && existing.status < 300) return;
+      if (existing.status !== 404) {
+        throw new Error(`GET ${ownershipIndex} returned ${existing.status}: ${existing.text.slice(0, 500)}`);
+      }
+      const created = await elasticFetch(`/${ownershipIndex}`, "PUT", {
+        settings: {
+          "index.hidden": true,
+          "index.number_of_shards": 1,
+          "index.number_of_replicas": 0,
+        },
+        mappings: {
+          dynamic: "strict",
+          properties: {
+            managed_by: { type: "keyword" },
+            keycloak_id: { type: "keyword" },
+            keycloak_username: { type: "keyword" },
+            last_synchronized_at: { type: "date" },
+          },
+        },
+      });
+      if (created.status >= 200 && created.status < 300) return;
+      if (created.status === 400 && created.data?.error?.type === "resource_already_exists_exception") return;
+      throw new Error(`PUT ${ownershipIndex} returned ${created.status}: ${created.text.slice(0, 500)}`);
+    }
+
+    function shadowUsername(member) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/.test(member.username ?? "")) {
+        throw new Error(`Unsupported Keycloak username in ${groupName}: ${JSON.stringify(member.username)}`);
+      }
+      return member.username;
+    }
+
+    const token = await keycloakToken();
+    const members = await groupMembers(token);
+    await ensureOwnershipIndex();
+    const existingUsers = await elasticRequest("/_security/user");
+    const desiredUsers = new Map();
+    const bootstrapUsername = required("SSO_BOOTSTRAP_USERNAME");
+
+    for (const member of members) {
+      const username = shadowUsername(member);
+      if (!member.enabled) continue;
+      const existing = existingUsers[username];
+      const ownership = await elasticFetch(`/${ownershipIndex}/_doc/${encodeURIComponent(username)}`);
+      if (ownership.status !== 404 && (ownership.status < 200 || ownership.status >= 300)) {
+        throw new Error(`Could not read durable ownership for Elastic user ${username}: ${ownership.text.slice(0, 500)}`);
+      }
+      const marker = ownership.status === 404 ? null : ownership.data?._source;
+      const markerMatches = marker?.managed_by === managedBy && marker?.keycloak_username === username;
+      const metadataMatches = existing?.metadata?.managed_by === managedBy &&
+        existing?.metadata?.keycloak_username === username;
+      const bootstrapCanBeAdopted = username === bootstrapUsername &&
+        existing?.metadata?.managed_by === undefined &&
+        existing?.email === member.email &&
+        Array.isArray(existing?.roles) &&
+        existing.roles.length === 1 &&
+        existing.roles[0] === "superuser";
+      if (existing && !markerMatches && !metadataMatches && !bootstrapCanBeAdopted) {
+        throw new Error(`Refusing to replace unmanaged Elastic user ${username}`);
+      }
+      if (existing?.metadata?.managed_by !== undefined && existing.metadata.managed_by !== managedBy) {
+        throw new Error(`Elastic user ${username} declares conflicting ownership`);
+      }
+      const user = {
+        roles: ["superuser"],
+        password: required("KIBANA_PROXY_PASSWORD"),
+        // Elastic's user editor replaces the complete metadata object. Keep
+        // ownership in a separate hidden index and preserve the display name.
+        full_name: existing?.full_name ?? [member.firstName, member.lastName].filter(Boolean).join(" ") ?? member.username,
+        email: member.email ?? null,
+        enabled: true,
+        metadata: {
+          managed_by: managedBy,
+          keycloak_id: member.id,
+          keycloak_username: member.username,
+        },
+      };
+      await elasticRequest(`/_security/user/${encodeURIComponent(username)}`, "PUT", user);
+      await elasticRequest(`/${ownershipIndex}/_doc/${encodeURIComponent(username)}`, "PUT", {
+        managed_by: managedBy,
+        keycloak_id: member.id,
+        keycloak_username: username,
+        last_synchronized_at: new Date().toISOString(),
+      });
+      desiredUsers.set(username, user);
+    }
+
+    const managedIdentities = await elasticRequest(`/${ownershipIndex}/_search`, "POST", {
+      size: 10_000,
+      query: { term: { managed_by: managedBy } },
+    });
+    for (const hit of managedIdentities.hits?.hits ?? []) {
+      const username = hit._source?.keycloak_username;
+      const existing = existingUsers[username];
+      if (!username || !existing || desiredUsers.has(username) || !existing.enabled) continue;
+      await elasticRequest(`/_security/user/${encodeURIComponent(username)}`, "PUT", {
+        roles: existing.roles,
+        full_name: existing.full_name,
+        email: existing.email,
+        enabled: false,
+        metadata: existing.metadata,
+      });
+    }
+
+    const synchronized = [...desiredUsers.keys()].sort();
+    console.log(`Synchronized ${synchronized.length} enabled ${groupName} member(s) to Elastic: ${synchronized.join(", ") || "none"}`);
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kibana-keycloak-user-sync
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app: kibana-keycloak-user-sync
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: sync
+        image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+        command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
+        envFrom:
+        - secretRef:
+            name: keycloak-admin-secret
+        - secretRef:
+            name: elasticsearch-security-bootstrap
+        - secretRef:
+            name: kibana-keycloak-proxy-credentials
+        - secretRef:
+            name: keycloak-sso-credentials
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+            ephemeral-storage: 16Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+            ephemeral-storage: 64Mi
+        volumeMounts:
+        - name: sync
+          mountPath: /opt/keycloak-sync
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: sync
+        configMap:
+          name: kibana-keycloak-user-sync
+      - name: tmp
+        emptyDir:
+          sizeLimit: 32Mi
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kibana-keycloak-user-sync
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: kibana-keycloak-user-sync
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: sync
+            image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+            command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
+            envFrom:
+            - secretRef:
+                name: keycloak-admin-secret
+            - secretRef:
+                name: elasticsearch-security-bootstrap
+            - secretRef:
+                name: kibana-keycloak-proxy-credentials
+            - secretRef:
+                name: keycloak-sso-credentials
+            securityContext:
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+                ephemeral-storage: 16Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
+                ephemeral-storage: 64Mi
+            volumeMounts:
+            - name: sync
+              mountPath: /opt/keycloak-sync
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          volumes:
+          - name: sync
+            configMap:
+              name: kibana-keycloak-user-sync
+          - name: tmp
+            emptyDir:
+              sizeLimit: 32Mi
 
 ---
 apiVersion: v1
@@ -599,13 +956,55 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 data:
+  auth.js: |
+    async function login(request) {
+      const username = request.variables.keycloak_user;
+      const password = process.env.KIBANA_PROXY_PASSWORD;
+      if (!username || !password) {
+        request.return(500, "Missing gateway identity");
+        return;
+      }
+
+      const response = await request.subrequest("/_kibana_session", {
+        method: "POST",
+        body: JSON.stringify({
+          providerType: "basic",
+          providerName: "basic",
+          currentURL: request.variables.request_uri || "/",
+          params: { username, password },
+        }),
+      });
+      if (response.status !== 200 || !response.headersOut["Set-Cookie"]) {
+        request.error(`Kibana session creation returned ${response.status}`);
+        request.return(502, "Unable to create Kibana session");
+        return;
+      }
+
+      request.headersOut["Set-Cookie"] = response.headersOut["Set-Cookie"];
+      request.headersOut["Cache-Control"] = "no-store";
+      const target = request.variables.request_uri || "/";
+      const marker = "bm_kibana_session=created";
+      const redirectTarget = target.includes(marker)
+        ? "/app/home"
+        : `${target}${target.includes("?") ? "&" : "?"}${marker}`;
+      request.return(303, redirectTarget);
+    }
+
+    export default { login };
   nginx.conf: |
+    load_module /etc/nginx/modules/ngx_http_js_module.so;
+
+    env KIBANA_PROXY_PASSWORD;
+    env LUA_PATH;
+    env LUA_CPATH;
     pid /tmp/nginx.pid;
     error_log /dev/stderr warn;
 
     events {}
 
     http {
+      js_import auth from /etc/kibana-public-auth-filter/auth.js;
+
       access_log /dev/stdout;
       client_body_temp_path /tmp/client-body;
       proxy_temp_path /tmp/proxy;
@@ -617,17 +1016,57 @@ data:
 
       server {
         listen 5602;
+        # TLS terminates at ingress-nginx. Keep application redirects relative
+        # so Nginx does not synthesize an http:// Location behind that proxy.
+        absolute_redirect off;
+
+        location = /healthz {
+          access_log off;
+          add_header Content-Type text/plain;
+          return 200 "ok\n";
+        }
+
+        location = /_keycloak_auth {
+          internal;
+          proxy_pass http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth;
+          proxy_pass_request_body off;
+          proxy_set_header Content-Length "";
+          proxy_set_header Cookie $http_cookie;
+          proxy_set_header X-Original-URL $http_x_forwarded_proto://$http_host$request_uri;
+        }
+
+        location = /_kibana_session {
+          internal;
+          proxy_pass http://127.0.0.1:5601/internal/security/login;
+          proxy_set_header Authorization "";
+          proxy_set_header Content-Type "application/json";
+          proxy_set_header kbn-xsrf "true";
+          proxy_set_header x-elastic-internal-origin "Kibana";
+        }
+
+        location @kibana_login {
+          auth_request /_keycloak_auth;
+          auth_request_set $keycloak_user $upstream_http_x_auth_request_preferred_username;
+          js_content auth.login;
+        }
 
         location / {
+          # Revalidate the signed Keycloak-backed oauth2-proxy session here so
+          # requests sent directly to the ClusterIP cannot forge an identity.
+          error_page 401 418 = @kibana_login;
+          if ($cookie_kibana_sid = "") { return 418; }
+          auth_request /_keycloak_auth;
+          proxy_intercept_errors on;
           proxy_http_version 1.1;
           proxy_set_header Host $http_host;
           proxy_set_header X-Real-IP $remote_addr;
           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
           proxy_set_header X-Forwarded-Host $http_host;
           proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
-          # Keycloak authenticates the browser at ingress. Kibana security
-          # remains enabled and receives a least-scope managed Kibana account.
-          proxy_set_header Authorization "__KIBANA_AUTHORIZATION__";
+          # Kibana's Basic provider session supplies a profile_uid, keeping
+          # profiles, favorites, and preferences distinct per person. Never
+          # accept a caller-supplied service or user credential here.
+          proxy_set_header Authorization "";
           proxy_set_header Upgrade $http_upgrade;
           proxy_set_header Connection $connection_upgrade;
           proxy_pass http://127.0.0.1:5601;
@@ -670,6 +1109,8 @@ spec:
     metadata:
       labels:
         app: kibana
+      annotations:
+        bm-cluster.__PUBLIC_DOMAIN__/auth-version: "4"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -679,6 +1120,10 @@ spec:
       containers:
       - name: kibana
         image: docker.elastic.co/kibana/kibana@sha256:862c968ad7dc3d4e51af83fa30b25c0556b235f54f5a8917284eab7cf322381f
+        args:
+        - /usr/local/bin/kibana-docker
+        - --xpack.cloud_connect.enabled=false
+        - --xpack.product_intercept.enabled=false
         ports:
         - containerPort: 5601
         env:
@@ -715,6 +1160,10 @@ spec:
           value: "https://kibana.__PUBLIC_DOMAIN__"
         - name: XPACK_SECURITY_SECURECOOKIES
           value: "true"
+        - name: XPACK_SECURITY_COOKIENAME
+          value: kibana_sid
+        - name: ELASTICSEARCH_REQUESTHEADERSWHITELIST
+          value: '["authorization"]'
         - name: NODE_OPTIONS
           value: "--max-old-space-size=1536"
         resources:
@@ -756,21 +1205,13 @@ spec:
         command: ["/bin/sh", "-ec"]
         args:
         - |
-          authorization="Basic $(printf '%s:%s' "$KIBANA_BOOTSTRAP_USERNAME" "$KIBANA_BOOTSTRAP_PASSWORD" | base64 | tr -d '\n')"
-          sed "s|__KIBANA_AUTHORIZATION__|$authorization|" \
-            /etc/kibana-public-auth-filter/nginx.conf > /tmp/nginx.conf
-          exec /usr/bin/nginx -c /tmp/nginx.conf -g 'daemon off;'
+          exec /usr/bin/nginx -c /etc/kibana-public-auth-filter/nginx.conf -g 'daemon off;'
         env:
-        - name: KIBANA_BOOTSTRAP_USERNAME
+        - name: KIBANA_PROXY_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: kibana-bootstrap-credentials
-              key: KIBANA_BOOTSTRAP_USERNAME
-        - name: KIBANA_BOOTSTRAP_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: kibana-bootstrap-credentials
-              key: KIBANA_BOOTSTRAP_PASSWORD
+              name: kibana-keycloak-proxy-credentials
+              key: KIBANA_PROXY_PASSWORD
         ports:
         - containerPort: 5602
         resources:
@@ -791,7 +1232,7 @@ spec:
             add: ["NET_BIND_SERVICE"]
         readinessProbe:
           httpGet:
-            path: /login
+            path: /healthz
             port: 5602
           periodSeconds: 10
           timeoutSeconds: 5

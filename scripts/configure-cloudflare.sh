@@ -26,7 +26,7 @@ ZONE_NAME="${CLOUDFLARE_ZONE:-${DEFAULT_CLOUDFLARE_ZONE:-$PLATFORM_DOMAIN}}"
 ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-}"
 ORIGIN_IP="${CLOUDFLARE_ORIGIN_IP:-}"
 API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
-CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
+NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}"
 PUBLISH_NODE_DNS="${CLOUDFLARE_PUBLISH_NODE_DNS:-true}"
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-infra}"
 INGRESS_SERVICE="${INGRESS_SERVICE:-ingress-nginx-controller}"
@@ -107,7 +107,7 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_ACCESS         Default: true
   CLOUDFLARE_PUBLISH_APEX          Publish the zone apex to its safe dashboard redirect (default: true)
   CLOUDFLARE_PUBLISH_NODE_DNS      Publish NODE.DOMAIN unproxied for administration (default: true)
-  CONTROL_PLANE_NODE_NAME          Node label used by the optional unproxied record
+  CLOUDFLARE_NODE_DNS_LABEL        Public node label (default: config/platform.env)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
   CLOUDFLARE_ACCESS_SESSION_DURATION  Default: 24h
   CLOUDFLARE_ACCESS_HOST_LABELS    Space-separated admin labels replacing defaults
@@ -177,8 +177,8 @@ ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
 [[ "$PUBLISH_APEX" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_APEX must be true or false."
 [[ "$PUBLISH_NODE_DNS" =~ ^(true|false)$ ]] || error "CLOUDFLARE_PUBLISH_NODE_DNS must be true or false."
 if [[ "$PUBLISH_NODE_DNS" == "true" ]]; then
-    [[ "$CONTROL_PLANE_NODE_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
-        error "Set CONTROL_PLANE_NODE_NAME to a single valid DNS label when node DNS publishing is enabled."
+    [[ "$NODE_DNS_LABEL" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || \
+        error "Set CLOUDFLARE_NODE_DNS_LABEL to a single valid DNS label when node DNS publishing is enabled."
 fi
 [[ "$HSTS_MAX_AGE" =~ ^[0-9]+$ ]] || error "CLOUDFLARE_HSTS_MAX_AGE must be seconds as a whole number."
 [[ "$ACCESS_SESSION_DURATION" =~ ^[1-9][0-9]*(m|h)$ ]] || \
@@ -1062,7 +1062,7 @@ done
 
 NODE_FQDN=""
 if [[ "$PUBLISH_NODE_DNS" == "true" ]]; then
-    NODE_FQDN="$CONTROL_PLANE_NODE_NAME.$ZONE_NAME"
+    NODE_FQDN="$NODE_DNS_LABEL.$ZONE_NAME"
     [[ " ${DNS_HOSTS[*]} " != *" $NODE_FQDN "* ]] || \
         error "The control-plane node name conflicts with a proxied application hostname: $NODE_FQDN"
     record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?name=$NODE_FQDN&per_page=100")"

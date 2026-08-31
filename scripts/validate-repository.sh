@@ -174,6 +174,15 @@ else
     fail "install and worker enrollment share control-plane and Longhorn topology policy"
 fi
 
+if grep -Fq 'rotate_local_admin_passwords_enabled' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
+   grep -Fq 'scripts/rotate-local-admin-passwords.sh' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
+   grep -Fq -- '--password-stdin' "$REPOSITORY_ROOT/ansible/deploy.yml" &&
+   grep -Fq 'no_log: true' "$REPOSITORY_ROOT/ansible/deploy.yml"; then
+    pass "Ansible exposes the installer local-administrator password alignment as an explicit secret input"
+else
+    fail "Ansible exposes the installer local-administrator password alignment as an explicit secret input"
+fi
+
 tailscale_firewall_line="$(grep -n '^configure_tailscale_firewall_integration$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 private_ssh_line="$(grep -n '^validate_worker_private_ssh_before_firewall$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
 ufw_apply_line="$(grep -n '^configure_ufw$' "$REPOSITORY_ROOT/scripts/configure-node-security.sh" | cut -d: -f1 || true)"
@@ -220,6 +229,17 @@ if [[ "$contract_failed" == "true" ]]; then
     fail "platform contract uses source-safe properties"
 else
     pass "platform contract uses source-safe properties"
+fi
+
+if [[ "${DEFAULT_CLOUDFLARE_NODE_DNS_LABEL:-}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] &&
+   grep -Fq 'CLOUDFLARE_NODE_DNS_LABEL' "$REPOSITORY_ROOT/install-control-plane.sh" &&
+   grep -Fq 'NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}"' \
+       "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh" &&
+   grep -Fq 'CLOUDFLARE_NODE_DNS_LABEL: "{{ cloudflare_node_dns_label }}"' \
+       "$REPOSITORY_ROOT/ansible/deploy.yml"; then
+    pass "public node DNS is independent of the Kubernetes control-plane name across scripts and Ansible"
+else
+    fail "public node DNS is independent of the Kubernetes control-plane name across scripts and Ansible"
 fi
 
 if grep -Fq 'DELETE FROM kine' "$REPOSITORY_ROOT/scripts/backup-k3s.sh" &&
@@ -399,18 +419,49 @@ fi
 if grep -Fq 'GITLAB_CANONICAL_ADMIN_USERNAME' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'identity.user = canonical_user' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'Users::DestroyService.new(canonical_user)' "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq "omniauth_sync_profile_attributes'] = ['email']" "$K8S_ROOT/platform/gitlab.yaml" &&
+   ! grep -Fq 'name: display_name' "$K8S_ROOT/platform/gitlab.yaml" &&
+   ! grep -Fq 'SSO_DISPLAY_NAME' "$K8S_ROOT/platform/gitlab.yaml" &&
    grep -Fq 'value: root' "$K8S_ROOT/platform/gitlab.yaml"; then
-    pass "GitLab Keycloak sign-in reconciles to the canonical root administrator"
+    pass "GitLab Keycloak sign-in reconciles root without overwriting its full name"
 else
-    fail "GitLab Keycloak sign-in reconciles to the canonical root administrator"
+    fail "GitLab Keycloak sign-in reconciles root without overwriting its full name"
 fi
 
 if grep -Fq 'name: portainer-cluster-admin' "$K8S_ROOT/platform/portainer.yaml" &&
    grep -Fq 'name: cluster-admin' "$K8S_ROOT/platform/portainer.yaml" &&
+   grep -Fq 'argocd.argoproj.io/hook: PostSync' "$K8S_ROOT/platform/portainer-bootstrap-job.yaml" &&
+   grep -Fq 'f"/users/{managed_user['"'"'Id'"'"']}"' "$K8S_ROOT/platform/portainer-bootstrap-job.yaml" &&
+   grep -Fq '"NewPassword": sso_password' "$K8S_ROOT/platform/portainer-bootstrap-job.yaml" &&
    ! grep -Fq 'portainer-read-only' "$K8S_ROOT/platform/portainer.yaml"; then
-    pass "Portainer administrators receive unrestricted Kubernetes cluster access"
+    pass "Portainer administrators are reconciled with unrestricted Kubernetes cluster access"
 else
-    fail "Portainer administrators receive unrestricted Kubernetes cluster access"
+    fail "Portainer administrators are reconciled with unrestricted Kubernetes cluster access"
+fi
+
+if grep -Fq 'extract_json_string()' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
+   grep -Fq 'SSO_DISPLAY_NAME%%' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
+   grep -Fq 'current_first_name_json' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
+   grep -Fq 'master_first_name_json' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
+   ! grep -Fq '\"firstName\":\"Platform\"' "$K8S_ROOT/platform/keycloak-sso.yaml"; then
+    pass "Keycloak seeds display names but preserves later user edits"
+else
+    fail "Keycloak seeds display names but preserves later user edits"
+fi
+
+if grep -Fq "'login': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/apps/odoo.yaml" &&
+   grep -Fq "'email': os.environ['SSO_PRIMARY_EMAIL']" "$K8S_ROOT/apps/odoo.yaml" &&
+   ! grep -Fq "'login': 'admin'" "$K8S_ROOT/apps/odoo.yaml"; then
+    pass "Odoo uses one stable SSO administrator login"
+else
+    fail "Odoo uses one stable SSO administrator login"
+fi
+
+if grep -Fq 'bm_cluster_preserve_delegated_full_name' "$K8S_ROOT/platform/sonarqube.yaml" &&
+   grep -Fq 'OLD.name NOT IN (OLD.login, OLD.email)' "$K8S_ROOT/platform/sonarqube.yaml"; then
+    pass "SonarQube header SSO preserves locally edited full names"
+else
+    fail "SonarQube header SSO preserves locally edited full names"
 fi
 
 if grep -Fq 'roles/realm-admin' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
@@ -425,6 +476,50 @@ if grep -Fq 'roles/realm-admin' "$K8S_ROOT/platform/keycloak-sso.yaml" &&
     pass "the shared Keycloak administrator maps to every product's maximum supported role"
 else
     fail "the shared Keycloak administrator maps to every product's maximum supported role"
+fi
+
+if grep -Fq 'auth_request /_keycloak_auth;' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'auth_request_set $keycloak_user $upstream_http_x_auth_request_preferred_username;' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'providerName: "basic"' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'js_content auth.login;' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'if ($cookie_kibana_sid = "") { return 418; }' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'value: kibana_sid' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'proxy_set_header Authorization "";' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'password: required("KIBANA_PROXY_PASSWORD")' "$K8S_ROOT/platform/elk.yaml" &&
+   ! grep -Fq 'proxy_set_header es-security-runas-user' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq -- '--xpack.cloud_connect.enabled=false' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq -- '--xpack.product_intercept.enabled=false' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'roles: ["superuser"]' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'Refusing to replace unmanaged Elastic user' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'bm-cluster-kibana-identity-ownership-v1' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'full_name: existing?.full_name' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'managedIdentities.hits?.hits' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'managed_by: managedBy' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq 'schedule: "*/5 * * * *"' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq '"run_as":[]' "$K8S_ROOT/platform/elk.yaml" &&
+   grep -Fq "put_user \"\$KIBANA_PROXY_USERNAME\" \"\$KIBANA_PROXY_PASSWORD\" '[\"kibana_keycloak_proxy\"]'" "$K8S_ROOT/platform/elk.yaml"; then
+    pass "Kibana maps Keycloak administrators to distinct native Elastic sessions"
+else
+    fail "Kibana maps Keycloak administrators to distinct native Elastic sessions"
+fi
+
+if grep -Fq "gitlab_rails['gitlab_kas_enabled'] = false" "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq "gitlab_kas['enable'] = false" "$K8S_ROOT/platform/gitlab.yaml" &&
+   grep -Fq 'publishNotReadyAddresses: true' "$K8S_ROOT/platform/gitlab.yaml"; then
+    pass "unused GitLab KAS is disabled and Registry readiness is decoupled from Rails"
+else
+    fail "unused GitLab KAS is disabled and Registry readiness is decoupled from Rails"
+fi
+
+if grep -Fq 'name: alertmanager-config' "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'credentials_file: /etc/alertmanager/secrets/token' "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'NodeFilesystemSpaceLow' "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'KubernetesPersistentVolumeReleased' "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'name: monitoring-alert-credentials' "$K8S_ROOT/platform/monitoring.yaml" &&
+   grep -Fq 'integration.endpoint_identifier = "clusterprometheus"' "$K8S_ROOT/platform/gitlab.yaml"; then
+    pass "Prometheus alerts proactively route to the managed GitLab endpoint"
+else
+    fail "Prometheus alerts proactively route to the managed GitLab endpoint"
 fi
 
 sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platform/homepage.yaml" |

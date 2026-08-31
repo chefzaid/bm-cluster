@@ -97,8 +97,10 @@ printed by the configurator.
 The infrastructure repository lives at `<gitlab-group>/bm-cluster` in GitLab.
 Its instance-scoped Kubernetes runner executes `.gitlab-ci.yml` in the isolated
 `gitlab-runners` namespace. The default branch is continuously reconciled by
-the `bm-cluster` Argo CD Application; application manifests under `k8s/apps`
-remain outside this infrastructure GitOps boundary.
+the `bm-cluster` Argo CD Application. Centrally owned Odoo resources under
+`k8s/apps` are included when `appsEnabled=true`; DevApp, Thoughty, and Indezy
+remain outside this infrastructure GitOps boundary and reconcile through their
+own Argo CD Applications.
 
 Repository synchronization is optional. When selected in the installer, it asks
 for any number of `GitHub-owner/repository=GitLab-group/repository` mappings and
@@ -110,7 +112,8 @@ side, merges divergent branches without force pushing, and refuses conflicting
 tag rewrites. A monthly schedule self-rotates the managed GitLab credential.
 
 GitLab stores private OCI images at `registry.<your-domain>`. Application
-pipelines retain downloadable job artifacts for seven days and publish
+pipelines retain downloadable build, test, coverage, browser, and quality
+artifacts for seven days and publish
 immutable release outputs through each project's Generic Package Registry:
 DevApp publishes two JARs and its SPA archive, Thoughty publishes server and web
 archives, and Indezy publishes its JAR and SPA archive. Every package version
@@ -129,13 +132,21 @@ outputs, and roll out workloads, while later pipelines avoid most unchanged
 dependency work. This provides practical reuse without operating a separate
 repository manager.
 
-The three application repositories use one bootstrap contract:
+The three application repositories use one bootstrap and operator-reconciliation contract:
 
-| Project | Argo CD bootstrap | Desired state |
-|---|---|---|
-| `<gitlab-group>/devapp` | `infra/argocd/application.yaml` | `infra/k8s` |
-| `<gitlab-group>/thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` |
-| `<gitlab-group>/indezy` | `infra/argocd/application.yaml` | `infra/k8s` |
+| Project | Argo CD bootstrap | Desired state | Operator playbook |
+|---|---|---|---|
+| `<gitlab-group>/devapp` | `infra/argocd/application.yaml` | `infra/k8s` | `infra/ansible/site.yaml` |
+| `<gitlab-group>/thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` | `infra/ansible/site.yaml` |
+| `<gitlab-group>/indezy` | `infra/argocd/application.yaml` | `infra/k8s` | `infra/ansible/site.yaml` |
+
+Each application pipeline exposes ordered `build`, `verify`, `release`, and
+`version` stages. Compilation and package validation are required; unit tests
+and the 80 percent coverage policy fail only the non-blocking test job. Manual
+E2E remains independent; quality/security reporting is an optional manual branch
+in standard mode and runs automatically as a non-blocking branch in full mode.
+Release depends on the required build path, deploy depends on release, and the
+manual major-version action is never allowed to fail silently.
 
 Their pipelines use the internal `gitlab.internal.<your-domain>` API/clone route and
 the internal Registry service for cluster traffic, while user-facing GitLab and
@@ -199,8 +210,11 @@ For a new cluster, run the guided installer on the future control-plane host:
 It first asks for the public base domain and the K3s control-plane node name.
 The private service zone is derived as `internal.<your-domain>`; manifests are
 rendered from domain-neutral templates, and Argo CD receives the same values for
-all future reconciliation. When Cloudflare is enabled, it also asks for the
-Zero Trust team label (the first part of `TEAM.cloudflareaccess.com`) so the
+all future reconciliation. Public node administration uses the separate
+`CLOUDFLARE_NODE_DNS_LABEL` (default `node-01`), so changing a Kubernetes node
+name does not silently rename the unproxied `node-01.<your-domain>` record.
+When Cloudflare is enabled, the installer also asks for the Zero Trust team
+label (the first part of `TEAM.cloudflareaccess.com`) so the
 Keycloak callback is rendered without embedding an account hostname. It then
 asks whether to install `infra` only or
 `infra + apps`. The apps choice deploys Odoo, the repository-owned ERP/CRM
@@ -234,6 +248,8 @@ defaults to `infra + apps`; set `INSTALL_SCOPE=infra` for an infrastructure-only
 non-interactive run. Non-interactive platform installation also requires
 `PLATFORM_DOMAIN`, `CONTROL_PLANE_NODE_NAME`, `GITOPS_REPOSITORY_URL`,
 `KEYCLOAK_SSO_BOOTSTRAP_USERNAME`, and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`.
+Override `CLOUDFLARE_NODE_DNS_LABEL` only when the public node hostname should
+differ from `node-01`.
 Set `CLUSTER_NODE_COUNT` and `CONTROL_PLANE_SCHEDULABLE=true|false` to override
 the node-list-derived non-interactive topology defaults.
 Selected identity and transport secrets are supplied as environment variables.
@@ -407,13 +423,31 @@ GitLab attaches this identity to its canonical `root` administrator, including
 the projects, ownership, activity, and permissions already visible to the
 break-glass root login. Its bootstrap removes any duplicate account matching
 the selected login, so Keycloak and local root authentication do not create
-separate GitLab users. Grafana maps the identity to Grafana Admin,
+separate GitLab users. The bootstrap reconciles the primary email and admin
+status but deliberately leaves the GitLab full name untouched; OmniAuth
+profile synchronization is likewise restricted to email so a name edited in
+GitLab survives sign-in and redeployment. Grafana maps the identity to Grafana Admin,
 Argo CD to its admin role, Vault to `platform-admin`, and Portainer to role `1`
 with Kubernetes `cluster-admin`. Odoo maps it to its existing administrator,
 and SonarQube synchronizes the Keycloak
 group to its global `admin` permission. The application dashboards and services
 without native OIDC use the same Keycloak session at their proxy boundary, so
 they do not introduce another user or password.
+
+Kibana revalidates that signed Keycloak session at its own boundary and
+authenticates each request as a distinct, same-named Elastic identity. This
+keeps Kibana profiles, favorites, and preferences separate instead of attaching
+them to the gateway service account. A five-minute
+reconciler gives enabled `platform-admins` members the `superuser` role, disables
+managed identities that leave the group, and aligns their hidden gateway
+credential used only to establish the Kibana session. Ownership is recorded in
+a separate hidden Elasticsearch index, so editing a person's Kibana full name
+cannot remove the reconciliation marker; locally edited full names are retained.
+The separate
+`kibana_dashboard_bootstrap` account is used only by dashboard-import jobs and
+is never the browser identity. Cloud Connect and Elastic's product-feedback
+intercepts are disabled because this self-managed deployment does not configure
+either integration; this avoids background 503 and 403 requests in the UI.
 
 The effective authorization contract for that identity is deliberately
 unrestricted:
@@ -428,7 +462,7 @@ unrestricted:
 | Portainer | Application role `1` and Kubernetes `cluster-admin` |
 | Odoo | Existing Settings administrator (`base.user_admin`) |
 | SonarQube | Global administration, provisioning, and scan permissions |
-| Kibana / Elasticsearch | Managed origin user with `superuser` |
+| Kibana / Elasticsearch | Named Keycloak user mapped to an individual Elastic identity with `superuser` |
 | Kafka UI | Full cluster write mode; read-only mode is disabled |
 | DBGate | Keycloak-gated access to PostgreSQL superuser, MongoDB `root`, and unrestricted Redis connections |
 | Longhorn / Homepage | Full product UI behind the `platform-admins` gate; neither product has an internal user-role hierarchy |
@@ -449,7 +483,7 @@ user hierarchy; Vault uses tokens rather than a password.
 | MongoDB | `admin` | `kubectl get secret -n infra mongodb-secret -o jsonpath='{.data.MONGO_INITDB_ROOT_PASSWORD}' \| base64 -d` |
 | PostgreSQL | `admin` | `kubectl get secret -n infra postgres-secret -o jsonpath='{.data.POSTGRES_PASSWORD}' \| base64 -d` |
 | Longhorn origin login | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=password secret/infra/platform-ui` |
-| Odoo | `admin` | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
+| Odoo | SSO primary email | `kubectl get secret -n apps odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' \| base64 -d` |
 | Portainer | `admin` | `kubectl get secret -n infra portainer-auth-secret -o jsonpath='{.data.ADMIN_PASSWORD}' \| base64 -d` |
 | SonarQube | `admin` | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_password secret/infra/sonarqube` |
 | SonarQube automation | `admin` token | `kubectl exec -n infra vault-0 -- env VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(sudo cat /var/lib/bm-cluster/vault-bootstrap-token)" vault kv get -field=admin_token secret/infra/sonarqube` |
@@ -487,10 +521,10 @@ password, or services without an internal administrator.
 Cloudflare Access delegates its protected hosts to the same Keycloak realm.
 Native OIDC integrations then establish the service session where supported.
 SonarQube consumes the authenticated identity and groups as trusted SSO
-headers. Kibana receives a managed `kibana_admin` origin identity after the
-Keycloak gate, while Longhorn relies on the gate because it has no native
-authentication provider. Scanner, registry, and internal automation endpoints
-retain their non-interactive token interfaces.
+headers. Kibana revalidates the Keycloak session and uses its named,
+role-synchronized Elastic identity, while Longhorn relies on the gate because
+it has no native authentication provider. Scanner, registry, and internal
+automation endpoints retain their non-interactive token interfaces.
 
 ## Operations
 
@@ -516,12 +550,32 @@ Security Audits** dashboard with a hardening-index trend and finding details.
 This keeps
 platform discovery independent of application names; app repositories own their
 metrics endpoints, structured stdout format, and optional detailed dashboards.
+Prometheus evaluates node-capacity, workload-availability, crash-loop, OOM,
+failed-Job, released-volume, pending-claim, and scrape-target rules. Alertmanager
+deduplicates those alerts and sends firing and resolved events to the
+`swirlit/bm-cluster` project's **Monitor > Alerts** page in GitLab using a
+Vault-backed, reconciled Prometheus integration credential.
 The logging bootstrap applies a seven-day lifecycle policy to container and
 application logs and a separate 365-day policy to monthly `lynis-audits-*`
-indices. Elasticsearch security is enabled: Kibana uses its reserved
-system account, ingestion and Grafana use dedicated least-privilege users, and
-dashboard import hooks use a dedicated account with the `kibana_admin` role. All credentials
-and Kibana encryption keys are synchronized from Vault.
+indices. Elasticsearch security is enabled: Kibana uses its reserved system
+account, ingestion and Grafana use dedicated least-privilege users, and
+dashboard import hooks use a dedicated account with the `kibana_admin` role.
+Interactive requests use the individual identities synchronized from the
+Keycloak `platform-admins` group; the proxy credential has no direct data or
+Kibana privileges. All credentials and Kibana encryption keys are synchronized
+from Vault.
+
+The installer-provided display name seeds new Keycloak identities. Subsequent
+first/last-name edits in Keycloak are preserved by reconciliation. GitLab and
+SonarQube likewise keep locally edited display names while still reconciling
+email, group, and administrator privileges. Odoo consistently uses the SSO
+primary email as the administrator login, and Portainer's PostSync hook
+reasserts the SSO administrator role and credential on every platform sync.
+
+GitLab KAS is disabled while no Kubernetes agents are registered. The internal
+Registry Service publishes its endpoint independently of the slower Rails
+readiness probe so cached or available Registry traffic is not unnecessarily
+blocked during an Omnibus restart.
 
 Trigger the Descheduler manually:
 
@@ -560,6 +614,7 @@ Run Ansible from the control-plane repository checkout with its local inventory:
 export PLATFORM_DOMAIN='example.com'
 export INTERNAL_DNS_ZONE='internal.example.com'
 export CONTROL_PLANE_NODE_NAME='control-plane-01'
+export CLOUDFLARE_NODE_DNS_LABEL='node-01'
 export CONTROL_PLANE_SCHEDULABLE='false'
 export GITOPS_REPOSITORY_URL='https://github.com/example/bm-cluster.git'
 export CLOUDFLARE_ACCESS_TEAM_NAME='example-team'
@@ -582,6 +637,20 @@ Cloudflare requires ingress.
 Ansible preserves the installer-selected control-plane mode by default and
 uses the same Ready-worker Longhorn replica rule. Set
 `CONTROL_PLANE_SCHEDULABLE=true|false` only when intentionally changing it.
+
+Local infrastructure password alignment is also explicit in Ansible. To run
+the same post-deployment reconciliation as the installer without exposing the
+password on the command line, export the secret only for the playbook process:
+
+```bash
+read -rsp 'Local administrator password: ' LOCAL_ADMIN_PASSWORD; echo
+export LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS=true
+ansible-playbook -i ansible/inventory ansible/deploy.yml
+unset LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS
+```
+
+The playbook passes the value to the existing rotation script over stdin and
+marks the task `no_log`; it does not alter SSO identities or application users.
 
 Transport reconciliation is opt-in because it can change host networking. It
 always runs before K3s network binding and host UFW. Ansible does not pause for

@@ -134,16 +134,22 @@ data:
         poll_timeout = 600
         cpu_request = "100m"
         memory_request = "128Mi"
+        ephemeral_storage_request = "512Mi"
         cpu_limit = "2"
         memory_limit = "3Gi"
+        ephemeral_storage_limit = "4Gi"
         helper_cpu_request = "50m"
         helper_memory_request = "64Mi"
+        helper_ephemeral_storage_request = "64Mi"
         helper_cpu_limit = "500m"
         helper_memory_limit = "512Mi"
+        helper_ephemeral_storage_limit = "1Gi"
         service_cpu_request = "50m"
         service_memory_request = "64Mi"
+        service_ephemeral_storage_request = "64Mi"
         service_cpu_limit = "1"
         service_memory_limit = "1Gi"
+        service_ephemeral_storage_limit = "1Gi"
 
         [runners.kubernetes.pod_labels]
           "app" = "gitlab-ci-job"
@@ -175,7 +181,7 @@ spec:
       labels:
         app: gitlab-runner
       annotations:
-        gitlab.__PUBLIC_DOMAIN__/config-version: "3"
+        gitlab.__PUBLIC_DOMAIN__/config-version: "4"
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
         prometheus.io/port: "9252"

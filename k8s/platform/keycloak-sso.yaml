@@ -114,6 +114,14 @@ data:
       sed -n 's/^[^"]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$response_file" | head -n 1
     }
 
+    # Keep the JSON-escaped representation so an existing, user-edited name
+    # can be embedded in the reconciliation payload without lossy shell
+    # decoding. Keycloak clears omitted firstName/lastName fields on PUT.
+    extract_json_string() {
+      field="$1"
+      sed -n 's/.*"'"$field"'"[[:space:]]*:[[:space:]]*"\(\([^"\\]\|\\.\)*\)".*/\1/p' "$response_file" | head -n 1
+    }
+
     json_escape() {
       sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g'
     }
@@ -121,6 +129,17 @@ data:
     sso_username_json="$(printf '%s' "$SSO_BOOTSTRAP_USERNAME" | json_escape)"
     sso_password_json="$(printf '%s' "$SSO_BOOTSTRAP_PASSWORD" | json_escape)"
     sso_email_json="$(printf '%s' "$SSO_PRIMARY_EMAIL" | json_escape)"
+    sso_first_name="${SSO_DISPLAY_NAME%% *}"
+    if [ "$sso_first_name" = "$SSO_DISPLAY_NAME" ]; then
+      # Keycloak's default profile expects both standard name fields. A
+      # one-word bootstrap display name remains readable and valid.
+      sso_last_name="$SSO_DISPLAY_NAME"
+    else
+      sso_last_name="${SSO_DISPLAY_NAME#"$sso_first_name"}"
+      sso_last_name="$(printf '%s' "$sso_last_name" | sed 's/^[[:space:]]*//')"
+    fi
+    sso_first_name_json="$(printf '%s' "$sso_first_name" | json_escape)"
+    sso_last_name_json="$(printf '%s' "$sso_last_name" | json_escape)"
 
     status="$(request GET "realms/$realm")"
     if [ "$status" = 404 ]; then
@@ -435,8 +454,8 @@ data:
         \"enabled\":true,
         \"emailVerified\":true,
         \"email\":\"$sso_email_json\",
-        \"firstName\":\"Platform\",
-        \"lastName\":\"Administrator\",
+        \"firstName\":\"$sso_first_name_json\",
+        \"lastName\":\"$sso_last_name_json\",
         \"attributes\":{
           \"bootstrap_local\":[\"true\"]
         },
@@ -452,14 +471,18 @@ data:
     elif grep -q '"federationLink"[[:space:]]*:[[:space:]]*"' "$response_file"; then
       user_is_federated=true
     else
+      current_first_name_json="$(extract_json_string firstName)"
+      current_last_name_json="$(extract_json_string lastName)"
+      current_first_name_json="${current_first_name_json:-$sso_first_name_json}"
+      current_last_name_json="${current_last_name_json:-$sso_last_name_json}"
       user_body="{
         \"id\":\"$user_id\",
         \"username\":\"$sso_username_json\",
         \"enabled\":true,
         \"emailVerified\":true,
         \"email\":\"$sso_email_json\",
-        \"firstName\":\"Platform\",
-        \"lastName\":\"Administrator\",
+        \"firstName\":\"$current_first_name_json\",
+        \"lastName\":\"$current_last_name_json\",
         \"attributes\":{
           \"bootstrap_local\":[\"true\"]
         }
@@ -493,8 +516,8 @@ data:
         \"enabled\":true,
         \"emailVerified\":true,
         \"email\":\"$sso_email_json\",
-        \"firstName\":\"Platform\",
-        \"lastName\":\"Administrator\",
+        \"firstName\":\"$sso_first_name_json\",
+        \"lastName\":\"$sso_last_name_json\",
         \"credentials\":[{
           \"type\":\"password\",
           \"value\":\"$sso_password_json\",
@@ -507,14 +530,18 @@ data:
     elif grep -q '"federationLink"[[:space:]]*:[[:space:]]*"' "$response_file"; then
       master_user_is_federated=true
     else
+      master_first_name_json="$(extract_json_string firstName)"
+      master_last_name_json="$(extract_json_string lastName)"
+      master_first_name_json="${master_first_name_json:-$sso_first_name_json}"
+      master_last_name_json="${master_last_name_json:-$sso_last_name_json}"
       master_user_body="{
         \"id\":\"$master_user_id\",
         \"username\":\"$sso_username_json\",
         \"enabled\":true,
         \"emailVerified\":true,
         \"email\":\"$sso_email_json\",
-        \"firstName\":\"Platform\",
-        \"lastName\":\"Administrator\"
+        \"firstName\":\"$master_first_name_json\",
+        \"lastName\":\"$master_last_name_json\"
       }"
       expect_success "$(request PUT "realms/master/users/$master_user_id" "$master_user_body")"
     fi
