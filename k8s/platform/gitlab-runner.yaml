@@ -219,6 +219,9 @@ spec:
     spec:
       serviceAccountName: gitlab-runner-manager
       automountServiceAccountToken: true
+      # The longest application jobs run for two hours. Give SIGQUIT draining
+      # enough time to report their result before a runner-manager rollout.
+      terminationGracePeriodSeconds: 7500
       securityContext:
         runAsNonRoot: true
         runAsUser: 100
@@ -257,6 +260,13 @@ spec:
               port: metrics
             initialDelaySeconds: 20
             periodSeconds: 30
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - kill -QUIT 1; while kill -0 1 2>/dev/null; do sleep 1; done
           resources:
             requests:
               cpu: 100m
