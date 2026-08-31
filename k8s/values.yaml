@@ -32,6 +32,8 @@ trivy-operator:
     repository: aquasec/trivy-operator
     tag: "0.34.0@sha256:8123bd89b5f089cb5148123bb2b7a23f4d3cee305dd59132616f73776ef8bc9a"
     pullPolicy: IfNotPresent
+  service:
+    headless: false
   podAnnotations:
     prometheus.io/scrape: "true"
     prometheus.io/path: /metrics
