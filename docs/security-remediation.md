@@ -1,159 +1,216 @@
-# Trivy remediation — 2026-09-07
+# Trivy remediation — 2026-09-08
 
-This remediation updates platform images and application images in their
-owning repositories. Validation covers local image builds, GitLab pipelines,
-GitOps rollouts and Trivy reports for the deployed image digests.
+The target is zero vulnerabilities, exposed secrets, and unsafe configurations
+at **every severity**, including Low and Unknown. The platform has not reached
+that target. All eight distinct application runtime images currently scan clean;
+shared platform images still have findings. No severity filters, ignore rules,
+or vulnerability suppressions were added to obtain these results.
 
-## Verification method
+## Evidence and scope
 
-Replacement images were resolved from their upstream registries and pinned by
-digest. Trivy 0.74.0 scanned the Linux/amd64 images against the cluster's Trivy
-server. The downloaded scanner binary was checked against the upstream release
-checksum. The comparisons below use fresh scans of both image versions, not
-cached Kubernetes report totals. Counts are package occurrences, not distinct
-CVEs; the same CVE can appear in several binaries. No findings were suppressed.
+A checksum-verified Trivy 0.74.0 client scanned all 59 active image references
+against the cluster's Trivy server, including init containers and standalone
+Longhorn pods. Some references resolve to the same image. Both old and candidate
+images were scanned against the same database; the figures below count package
+occurrences, not distinct CVEs. Retired ReplicaSet reports are not a reliable
+measure of the running cluster.
 
-## Application images
+[The sanitized scan summary](security-scan-summary.json) records the image pins,
+all five severity counts, and secret counts. Raw reports and operational
+credentials are retained outside Git. Image scan results are a dated snapshot;
+the Grafana dashboard and reports for the current workload digest provide the
+ongoing view.
 
-| Repository | Change | Final image scan |
-| --- | --- | --- |
-| DevApp | Spring Boot 4.1.1, Tomcat 11.0.25, LZ4 1.11.1 and Alpine package updates | User, order and web images: zero vulnerabilities |
-| Indezy | Spring Boot 4.1.1, Tomcat 11.0.25, NGINX 1.30.4 and Alpine package updates | Server and web images: zero vulnerabilities |
-| Thoughty | Pinned Node 22.23.2, Alpine package updates, `qs` 6.16.0, npm/Yarn removed from runtime | Server/worker and web images: zero vulnerabilities |
-| Website | Pinned Node 24.19.0 on Alpine, package updates, npm/Yarn removed from runtime | Website image: zero vulnerabilities |
+DevApp's user, order and web images, Indezy's server and web images, Thoughty's
+server/worker and web images, and Website's image each report **zero
+vulnerabilities and zero exposed secrets**. The current PostgreSQL client,
+Redis, Homepage, NGINX authentication helper, curl helpers, and new Node and
+dashboard-sidecar images also scan clean.
 
-Thoughty's production migration hook now executes `node dist/scripts/migrate.js`
-directly. Its AWS CLI backup uploader is pinned to the scanned 2.36.40 image,
-which also reported zero vulnerabilities. Application-owned observability jobs
-use the same scanned curl image as the platform.
+## Platform image changes
 
-Spring Boot supplies the patched Jackson, Netty, Log4j and PostgreSQL JDBC
-versions. Tomcat and DevApp's Kafka LZ4 dependency still require explicit
-overrides. Relevant upstream references are the
-[Tomcat security advisories](https://tomcat.apache.org/security-11.html),
-[Spring Boot 4.1.1 dependency BOM](https://repo.maven.apache.org/maven2/org/springframework/boot/spring-boot-dependencies/4.1.1/spring-boot-dependencies-4.1.1.pom)
-and [pgJDBC changelog](https://jdbc.postgresql.org/changelogs/).
+Counts below are **Critical / High / Medium / Low / Unknown**.
 
-## Platform image comparisons
+| Component | Before | Patched image |
+| --- | ---: | ---: |
+| Trivy | 0 / 3 / 10 / 12 / 13 | 0 / 0 / 0 / 0 / 1 |
+| Trivy Operator | 0 / 3 / 6 / 12 / 3 | 0 / 0 / 0 / 0 / 1 |
+| OAuth2 Proxy | 0 / 1 / 0 / 0 / 3 | 0 / 0 / 0 / 0 / 1 |
+| MongoDB | 9 / 263 / 184 / 33 / 33 | 8 / 66 / 16 / 16 / 24 |
+| PostgreSQL | 16 / 92 / 185 / 155 / 14 | 15 / 71 / 164 / 153 / 8 |
+| DBGate | 5 / 62 / 99 / 117 / 5 | 4 / 52 / 92 / 116 / 0 |
+| Grafana | 3 / 159 / 32 / 13 / 36 | 3 / 157 / 26 / 1 / 16 |
+| Dashboard sidecar | 0 / 8 / 10 / 12 / 0 | 0 / 0 / 0 / 0 / 0 |
+| Vault | 1 / 12 / 6 / 12 / 3 | 1 / 10 / 0 / 0 / 3 |
+| GitLab | 25 / 384 / 217 / 46 / 72 | 25 / 384 / 122 / 31 / 72 |
+| Elasticsearch | 0 / 40 / 114 / 60 / 0 | 0 / 34 / 52 / 0 / 0 |
+| Kibana | 0 / 9 / 135 / 86 / 0 | 0 / 5 / 15 / 4 / 0 |
+| Logstash | 0 / 15 / 85 / 65 / 0 | 0 / 7 / 15 / 1 / 0 |
 
-| Component | Replacement | Before critical / high | After critical / high |
-| --- | --- | ---: | ---: |
-| OAuth2 Proxy | 7.15.4 | 3 / 38 | 0 / 1 |
-| Elasticsearch | 9.4.6 | 0 / 101 | 0 / 40 |
-| Kibana | 9.4.6 | 2 / 85 | 0 / 9 |
-| Kibana authentication sidecar | NGINX 1.30.4 Alpine | 3 / 39 | 0 / 7 |
-| Logstash | 9.4.6 | 2 / 68 | 0 / 15 |
-| Filebeat | 9.4.6 Wolfi | 1 / 56 | 0 / 0 |
-| Grafana | 13.2.1 | 5 / 179 | 3 / 159 |
-| Keycloak | 26.7.3 | 0 / 4 | 0 / 2 |
-| Homepage | 2.2.0 | 1 / 13 | 1 / 12 |
-| GitLab Runner | 19.3.1 | 5 / 48 | 2 / 40 |
-| Redis | 8.10.0 Alpine | 3 / 79 | 0 / 8 |
-| Argo CD | 3.5.2 | 5 / 107 | 5 / 107 |
+Across these thirteen images, findings decrease from 2,998 to 1,792. This is an
+image comparison, not a sum of Kubernetes reports or a statement that all
+remaining findings are exploitable.
 
-Argo CD's patch reduces medium findings from 197 to 184. Its unused Dex
-installation is disabled because `configs.cm.oidc.config` connects Argo CD
-directly to Keycloak. The curl helper image was replaced throughout the platform
-and applications; the replacement reports zero vulnerabilities. Redis retains
-version 8.10.0 and its configured UID/GID 999. It has no persistent volume in
-this repository, and the Alpine variant passed startup and PING checks.
+The maintained build recipes are under `images/security/`. They pin their
+upstream sources and runtime bases. Go services use Go 1.26.7 and patched
+compatible dependencies. MongoDB retains 7.0.40 and GitLab retains Omnibus
+19.3.1 while updating available OS packages. PostgreSQL retains its major
+version, Debian/glibc, ICU, and volume ownership to preserve existing collation
+and extension behavior. Elastic uses the official 9.4.6 Wolfi variants.
 
-Filebeat uses the official Wolfi variant because the standard 9.4.6 image
-requires x86-64-v3 CPU features unavailable on this node. The Wolfi image
-passed a read-only startup check and a fresh vulnerability scan.
+DBGate retains its supported Node 22 runtime and npm because plugin installation
+uses npm. Its npm dependencies are updated. The dashboard sidecar and Node
+helpers do not install packages at runtime, so unused package installers and
+bundled installer archives are removed. The Node image is used by Sonar app
+discovery and Kibana account synchronization.
 
-Kibana's authentication sidecar uses the official NGINX image with its njs
-module instead of carrying an ingress-controller binary. A non-root, read-only
-container smoke test covered health, anonymous and forged-identity rejection,
-session creation with a relative redirect, and existing-session forwarding.
-Temporary NGINX paths are under `/tmp`; the sidecar drops all capabilities.
+PostgreSQL's unused snakeoil private key and GitLab's three image-baked SSH
+host keys are removed from all published image layers. The final filesystems
+are copied into new images with their original runtime metadata preserved.
+GitLab generates installation-specific SSH keys on its persistent configuration
+volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
+The remaining GitLab matches are vendor examples/test fixtures and stay visible.
+No production credentials were copied into these images.
 
-The K3s installer default advances to 1.36.4+k3s1, which updates containerd and
-the local-path provisioner. The control-plane node was also upgraded using a
-checksum-verified binary after a verified recovery backup. Its original
-service configuration was preserved; node readiness and encryption were
-verified afterward. The installed backup script was corrected to distinguish
-an empty etcd directory from an initialized etcd member and to use supported
-snapshot flags. SQLite and etcd recovery tests passed.
-The current release retains the same CoreDNS and metrics-server versions.
+## Configuration and reporting fixes
 
-Upstream release information:
+- A validating admission policy rejects Pods using `gitRepo` volumes, including
+  volumes referencing local repositories. An empty volume list and ordinary
+  `emptyDir` volumes remain allowed. This mitigates
+  [CVE-2025-1767](https://github.com/kubernetes/kubernetes/issues/130786); the
+  Kubernetes version-based vulnerability report can still list the CVE.
+- Trivy Operator loads the configured trusted-registry policy data. A hash of
+  both policy code and mounted policy data invalidates outdated configuration
+  reports when the policy changes. Tests cover real ConfigMap projected-volume
+  symlinks, trusted and untrusted registries, and missing policy data.
+- Reports preserve Trivy's resolved severity instead of reclassifying rated
+  advisories as Unknown. Actual Unknown findings remain Unknown. The detailed
+  vulnerability table displays all severities.
+- Automatic workload coverage includes standalone Pods, which covers workloads
+  created by custom controllers such as Longhorn. Pods already covered by
+  built-in workload owners are skipped to avoid duplicate scans.
+- Stateless discovery and logging helpers use UID/GID 10001. The Logstash
+  index-configuration helper has a read-only root filesystem. Existing database
+  and persistent-volume owner IDs are preserved.
+- Vault and ingress resource budgets are defined in their shared Helm values;
+  both the installer and Ansible use those values. Vault image selection now
+  uses the same rendering path as the platform's GitOps manifests.
 
-- [OAuth2 Proxy 7.15.4](https://github.com/oauth2-proxy/oauth2-proxy/releases/tag/v7.15.4)
-- [Elastic release notes](https://www.elastic.co/docs/release-notes/elasticsearch)
-- [Grafana 13.2.1](https://github.com/grafana/grafana/releases/tag/v13.2.1)
-- [Keycloak 26.7.3](https://github.com/keycloak/keycloak/releases/tag/26.7.3)
-- [Homepage 2.2.0](https://github.com/gethomepage/homepage/releases/tag/v2.2.0)
-- [Argo CD 3.5.2](https://github.com/argoproj/argo-cd/releases/tag/v3.5.2)
-- [K3s 1.36.4+k3s1](https://github.com/k3s-io/k3s/releases/tag/v1.36.4%2Bk3s1)
+The existing scanner memory allocation, immediate cleanup of completed scan
+jobs, 24-hour report retention, RBAC assessment, infrastructure assessment,
+secret scanning, and cluster compliance scans remain enabled. Obsolete reports
+may be expired only after checking their owner has zero replicas, no live pods,
+and a healthy replacement. Current findings must not be deleted to improve a
+score.
 
-## Remaining work
+## Installation, Ansible, and registry bootstrap
 
-The platform is not vulnerability-free. Several current upstream images still
-bundle vulnerable OS packages or libraries even when a package-level fix exists.
-Examples include gRPC 1.83.0 in OAuth2 Proxy, bundled Grafana plugins, Redis's
-OpenSSL/setpriv packages and libraries inside Elastic images. Updated upstream
-images or separately maintained and tested image rebuilds are needed to remove
-those remaining findings.
+Patched platform images are hosted in GitLab's private registry. GitLab cannot
+bootstrap by pulling its own image from a registry that has not started yet.
+The renderer therefore supports two explicit profiles:
 
-Fresh candidate scans did not demonstrate a vulnerability-count improvement
-for GitLab 19.3.1. PostgreSQL image candidates still contain numerous findings;
-changing its base distribution also needs database collation and extension
-review. MongoDB remains constrained to the compatible 7.0 line by the node's
-kernel, as documented beside its image. No database major-version change is
-part of this remediation.
+| Profile | Use |
+| --- | --- |
+| `bootstrap` | A fresh cluster uses pinned public upstream images until GitLab, Vault, registry authentication, and the patched images are available. Upstream findings remain visible. |
+| `patched` | An existing cluster uses the tested private image digests and `platform-registry-auth`. |
 
-The PostgreSQL client containers used by Indezy's database readiness check and
-Thoughty's suspended backup job also retain vendor-image findings. They are
-separate from the clean application runtime images listed above. Findings
-labelled Unknown remain included in the checks and visible in the dashboard.
+`SECURITY_IMAGES_ENABLED=auto` is the default for
+`scripts/render-cluster-config.sh` and the installer. It preserves the matching
+existing Argo CD application's profile. A fresh installation or a different
+domain selects bootstrap. Unexpected API failures stop rendering instead of
+silently changing an existing cluster's profile. Explicit `true` or `false`
+selects patched or bootstrap mode without cluster detection.
 
-Ingress NGINX, Longhorn/CSI, K3s system components, Vault, Trivy, External
-Secrets, Prometheus, Alertmanager, Kafka, Kafka UI, SonarQube, DBGate and
-Portainer retain findings. These must remain visible for follow-up against
-supported upstream releases or replacement/rebuild plans. A fixed transitive
-package version in a report does not prove that a compatible fixed vendor
-image exists. In particular, the current Longhorn release still supplies the
-vulnerable CSI provisioner; changing storage sidecars independently requires
-Longhorn compatibility validation.
+The Argo CD application carries its selected
+`profiles/security-images-*.values` file and scanner registry parameters.
+`k8s/security-images.json` supplies the public fallback pins and the patched
+Vault pin. The renderer also creates `config/vault-values.yaml` in its private
+output directory. Ansible reconciliation uses that generated file unless an
+operator explicitly supplies a different `vault_values_file`.
 
-## Checks and delivery
+For a fresh installation, publish the images described in the security build
+recipes to the new registry and provision `platform-registry-auth` before
+selecting the patched profile. For example, build from the recipe directory:
 
-Live rollout also exposed two causes of stale reporting. Trivy Operator reached
-its old 512 MiB memory limit and repeatedly failed health probes; its allocation
-is now 1 GiB. The configured ten-minute scan-job retention also exhausted the
-two-job concurrency limit because the operator counts completed jobs. Automatic
-job cleanup after report persistence is restored; report retention remains 24
-hours. No vulnerability report filters or severity suppressions were added.
+```sh
+docker build -f images/security/node.Dockerfile \
+  -t registry.example.com/swirlit/bm-cluster/security/node:RELEASE images/security
+```
 
-- DevApp: `mvn clean verify` passed, with 68 tests.
-- Indezy: all 517 tests and SpotBugs passed using the documented CI setting
-  `-Djacoco.haltOnFailure=false`. Unmodified coverage policy still reports
-  70% branch coverage against an 80% requirement; strict `verify` fails that gate.
-- Thoughty: all 836 tests passed; both Docker build paths and direct Node
-  migration/worker entry-point checks passed.
-- Website: all 33 tests passed both locally and inside the new runtime;
-  both Docker build targets, generated CSP checks and a read-only container
-  HTTP smoke test passed.
-- Indezy web: production build, NGINX configuration and read-only container
-  SPA/health smoke checks passed.
-- Platform: all 50 repository and live validation checks passed. Both Helm charts
-  rendered, Dex resources were absent from the Argo CD chart, and 91 platform
-  resources passed Kubernetes server-side dry-run. All three application
-  manifest sets also passed server-side dry-run; both Thoughty overlays render.
+Scan each image and pin the resulting registry digest before enabling it. The
+recorded digests describe the published artifacts; a later rebuild can produce
+a different digest as package repositories receive updates. For GitOps,
+select `profiles/security-images-patched.values` and set both
+`trivy-operator.image.registry` and `trivy-operator.trivy.image.registry` to
+`registry.<public-domain>`. Set those same parameters to `docker.io` when using
+the bootstrap profile. Keep this selection in the root Application source.
 
-Application releases use their existing GitLab pipelines and their own Argo CD
-applications. The platform rollout uses the `bm-cluster` application. Argo CD's
-Helm release was separately upgraded to the configured version with an atomic,
-waited upgrade. GitOps, platform-service and registry-write CI checks passed.
+`SECURITY_IMAGES_ENABLED=true ./install-control-plane.sh` enables the patched
+profile through the shared installer. `ansible/deploy.yml` accepts `-e security_images_enabled=true` or the same
+environment variable. The installer installs Python/YAML prerequisites before
+rendering. Ansible does not implement a separate image-selection policy.
 
-Verify the running image digest against its current Trivy report, including
-Unknown findings, before treating an application image as clean. Reports from
-retired ReplicaSets can outlive their pods. The cleanup used here archives the
-original reports and expires only reports whose owner has zero desired and
-actual replicas, no active pods, and a healthy newer deployment revision.
-Current workload reports and vulnerability severities remain unchanged.
+Before updating GitLab, pre-pull its new pinned image into K3s on every node
+where it can run. Its Recreate deployment stops the registry with GitLab, so
+publishing the image alone is insufficient. Verify the exact digest in each
+node's CRI image inventory before starting the rollout.
 
-Live report snapshots and operational values are kept outside the repository.
-The Grafana dashboard remains the source for current totals; the comparisons
-above record the image scans performed during this remediation.
+For recovery when the private registry is unavailable, preload the pinned
+images into each K3s node's containerd image store from a protected offline
+archive, or explicitly render the public bootstrap profile. Switching to public
+images restores a compatible bootstrap path but restores their vendor findings
+as well; switch back after registry recovery. Existing cached images use
+`IfNotPresent` where configured.
+
+## Findings that prevent zero
+
+Trivy, Trivy Operator and OAuth2 Proxy each still report the module-level
+Unknown advisory [GO-2026-5932](https://pkg.go.dev/vuln/GO-2026-5932). It affects
+the deprecated `golang.org/x/crypto/openpgp` package. Dependency inspection of
+all three built commands confirms that none imports that package. Trivy and
+the operator use the maintained ProtonMail implementation; OAuth2 Proxy
+imports neither OpenPGP implementation. The module scanner still flags the
+parent `x/crypto` module. This evidence supports treating these occurrences as
+false positives, but the reports are retained without an ignore rule.
+
+Many vendor images still bundle affected Go, Java, Ruby, Node, or OS packages.
+Some have no fixed version in their supported distribution. A package-level
+fixed version does not establish that a compatible fixed vendor image exists.
+GitLab, PostgreSQL, MongoDB, DBGate, Grafana, Elastic, Argo CD, ingress NGINX,
+SonarQube, GitLab Runner, Odoo, Longhorn/CSI, and other infrastructure retain
+findings. Further supported upgrades or maintained rebuilds with integration
+testing are required. Moving PostgreSQL between distributions also requires a
+collation/extension migration plan; changing Longhorn's generated CSI sidecars
+requires storage compatibility testing.
+
+Generic hardening checks also report required host access, privileged storage
+and networking operations, low persistent-volume owner IDs, and controller
+RBAC. Removing those permissions blindly would disable cluster functions.
+These findings remain visible and require component-specific changes or a
+recorded, reviewed exception; they are not a basis for claiming zero.
+
+## Validation
+
+- Fresh scans of all active application images and all replacement images,
+  including Low/Unknown findings and secret scanning.
+- PostgreSQL and MongoDB initialization, writes, dump, restore, and readback in
+  isolated containers; final flattened PostgreSQL image retested.
+- DBGate and Grafana HTTP startup checks with non-root, read-only containers;
+  DBGate npm registry download, dependency resolution, and extraction.
+- Dashboard sidecar reads a ConfigMap from a test Kubernetes API and writes its
+  dashboard file as a non-root user without package installers.
+- OAuth2 Proxy readiness and forged identity rejection; encryption, cookie,
+  session, and provider tests. Vault startup and health check.
+- Elasticsearch index/write/read checks; Kibana integration and Logstash event
+  processing checks for their official Wolfi images.
+- Operator severity and policy regression tests, exact-source patch checks,
+  both Helm profiles, installation/reconciliation profile tests, Ansible
+  behavioral tests, and Kubernetes server-side dry-run.
+- Admission tests accept ordinary Pods and reject `gitRepo` volumes. A recovery
+  archive containing Kubernetes state, Vault, PostgreSQL, and MongoDB backups
+  was verified before stateful rollouts.
+
+Run `python3 scripts/test-security-images.py` and
+`./scripts/validate-repository.sh --live` for the repository checks. Verification
+of a running rollout must additionally compare its actual image digest with
+its current Trivy report and confirm workload and Argo CD health.

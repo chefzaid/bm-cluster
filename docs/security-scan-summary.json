@@ -1,0 +1,343 @@
+{
+  "date": "2026-09-08",
+  "scanner": "Trivy 0.74.0",
+  "platform": "linux/amd64",
+  "counting": "Package occurrences per image; all severities, including UNKNOWN; no suppressions. Candidate scans, deployment verified separately.",
+  "components": [
+    {
+      "component": "trivy",
+      "before": {
+        "image": "docker.io/aquasec/trivy:0.74.0@sha256:ee940acbf1f58ebadb42d01434ce4609530bf1b52536afbd1eee66cd7123c5c9",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 3,
+          "MEDIUM": 10,
+          "LOW": 12,
+          "UNKNOWN": 13
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/trivy:0.74.0-20260908.2@sha256:2c218d9af38bf6878afed4d4e5b1392a1923ecc7e47f7d298be3514e8550dac8",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "trivy-operator",
+      "before": {
+        "image": "docker.io/aquasec/trivy-operator:0.34.0@sha256:8123bd89b5f089cb5148123bb2b7a23f4d3cee305dd59132616f73776ef8bc9a",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 3,
+          "MEDIUM": 6,
+          "LOW": 12,
+          "UNKNOWN": 3
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/trivy-operator:0.34.0-20260908.2@sha256:ce0bc67b3832ab3db5089926f9ed5bb4bb1814365bed50dc909eb15c9ce97a7a",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "oauth2-proxy",
+      "before": {
+        "image": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 1,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 3
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/oauth2-proxy:7.15.4-20260908.1@sha256:5cb48ce3268c9877d0399649895719707e5e9ecf43ec480d3de88e9aa8ef1e48",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "mongodb",
+      "before": {
+        "image": "mongo@sha256:8ef27524b4cde51b9f07bb0827a56d02c6d3b148d0b7d0ca8ff4dfd57351ff4f",
+        "vulnerabilities": {
+          "CRITICAL": 9,
+          "HIGH": 263,
+          "MEDIUM": 184,
+          "LOW": 33,
+          "UNKNOWN": 33
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/mongodb:7.0.40-20260908.1@sha256:9aedeece952620e585dffaec3f5d936c7bb9dd0e48cc279c70c038c6d8722456",
+        "vulnerabilities": {
+          "CRITICAL": 8,
+          "HIGH": 66,
+          "MEDIUM": 16,
+          "LOW": 16,
+          "UNKNOWN": 24
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "postgres",
+      "before": {
+        "image": "postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871",
+        "vulnerabilities": {
+          "CRITICAL": 16,
+          "HIGH": 92,
+          "MEDIUM": 185,
+          "LOW": 155,
+          "UNKNOWN": 14
+        },
+        "secrets": 1
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres:18.6-20260908.2@sha256:35b506146ffa5094eeb6ce22b27351e4d687630fd5aa0cd7d8cbb0d645c2b509",
+        "vulnerabilities": {
+          "CRITICAL": 15,
+          "HIGH": 71,
+          "MEDIUM": 164,
+          "LOW": 153,
+          "UNKNOWN": 8
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "dbgate",
+      "before": {
+        "image": "dbgate/dbgate@sha256:03956fb18367a2b1d736b4ebb702401c68ec5f7bde691f9ea2412c3df0c27e34",
+        "vulnerabilities": {
+          "CRITICAL": 5,
+          "HIGH": 62,
+          "MEDIUM": 99,
+          "LOW": 117,
+          "UNKNOWN": 5
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dbgate:7.2.6-20260908.5@sha256:33d7b58f860e92e691797f561c66cd1348e28c7d8579c16e81b2af8100e2bbde",
+        "vulnerabilities": {
+          "CRITICAL": 4,
+          "HIGH": 52,
+          "MEDIUM": 92,
+          "LOW": 116,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "grafana",
+      "before": {
+        "image": "docker.io/grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283",
+        "vulnerabilities": {
+          "CRITICAL": 3,
+          "HIGH": 159,
+          "MEDIUM": 32,
+          "LOW": 13,
+          "UNKNOWN": 36
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/grafana:13.2.1-20260908.1@sha256:8abe006a83e4812cb32d390fd2fd9819e2aa0ffccf16ae10e0b1d3e5f02c6ea6",
+        "vulnerabilities": {
+          "CRITICAL": 3,
+          "HIGH": 157,
+          "MEDIUM": 26,
+          "LOW": 1,
+          "UNKNOWN": 16
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "dashboard-sidecar",
+      "before": {
+        "image": "ghcr.io/kiwigrid/k8s-sidecar@sha256:440db6dcf9a724fa2c167612e147ad8839e75104732dc7ec89783e73199837f0",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 8,
+          "MEDIUM": 10,
+          "LOW": 12,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dashboard-sidecar:2.11.2-20260908.4@sha256:a2ace0140cda9221aecdfe93917f0d1f07a567a76d452c549d907726d158c608",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "vault",
+      "before": {
+        "image": "hashicorp/vault:2.0.4",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 12,
+          "MEDIUM": 6,
+          "LOW": 12,
+          "UNKNOWN": 3
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 10,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 3
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "gitlab",
+      "before": {
+        "image": "docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f",
+        "vulnerabilities": {
+          "CRITICAL": 25,
+          "HIGH": 384,
+          "MEDIUM": 217,
+          "LOW": 46,
+          "UNKNOWN": 72
+        },
+        "secrets": 25
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260908.2@sha256:a15389e933a2105b8ea0f32016fe45d5660f5bf28813f21aab24f00a40be90c6",
+        "vulnerabilities": {
+          "CRITICAL": 25,
+          "HIGH": 384,
+          "MEDIUM": 122,
+          "LOW": 31,
+          "UNKNOWN": 72
+        },
+        "secrets": 22
+      }
+    },
+    {
+      "component": "elasticsearch",
+      "before": {
+        "image": "docker.elastic.co/elasticsearch/elasticsearch:9.4.6@sha256:6650a69591cddfb3afc1a586ce3796c5c0099852d8429fe13e71ec18e0150135",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 40,
+          "MEDIUM": 114,
+          "LOW": 60,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "docker.elastic.co/elasticsearch/elasticsearch-wolfi:9.4.6@sha256:c53e21b65f9131192c63ae36dc782d5d90289ceefc0d5b2b20575c90381ecc83",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 34,
+          "MEDIUM": 52,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "kibana",
+      "before": {
+        "image": "docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 9,
+          "MEDIUM": 135,
+          "LOW": 86,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "docker.elastic.co/kibana/kibana-wolfi:9.4.6@sha256:9943f90fa682e6d7d738350f4b878ee86f5b8dcf9da20530830d21c1bab35416",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 5,
+          "MEDIUM": 15,
+          "LOW": 4,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "logstash",
+      "before": {
+        "image": "docker.elastic.co/logstash/logstash:9.4.6@sha256:18ffa5614f97de09a02fdd021c53d3f648ad60f1a89f0fa87e9f448cea840560",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 15,
+          "MEDIUM": 85,
+          "LOW": 65,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "docker.elastic.co/logstash/logstash-wolfi:9.4.6@sha256:1479b0159cd8ce70ac3580247511b9321c1f20ecae8aaea872a43d277d5397e3",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 7,
+          "MEDIUM": 15,
+          "LOW": 1,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    }
+  ],
+  "applicationRuntimeImages": [
+    "registry.swirlit.dev/swirlit/devapp/devapp-web:1.4.1",
+    "registry.swirlit.dev/swirlit/indezy/indezy-server:1.2.2",
+    "registry.swirlit.dev/swirlit/indezy/indezy-web:1.2.2",
+    "registry.swirlit.dev/swirlit/devapp/order-app:1.4.1",
+    "registry.swirlit.dev/swirlit/thoughty/thoughty-server:1.1.5",
+    "registry.swirlit.dev/swirlit/thoughty/thoughty-web:1.1.5",
+    "registry.swirlit.dev/swirlit/devapp/user-app:1.4.1",
+    "registry.swirlit.dev/swirlit/website/site@sha256:99cdcb75a0a1564baa05fb87871ecf9395e6f90958de1e5bd1fa131c9bd994f2"
+  ]
+}

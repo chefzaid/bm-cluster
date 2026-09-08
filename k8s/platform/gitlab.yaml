@@ -154,13 +154,15 @@ spec:
         prometheus.io/path: /-/metrics
         prometheus.io/port: "80"
     spec:
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: gitlab
-        image: docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260908.2@sha256:a15389e933a2105b8ea0f32016fe45d5660f5bf28813f21aab24f00a40be90c6
         env:
         - name: KEYCLOAK_CLIENT_SECRET
           valueFrom:

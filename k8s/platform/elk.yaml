@@ -249,7 +249,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: elasticsearch
-        image: docker.elastic.co/elasticsearch/elasticsearch:9.4.6@sha256:6650a69591cddfb3afc1a586ce3796c5c0099852d8429fe13e71ec18e0150135
+        image: docker.elastic.co/elasticsearch/elasticsearch-wolfi:9.4.6@sha256:c53e21b65f9131192c63ae36dc782d5d90289ceefc0d5b2b20575c90381ecc83
         ports:
         - containerPort: 9200
         - containerPort: 9300
@@ -329,8 +329,8 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 100
-        runAsGroup: 101
+        runAsUser: 10001
+        runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -644,17 +644,19 @@ spec:
         app: kibana-keycloak-user-sync
     spec:
       restartPolicy: OnFailure
+      imagePullSecrets:
+      - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: sync
-        image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
-        command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
+        command: ["node", "/opt/keycloak-sync/sync.mjs"]
         envFrom:
         - secretRef:
             name: keycloak-admin-secret
@@ -716,6 +718,8 @@ spec:
             app: kibana-keycloak-user-sync
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+          - name: platform-registry-auth
           automountServiceAccountToken: false
           securityContext:
             runAsNonRoot: true
@@ -726,8 +730,8 @@ spec:
             fsGroup: 10001
           containers:
           - name: sync
-            image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
-            command: ["/usr/share/kibana/node/default/bin/node", "/opt/keycloak-sync/sync.mjs"]
+            image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
+            command: ["node", "/opt/keycloak-sync/sync.mjs"]
             envFrom:
             - secretRef:
                 name: keycloak-admin-secret
@@ -841,9 +845,10 @@ spec:
             "${endpoint}/_index_template/lynis-audits" >/dev/null
         securityContext:
           runAsNonRoot: true
-          runAsUser: 100
-          runAsGroup: 101
+          runAsUser: 10001
+          runAsGroup: 10001
           allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
           capabilities:
             drop: ["ALL"]
         resources:
@@ -859,7 +864,7 @@ spec:
           readOnly: true
       containers:
       - name: logstash
-        image: docker.elastic.co/logstash/logstash:9.4.6@sha256:18ffa5614f97de09a02fdd021c53d3f648ad60f1a89f0fa87e9f448cea840560
+        image: docker.elastic.co/logstash/logstash-wolfi:9.4.6@sha256:1479b0159cd8ce70ac3580247511b9321c1f20ecae8aaea872a43d277d5397e3
         ports:
         - containerPort: 5000
           name: tcp-input
@@ -1103,7 +1108,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kibana
-        image: docker.elastic.co/kibana/kibana:9.4.6@sha256:9cf14dae746aa808f7233299b856cd0ae275c2418607b1cc7ee23771fe324cad
+        image: docker.elastic.co/kibana/kibana-wolfi:9.4.6@sha256:9943f90fa682e6d7d738350f4b878ee86f5b8dcf9da20530830d21c1bab35416
         args:
         - /usr/local/bin/kibana-docker
         - --xpack.cloud_connect.enabled=false

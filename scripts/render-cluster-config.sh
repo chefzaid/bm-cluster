@@ -52,6 +52,9 @@ done
 install -d -m 0700 "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config"
 cp -a "$REPOSITORY_ROOT/k8s/." "$OUTPUT_DIR/k8s/"
 install -m 0600 "$REPOSITORY_ROOT/config/argocd-values.yaml" "$OUTPUT_DIR/config/argocd-values.yaml"
+install -m 0600 "$REPOSITORY_ROOT/config/vault-values.yaml" "$OUTPUT_DIR/config/vault-values.yaml"
+python3 "$SCRIPT_DIR/render-security-images.py" --root "$OUTPUT_DIR" \
+  --domain "$PLATFORM_DOMAIN" --enabled "${SECURITY_IMAGES_ENABLED:-auto}"
 
 escape_sed() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
 public_domain="$(escape_sed "$PLATFORM_DOMAIN")"
@@ -74,7 +77,7 @@ while IFS= read -r -d '' file; do
     "$file"
 done < <(find "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" -type f -print0)
 
-render_token_pattern='__(PUBLIC_DOMAIN|INTERNAL_DNS_ZONE|GITOPS_REPOSITORY_URL|GITLAB_GROUP_PATH|GITLAB_PROJECT_NAME|CLOUDFLARE_ACCESS_TEAM_NAME|APPS_ENABLED|DESCHEDULER_ENABLED)__'
+render_token_pattern='__(PUBLIC_DOMAIN|INTERNAL_DNS_ZONE|GITOPS_REPOSITORY_URL|GITLAB_GROUP_PATH|GITLAB_PROJECT_NAME|CLOUDFLARE_ACCESS_TEAM_NAME|APPS_ENABLED|DESCHEDULER_ENABLED|SECURITY_IMAGE_PROFILE|SECURITY_SCANNER_REGISTRY)__'
 if grep -REn "$render_token_pattern" "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" >/dev/null; then
   grep -REn "$render_token_pattern" "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" >&2
   fail "Rendered configuration still contains unresolved placeholders."

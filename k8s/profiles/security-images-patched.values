@@ -1,0 +1,13 @@
+# Registry hostnames are supplied by the Argo CD application's Helm parameters.
+securityImagesEnabled: true
+trivy-operator:
+  image:
+    repository: swirlit/bm-cluster/security/trivy-operator
+    tag: "0.34.0-20260908.2@sha256:ce0bc67b3832ab3db5089926f9ed5bb4bb1814365bed50dc909eb15c9ce97a7a"
+    pullSecrets:
+      - name: platform-registry-auth
+  trivy:
+    image:
+      repository: swirlit/bm-cluster/security/trivy
+      tag: "0.74.0-20260908.2@sha256:2c218d9af38bf6878afed4d4e5b1392a1923ecc7e47f7d298be3514e8550dac8"
+      imagePullSecret: platform-registry-auth

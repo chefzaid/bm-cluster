@@ -1,5 +1,5 @@
 diff --git a/go.mod b/go.mod
-index 65d8bb1..9f0ae30 100644
+index 65d8bb1..e3c2df6 100644
 --- a/go.mod
 +++ b/go.mod
 @@ -61,7 +61,7 @@ require (
@@ -29,6 +29,15 @@ index 65d8bb1..9f0ae30 100644
  	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0 // indirect
  	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
  	go.opentelemetry.io/otel v1.44.0 // indirect
+@@ -316,7 +316,7 @@ require (
+ 	go.yaml.in/yaml/v2 v2.4.4 // indirect
+ 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+ 	go.yaml.in/yaml/v4 v4.0.0-rc.3 // indirect
+-	golang.org/x/crypto v0.55.0 // indirect
++	golang.org/x/crypto v0.56.0 // indirect
+ 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
+ 	golang.org/x/mod v0.40.0 // indirect
+ 	golang.org/x/net v0.58.0 // indirect
 @@ -330,7 +330,7 @@ require (
  	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
  	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7 // indirect
@@ -39,7 +48,7 @@ index 65d8bb1..9f0ae30 100644
  	gopkg.in/ini.v1 v1.67.3 // indirect
  	gopkg.in/yaml.v3 v3.0.1 // indirect
 diff --git a/go.sum b/go.sum
-index d3769dc..a8d1e69 100644
+index d3769dc..a225c04 100644
 --- a/go.sum
 +++ b/go.sum
 @@ -57,6 +57,8 @@ github.com/GoogleCloudPlatform/docker-credential-gcr/v2 v2.2.1 h1:hlWYvaYrCCH1nT
@@ -69,7 +78,16 @@ index d3769dc..a8d1e69 100644
  go.opentelemetry.io/contrib/exporters/autoexport v0.67.0 h1:4fnRcNpc6YFtG3zsFw9achKn3XgmxPxuMuqIL5rE8e8=
  go.opentelemetry.io/contrib/exporters/autoexport v0.67.0/go.mod h1:qTvIHMFKoxW7HXg02gm6/Wofhq5p3Ib/A/NNt1EoBSQ=
  go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.69.0 h1:2yEATaop1/a1I4psnSLgWVPLWwCzkqWakgJy7xTDVy0=
-@@ -1149,6 +1155,8 @@ google.golang.org/grpc v1.27.0/go.mod h1:qbnxyOmOxrQa7FizSgH+ReBfzJrCY1pSN7KXBS8
+@@ -1048,6 +1054,8 @@ golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9/go.mod h1:LzIPMQfyMNhhGPh
+ golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d/go.mod h1:IxCIyHEi3zRg3s0A5j5BB6A9Jmi73HwBIUl50j+osU4=
+ golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
+ golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
++golang.org/x/crypto v0.56.0 h1:GUh5Ii4J5jtcseSMiRqr1jXCNHoxjeV9Fmekc2oLy6Y=
++golang.org/x/crypto v0.56.0/go.mod h1:OMW5y6CY9l38uPLmxU6l6pwcXp1obtLo3e6gT7gQR2I=
+ golang.org/x/exp v0.0.0-20190121172915-509febef88a4/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
+ golang.org/x/exp v0.0.0-20260603202125-055de637280b h1:v1uXiEBHo8QA0LiGCo7UgHMzHT4Kdfpl2zmtH5vaP1Q=
+ golang.org/x/exp v0.0.0-20260603202125-055de637280b/go.mod h1:d2fgXJLVs4dYDHUk5lwMIfzRzSrWCfGZb0ZqeLa/Vcw=
+@@ -1149,6 +1157,8 @@ google.golang.org/grpc v1.27.0/go.mod h1:qbnxyOmOxrQa7FizSgH+ReBfzJrCY1pSN7KXBS8
  google.golang.org/grpc v1.33.2/go.mod h1:JMHMWHQWaTccqQQlmk3MJZS+GWXOdAesneDmEnv2fbc=
  google.golang.org/grpc v1.82.1 h1:NnAxzGRA0677vCa4BUkOAnO5+FfQqVl9iUXeD0IqcGE=
  google.golang.org/grpc v1.82.1/go.mod h1:yzTZ1TB1Z3SG+LIYaI+WiE8D5+PZ3ArnrSp8zF3+/ZA=
@@ -113,7 +131,7 @@ index d00b81c..9c830d4 100644
  		_, err := or.GetActivePodsMatchingLabels(ctx, resource.GetNamespace(), r.Spec.Selector)
  		if err != nil {
 diff --git a/pkg/policy/policy.go b/pkg/policy/policy.go
-index 420dbe3..eb4eb6c 100644
+index 420dbe3..9e93393 100644
 --- a/pkg/policy/policy.go
 +++ b/pkg/policy/policy.go
 @@ -6,6 +6,7 @@ import (
@@ -124,7 +142,47 @@ index 420dbe3..eb4eb6c 100644
  	"path"
  	"path/filepath"
  	"slices"
-@@ -312,7 +313,7 @@ func (p *Policies) InitScanner() error {
+@@ -169,6 +170,39 @@ func (p *Policies) Hash(kind string) (string, error) {
+ 
+ 	// TODO(simar7): What if len(policies) is 0?
+ 
++	// Mounted policy data changes the checks' meaning. Include it in the hash
++	// so reports produced before a configured allowlist are regenerated.
++	if dirs := filepath.SplitList(os.Getenv("OPERATOR_POLICY_DATA_DIRS")); len(dirs) > 0 {
++		dataFS, _, err := createDataFS(dirs, "")
++		if err != nil {
++			return "", fmt.Errorf("load policy data for hash: %w", err)
++		}
++		if err := fs.WalkDir(dataFS, ".", func(name string, entry fs.DirEntry, err error) error {
++			if err != nil {
++				return err
++			}
++			if name != "." && strings.HasPrefix(path.Base(name), "..") {
++				if entry.IsDir() {
++					return fs.SkipDir
++				}
++				return nil
++			}
++			if entry.IsDir() {
++				return nil
++			}
++			if ext := path.Ext(name); ext != ".yaml" && ext != ".yml" && ext != ".json" {
++				return nil
++			}
++			content, err := fs.ReadFile(dataFS, name)
++			if err != nil {
++				return err
++			}
++			policies = append(policies, "data:"+name+":"+string(content))
++			return nil
++		}); err != nil {
++			return "", fmt.Errorf("hash policy data: %w", err)
++		}
++	}
+ 	hash = kube.ComputeHash(policies)
+ 	if err := p.setCachedHash(kind, hash); err != nil {
+ 		return "", fmt.Errorf("failed to set cached hash for kind %s: %w", kind, err)
+@@ -312,7 +346,7 @@ func (p *Policies) InitScanner() error {
  			return err
  		}
  	}
@@ -133,6 +191,135 @@ index 420dbe3..eb4eb6c 100644
  	if err != nil {
  		return fmt.Errorf("create data fs: %w", err)
  	}
+diff --git a/pkg/policy/policy_data_test.go b/pkg/policy/policy_data_test.go
+new file mode 100644
+index 0000000..55213cd
+--- /dev/null
++++ b/pkg/policy/policy_data_test.go
+@@ -0,0 +1,123 @@
++package policy_test
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/aquasecurity/trivy-operator/pkg/policy"
++	"github.com/aquasecurity/trivy/pkg/iac/scan"
++	"github.com/go-logr/logr"
++)
++
++// Exercise the actual embedded registry policy, not a stubbed data loader.
++func TestPolicyDataTrustedRegistry(t *testing.T) {
++	dir := t.TempDir()
++	if err := os.WriteFile(filepath.Join(dir, "registries.yaml"), []byte("ksv0125:\n  trusted_registries:\n    - registry.example.com\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("OPERATOR_POLICY_DATA_DIRS", dir)
++	p := policy.NewPolicies(nil, testConfig{embeddedPolicies: true}, logr.Discard(), nil, "1.36.4", nil)
++	if err := p.Load(); err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		image string
++		fail  bool
++	}{
++		{"registry.example.com/team/app:1.0", false},
++		{"untrusted.example.net/team/app:1.0", true},
++	} {
++		t.Run(tc.image, func(t *testing.T) {
++			pod := simpleNginxPod.DeepCopy()
++			pod.Name = "registry-policy-test"
++			pod.Namespace = "apps"
++			pod.Spec.Containers[0].Image = tc.image
++			results, err := p.Eval(t.Context(), pod)
++			if err != nil {
++				t.Fatal(err)
++			}
++			seen := false
++			for _, result := range results {
++				if policy.GetResultID(result) != "AVD-KSV-0125" {
++					continue
++				}
++				seen = true
++				if (result.Status() == scan.StatusFailed) != tc.fail {
++					t.Fatalf("registry check failure = %v, want %v", (result.Status() == scan.StatusFailed), tc.fail)
++				}
++			}
++			if !seen {
++				t.Fatal("registry check did not run")
++			}
++		})
++	}
++}
++
++func TestPolicyDataMissingDirectoryFails(t *testing.T) {
++	t.Setenv("OPERATOR_POLICY_DATA_DIRS", filepath.Join(t.TempDir(), "missing"))
++	p := policy.NewPolicies(nil, testConfig{embeddedPolicies: true}, logr.Discard(), nil, "1.36.4", nil)
++	if err := p.InitScanner(); err == nil {
++		t.Fatal("missing policy data must fail initialization")
++	}
++}
++
++func TestPolicyDataChangesReportHash(t *testing.T) {
++	dir := t.TempDir()
++	t.Setenv("OPERATOR_POLICY_DATA_DIRS", dir)
++	hash := func(registry string) string {
++		t.Helper()
++		if err := os.WriteFile(filepath.Join(dir, "registries.yaml"), []byte("ksv0125:\n  trusted_registries:\n    - "+registry+"\n"), 0600); err != nil {
++			t.Fatal(err)
++		}
++		// Restarting the operator reloads mounted data and invalidates reports.
++		p := policy.NewPolicies(nil, testConfig{embeddedPolicies: true}, logr.Discard(), nil, "1.36.4", nil)
++		value, err := p.Hash("Pod")
++		if err != nil {
++			t.Fatal(err)
++		}
++		return value
++	}
++	first := hash("registry.example.com")
++	if hash("registry.example.com") != first {
++		t.Fatal("unchanged data must retain its hash")
++	}
++	if hash("untrusted.example.net") == first {
++		t.Fatal("changed data must invalidate old reports")
++	}
++}
++
++func TestPolicyDataProjectedConfigMap(t *testing.T) {
++	dir := t.TempDir()
++	version := filepath.Join(dir, "..2026_09_08")
++	if err := os.Mkdir(version, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(version, "registries.yaml"), []byte("ksv0125:\n  trusted_registries:\n    - registry.example.com\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink("..2026_09_08", filepath.Join(dir, "..data")); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink("..data/registries.yaml", filepath.Join(dir, "registries.yaml")); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("OPERATOR_POLICY_DATA_DIRS", dir)
++	p := policy.NewPolicies(nil, testConfig{embeddedPolicies: true}, logr.Discard(), nil, "1.36.4", nil)
++	if _, err := p.Hash("Pod"); err != nil {
++		t.Fatal(err)
++	}
++	pod := simpleNginxPod.DeepCopy()
++	pod.Name = "projected-configmap-test"
++	pod.Namespace = "apps"
++	pod.Spec.Containers[0].Image = "registry.example.com/app:1.0"
++	results, err := p.Eval(t.Context(), pod)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, result := range results {
++		if policy.GetResultID(result) == "AVD-KSV-0125" && result.Status() == scan.StatusFailed {
++			t.Fatal("projected ConfigMap allowlist was not loaded")
++		}
++	}
++}
 diff --git a/pkg/vulnerabilityreport/io.go b/pkg/vulnerabilityreport/io.go
 index 0133289..f76c6ca 100644
 --- a/pkg/vulnerabilityreport/io.go

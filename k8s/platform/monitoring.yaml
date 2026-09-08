@@ -1053,6 +1053,8 @@ spec:
       labels:
         app: grafana
     spec:
+      imagePullSecrets:
+        - name: platform-registry-auth
       serviceAccountName: grafana
       automountServiceAccountToken: true
       securityContext:
@@ -1065,7 +1067,7 @@ spec:
         runAsGroup: 10001
       containers:
         - name: grafana
-          image: docker.io/grafana/grafana@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/grafana:13.2.1-20260908.1@sha256:8abe006a83e4812cb32d390fd2fd9819e2aa0ffccf16ae10e0b1d3e5f02c6ea6
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -1165,7 +1167,7 @@ spec:
             - name: grafana-logs
               mountPath: /var/log/grafana
         - name: dashboard-sidecar
-          image: ghcr.io/kiwigrid/k8s-sidecar@sha256:440db6dcf9a724fa2c167612e147ad8839e75104732dc7ec89783e73199837f0
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dashboard-sidecar:2.11.2-20260908.4@sha256:a2ace0140cda9221aecdfe93917f0d1f07a567a76d452c549d907726d158c608
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

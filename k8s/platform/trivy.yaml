@@ -130,10 +130,10 @@ data:
         {
           "id": 10,
           "type": "table",
-          "title": "Detailed High/Critical Vulnerabilities",
+          "title": "Detailed Vulnerabilities (All Severities)",
           "gridPos": {"x": 0, "y": 21, "w": 24, "h": 11},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "trivy_vulnerability_id{namespace=~\"$namespace\",severity=~\"High|Critical\"}", "instant": true, "format": "table"}],
+          "targets": [{"refId": "A", "expr": "trivy_vulnerability_id{namespace=~\"$namespace\"}", "instant": true, "format": "table"}],
           "transformations": [{"id": "labelsToFields", "options": {"mode": "columns"}}],
           "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
           "options": {"showHeader": true, "cellHeight": "sm"}

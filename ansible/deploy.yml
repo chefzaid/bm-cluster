@@ -189,6 +189,10 @@
       ansible.builtin.set_fact:
         k8s_dir: "{{ rendered_configuration.path }}/k8s"
         argocd_values_file: "{{ rendered_configuration.path }}/config/argocd-values.yaml"
+        vault_values_file_effective: >-
+          {{ (rendered_configuration.path ~ '/config/vault-values.yaml')
+             if vault_values_file == (repository_root ~ '/config/vault-values.yaml')
+             else vault_values_file }}
 
     - name: Render domain-neutral cluster configuration
       ansible.builtin.command:
@@ -212,6 +216,8 @@
           - "{{ apps_enabled | ternary('true', 'false') }}"
           - --descheduler-enabled
           - "{{ descheduler_enabled | ternary('true', 'false') }}"
+      environment:
+        SECURITY_IMAGES_ENABLED: "{{ security_images_enabled | default(lookup('env', 'SECURITY_IMAGES_ENABLED') | default('auto', true)) | lower }}"
       changed_when: false
 
     - name: Validate automated Cloudflare inputs
@@ -586,7 +592,7 @@
         helm upgrade --install vault hashicorp/vault
         --namespace {{ infra_namespace }}
         --version {{ vault_chart_version }}
-        --values {{ vault_values_file }}
+        --values {{ vault_values_file_effective }}
         --set injector.enabled=false
         --set server.ha.enabled=true
         --set server.ha.raft.enabled=true

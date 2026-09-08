@@ -51,3 +51,29 @@ spec:
     namespaceSelector:
       matchLabels:
         security.__PUBLIC_DOMAIN__/deny-hostpath: "true"
+---
+# CVE-2025-1767 affects the deprecated in-tree gitRepo volume plugin. Reject it
+# cluster-wide, including infrastructure namespaces without Restricted PSA.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: deny-gitrepo-volumes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+  validations:
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(volume, !has(volume.gitRepo))"
+      message: "gitRepo volumes are forbidden; use an init container to clone into an emptyDir"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: deny-gitrepo-volumes
+spec:
+  policyName: deny-gitrepo-volumes
+  validationActions: [Deny]

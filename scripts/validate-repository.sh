@@ -668,6 +668,14 @@ else
     pass "third-party GitHub Actions are pinned immutably"
 fi
 
+if command -v helm >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    if python3 "$SCRIPT_DIR/test-security-images.py"; then
+        pass "public bootstrap and patched security image profiles"
+    else
+        fail "public bootstrap and patched security image profiles"
+    fi
+fi
+
 if command -v ansible-playbook >/dev/null 2>&1; then
     if ansible-playbook -i "$REPOSITORY_ROOT/ansible/inventory" \
         --syntax-check "$REPOSITORY_ROOT/ansible/deploy.yml" >/dev/null; then

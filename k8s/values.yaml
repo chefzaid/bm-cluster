@@ -4,11 +4,14 @@ gitopsRepositoryURL: ""
 cloudflareAccessTeamName: ""
 appsEnabled: false
 deschedulerEnabled: true
+securityImagesEnabled: true
 
 trivy-operator:
   enabled: true
   fullnameOverride: trivy-operator
-  targetWorkloads: "replicaset,statefulset,daemonset,cronjob"
+  # Include standalone pods, including Longhorn's custom-controller workloads.
+  # The operator skips pods already covered through built-in workload owners.
+  targetWorkloads: "replicaset,statefulset,daemonset,cronjob,pod"
   operator:
     # Completed jobs also occupy the operator's concurrency limit. Let the
     # operator delete jobs immediately after it persists their reports.

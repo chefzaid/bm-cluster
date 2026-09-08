@@ -1,0 +1,8 @@
+# Public images let a fresh cluster start GitLab, its registry, and Vault.
+securityImagesEnabled: false
+trivy-operator:
+  image:
+    pullSecrets: []
+  trivy:
+    image:
+      imagePullSecret: null

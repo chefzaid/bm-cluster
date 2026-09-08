@@ -394,6 +394,7 @@ prepare_rendered_configuration() {
         --descheduler-enabled "$INSTALL_DESCHEDULER" >/dev/null
     K8S_DIR="$RENDERED_CONFIG_DIR/k8s"
     ARGOCD_VALUES_FILE="$RENDERED_CONFIG_DIR/config/argocd-values.yaml"
+    VAULT_VALUES_FILE="$RENDERED_CONFIG_DIR/config/vault-values.yaml"
 }
 
 validate_local_admin_password() {
@@ -919,8 +920,6 @@ if [[ "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL
     NEEDS_HELM=true
 fi
 
-prepare_rendered_configuration
-
 # ---------- Prerequisites section ----------------------------------------------
 if [[ "$INSTALL_PREREQS" == "true" ]]; then
     step "Installing system prerequisites..."
@@ -959,6 +958,11 @@ if [[ "$INSTALL_PREREQS" == "true" ]]; then
 else
     warn "Skipping system prerequisites."
 fi
+
+# Rendering uses Python/YAML and must follow prerequisite installation on a
+# fresh host. Explicitly skipping prerequisites requires these tools already.
+python3 -c 'import yaml' >/dev/null 2>&1 || error "Configuration rendering requires python3-yaml; enable prerequisite installation."
+prepare_rendered_configuration
 
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$ENROLL_K3S_NODES" == "true" ]]; then

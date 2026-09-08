@@ -657,6 +657,8 @@ spec:
       labels:
         app: oauth2-proxy
     spec:
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -667,7 +669,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: oauth2-proxy
-          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/oauth2-proxy:7.15.4-20260908.1@sha256:5cb48ce3268c9877d0399649895719707e5e9ecf43ec480d3de88e9aa8ef1e48
           args:
             - --provider=keycloak-oidc
             - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit

@@ -314,6 +314,8 @@ spec:
             app: sonar-apps-discovery
         spec:
           serviceAccountName: sonar-apps-discovery
+          imagePullSecrets:
+            - name: platform-registry-auth
           automountServiceAccountToken: true
           restartPolicy: Never
           securityContext:
@@ -324,7 +326,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: discovery
-              image: docker.io/library/node@sha256:76789712cd1ae89a1225eac9077010d68987a423588042dac30446f502f1858c
+              image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
               command: [node, /scripts/discovery.mjs]
               env:
                 - name: GITLAB_API_URL

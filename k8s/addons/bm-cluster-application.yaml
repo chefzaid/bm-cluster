@@ -10,7 +10,13 @@ spec:
     targetRevision: main
     path: k8s
     helm:
+      valueFiles:
+        - profiles/security-images-__SECURITY_IMAGE_PROFILE__.values
       parameters:
+        - name: trivy-operator.image.registry
+          value: __SECURITY_SCANNER_REGISTRY__
+        - name: trivy-operator.trivy.image.registry
+          value: __SECURITY_SCANNER_REGISTRY__
         - name: publicDomain
           value: __PUBLIC_DOMAIN__
         - name: internalDnsZone
