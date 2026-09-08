@@ -150,10 +150,23 @@ profile through the shared installer. `ansible/deploy.yml` accepts `-e security_
 environment variable. The installer installs Python/YAML prerequisites before
 rendering. Ansible does not implement a separate image-selection policy.
 
-Before updating GitLab, pre-pull its new pinned image into K3s on every node
-where it can run. Its Recreate deployment stops the registry with GitLab, so
-publishing the image alone is insufficient. Verify the exact digest in each
-node's CRI image inventory before starting the rollout.
+GitLab's cache DaemonSet keeps its exact image in use on eligible Linux/amd64
+nodes using an idle, non-root container with no service-account token, writable
+root filesystem, host mounts, or network listener. Argo CD waits for this cache
+at wave -4 and updates GitLab at wave 1, after the other platform services.
+The installer and Ansible call `scripts/cache-gitlab-image.sh` before applying
+platform updates. This prevents image garbage collection from removing a
+preloaded GitLab image while its registry is stopped. Cache and server image
+pins must be updated together. Trivy still scans this workload; duplicate
+reports for its shared GitLab image must not be mistaken for distinct images.
+
+The initial rollout exposed this garbage-collection failure after a successful
+pre-pull. GitLab was recovered with the original published digest, and the cache
+workload was added to prevent recurrence. For manual recovery, an imported image
+can additionally be labelled `io.cri-containerd.pinned=pinned`; verify that the
+CRI reports it as pinned before restarting the registry. This label controls
+[kubelet garbage collection](https://github.com/containerd/containerd/discussions/12156),
+not an administrator's explicit image-deletion commands.
 
 For recovery when the private registry is unavailable, preload the pinned
 images into each K3s node's containerd image store from a protected offline

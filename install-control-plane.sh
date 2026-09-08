@@ -1286,6 +1286,8 @@ EOF
     fi
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+        step "Caching GitLab before its registry can be restarted..."
+        "$SCRIPT_DIR/scripts/cache-gitlab-image.sh" "$K8S_DIR" "$PLATFORM_WAIT_TIMEOUT"
         step "Deploying platform services..."
         for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"

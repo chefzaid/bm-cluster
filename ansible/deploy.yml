@@ -670,6 +670,12 @@
       changed_when: false
       when: data_stores_effective
 
+    - name: Cache GitLab before its registry can be restarted
+      ansible.builtin.command: >-
+        {{ repository_root }}/scripts/cache-gitlab-image.sh
+        {{ k8s_dir }} {{ platform_wait_timeout }}
+      when: platform_services_enabled
+
     - name: Deploy platform services
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
       loop: "{{ platform_manifests }}"

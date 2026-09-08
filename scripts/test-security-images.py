@@ -84,6 +84,17 @@ class SecurityImagesTest(unittest.TestCase):
                 profile = 'patched' if enabled else 'bootstrap'
                 self.assertEqual(app['spec']['source']['helm']['valueFiles'], [f'profiles/security-images-{profile}.values'])
 
+    def test_cache_failure_stops_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            kubectl = root / 'kubectl'
+            kubectl.write_text('#!/bin/sh\nif [ "$1" = "rollout" ]; then exit 42; fi\n')
+            kubectl.chmod(0o700)
+            result = subprocess.run([str(ROOT / 'scripts/cache-gitlab-image.sh'), directory],
+                env={**os.environ, 'PATH': directory + ':' + os.environ['PATH']},
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 42)
+
     def test_helm_profiles(self):
         for enabled in (False, True):
             with self.subTest(enabled=enabled):
@@ -98,6 +109,16 @@ class SecurityImagesTest(unittest.TestCase):
                 ], capture_output=True, text=True, check=True)
                 self.assertNotIn('__SECURITY_', result.stdout)
                 documents = list(yaml.safe_load_all(result.stdout))
+                resources = {document.get('kind', '') + '/' + document.get('metadata', {}).get('name', ''): document for document in documents if document}
+                cache = resources['DaemonSet/gitlab-image-cache']
+                gitlab = resources['Deployment/gitlab']
+                self.assertLess(int(cache['metadata']['annotations']['argocd.argoproj.io/sync-wave']), int(gitlab['metadata']['annotations']['argocd.argoproj.io/sync-wave']))
+                cache_pod = cache['spec']['template']['spec']
+                gitlab_pod = gitlab['spec']['template']['spec']
+                self.assertEqual(cache_pod['containers'][0]['image'], gitlab_pod['containers'][0]['image'])
+                self.assertEqual(cache_pod['nodeSelector'], gitlab_pod['nodeSelector'])
+                self.assertFalse(cache_pod['automountServiceAccountToken'])
+                self.assertEqual(cache_pod['containers'][0]['command'], ['/bin/sh', '-ec', 'exec sleep infinity'])
                 refs = images(documents)
                 self.assertEqual(any('registry.example.test/' in ref for ref in refs), enabled)
                 for document in documents:

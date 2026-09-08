@@ -1,0 +1,48 @@
+# Keep GitLab's image in use on eligible nodes while its own registry restarts.
+# A pre-pull alone can be removed by kubelet image garbage collection.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gitlab-image-cache
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+  labels:
+    app: gitlab-image-cache
+spec:
+  selector:
+    matchLabels:
+      app: gitlab-image-cache
+  template:
+    metadata:
+      labels:
+        app: gitlab-image-cache
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+      imagePullSecrets:
+        - name: platform-registry-auth
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: image-cache
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260908.2@sha256:a15389e933a2105b8ea0f32016fe45d5660f5bf28813f21aab24f00a40be90c6
+          command: ["/bin/sh", "-ec", "exec sleep infinity"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 2m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 16Mi
