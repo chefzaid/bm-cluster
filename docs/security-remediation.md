@@ -55,7 +55,7 @@ remaining findings are exploitable.
 The maintained build recipes are under `images/security/`. They pin their
 upstream sources and runtime bases. Go services use Go 1.26.7 and patched
 compatible dependencies. MongoDB retains 7.0.40 and GitLab retains Omnibus
-19.3.1 while updating available OS packages. PostgreSQL retains its major
+19.3.0 while updating available OS packages. PostgreSQL retains its major
 version, Debian/glibc, ICU, and volume ownership to preserve existing collation
 and extension behavior. Elastic uses the official 9.4.6 Wolfi variants.
 
@@ -134,8 +134,14 @@ Critical matches identify the bundled VS Code Handlebars extension as the
 unrelated npm package. Reports remain unsuppressed. The Ruby portion decreases
 from 55 to eight findings; 22 vendor secret examples remain visible.
 
-The expanded `gitlab.Dockerfile` retains Omnibus 19.3.1, its PostgreSQL major,
-Ruby 3.3.12, and the GitLab database schema. `gitlab-go/components.json` pins
+The expanded `gitlab.Dockerfile` retains Omnibus 19.3.0, its PostgreSQL major,
+Ruby 3.3.12, and the GitLab database schema. The inherited image tags use a
+`19.3.1-*` prefix, but both previous and rebuilt filesystems contain package
+`gitlab-ce 19.3.0-ce.0` and Rails revision `2c30df7828b`. Package inventory,
+Rails `VERSION`/`REVISION` files and the live API verify that the application
+version is unchanged; the tag prefix is not version evidence.
+
+`gitlab-go/components.json` pins
 fourteen source repositories/modules and the build flags and installation paths
 for 26 Go executables. Gitaly's four embedded Go helpers are rebuilt too; its
 nine native Git executables come from the pinned vendor image. Go 1.26.7 and
