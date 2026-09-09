@@ -61,6 +61,13 @@ def render(root, enabled):
         content = content.replace("__SECURITY_SCANNER_REGISTRY__", scanner_registry)
         content = content.replace("__SECURITY_PULL_SECRETS__", '["platform-registry-auth"]' if enabled else '[]')
         content = content.replace("__SONAR_RUNTIME_UID__", "10001" if enabled else "1000")
+        content = content.replace("__KEYCLOAK_RUNTIME_UID__", "10001" if enabled else "1000")
+        content = content.replace("__KEYCLOAK_RUNTIME_GID__", "10001" if enabled else "0")
+        content = content.replace("__KEYCLOAK_READ_ONLY__", str(enabled).lower())
+        content = content.replace("__KEYCLOAK_PULL_SECRETS__", json.dumps(
+            [{"name": "platform-registry-auth"}] if enabled else []))
+        content = content.replace("__KEYCLOAK_START_ARGS__", json.dumps(
+            ["start", "--optimized", "--import-realm"] if enabled else ["start", "--import-realm"]))
         path.write_text(content)
     values = root / "k8s/values.yaml"
     content = values.read_text().replace(

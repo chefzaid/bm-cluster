@@ -125,6 +125,53 @@ the existing cluster's Recreate rollout, validate it with `pg_restore`, and chec
 the new digest's live vulnerability, secret and configuration reports afterward.
 These results apply to SonarQube; the platform as a whole still has findings.
 
+### Keycloak runtime and libraries
+
+Keycloak retains **26.7.3** and its database schema. A fresh comparison reduces
+36 vulnerabilities (1 Critical, 2 High, 11 Medium and 22 Low) to **zero at every
+severity**, with zero exposed secrets. Its Wolfi/OpenJDK 25 runtime uses a
+[supported Java version](https://www.keycloak.org/server/supported-configurations).
+
+The image replaces 21 complete, checksum-verified Maven artifacts: the Netty
+4.1 modules move together to 4.1.137.Final, OpenTelemetry's stable API/context/common
+modules move to 1.62.0, and the SQL Server JDBC driver moves to 13.4.0.jre11.
+Quarkus's application model references the original library paths, so filenames
+stay stable while the entire implementation, manifest and Maven metadata are
+replaced. `keycloak-maven-lock.json` records both original and replacement
+SHA-256 hashes. No version-only edits or scan exclusions are used.
+
+The build regenerates Keycloak's optimized application with PostgreSQL, health,
+metrics and the existing `/auth` path enabled. These are build-time settings;
+database credentials and realm imports remain runtime Kubernetes Secrets.
+Library regression checks verify that CORS preserves existing `Vary` headers,
+telemetry baggage obeys size/count limits, and the updated JDBC driver loads.
+
+The patched deployment runs as UID/GID 10001 with a read-only root filesystem.
+Bounded temporary volumes provide `/tmp` and `/opt/keycloak/data`; realm imports
+remain read-only. Both Helm and the installer/Ansible renderer preserve the public
+bootstrap image's original user and writable build behavior, then select the
+optimized startup, registry credentials and stricter permissions for the patched
+profile. Both profiles have regression coverage.
+
+```bash
+scripts/build-security-image.sh keycloak keycloak-security:review
+python3 scripts/test-keycloak-image.py keycloak-security:review \
+  --previous-image quay.io/keycloak/keycloak@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54 \
+  --postgres-image docker.io/library/postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871 \
+  --logs /path/to/private/keycloak-test-logs
+```
+
+The test requires Docker, Python and `cryptography`. It initializes a disposable
+PostgreSQL database with the vendor image, performs a browser authorization-code
+login with PKCE over verified HTTPS, checks the ID-token signature, and upgrades
+the same database to the candidate. Existing users, signing keys and refresh
+sessions must survive. New logins, invalid-password rejection, restart, health,
+metrics and OIDC discovery are checked under the candidate's read-only permissions.
+Ports bind only to loopback; fixture containers, volumes and network are removed
+on exit. Logs contain fixture credentials and stay outside Git. Promotion also
+requires a private, validated backup of the live Keycloak database and live
+readiness, discovery, scrape and report checks.
+
 ### GitLab application and bundled tools
 
 The latest GitLab image comparison reduces 684 vulnerabilities

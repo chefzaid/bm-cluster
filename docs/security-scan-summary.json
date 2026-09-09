@@ -712,6 +712,31 @@
         },
         "secrets": 0
       }
+    },
+    {
+      "component": "keycloak",
+      "before": {
+        "image": "quay.io/keycloak/keycloak@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 2,
+          "MEDIUM": 11,
+          "LOW": 22,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/keycloak:26.7.3-20260909.1@sha256:488f84ab5d7935d7e98eb3a4597a098903678eb971dba82042f3da05d1cd1154",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
     }
   ],
   "applicationRuntimeImages": [

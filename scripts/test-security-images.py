@@ -92,6 +92,8 @@ class SecurityImagesTest(unittest.TestCase):
                 root = Path(directory)
                 sonar_docs = list(yaml.safe_load_all((root / 'k8s/platform/sonarqube.yaml').read_text()))
                 self.assert_sonar_permissions(next(d for d in sonar_docs if d and d['kind'] == 'Deployment'), enabled)
+                keycloak_docs = list(yaml.safe_load_all((root / 'k8s/platform/keycloak.yaml').read_text()))
+                self.assert_keycloak_permissions(next(d for d in keycloak_docs if d and d['kind'] == 'Deployment'), enabled)
                 documents = []
                 for path in (root / 'k8s').rglob('*.yaml'):
                     if 'templates' not in path.parts:
@@ -154,6 +156,7 @@ class SecurityImagesTest(unittest.TestCase):
                 self.assert_private_image_credentials(documents)
                 resources = {document.get('kind', '') + '/' + document.get('metadata', {}).get('name', ''): document for document in documents if document}
                 self.assert_sonar_permissions(resources['Deployment/sonarqube'], enabled)
+                self.assert_keycloak_permissions(resources['Deployment/keycloak'], enabled)
                 cache = resources['DaemonSet/gitlab-image-cache']
                 gitlab = resources['Deployment/gitlab']
                 self.assertLess(int(cache['metadata']['annotations']['argocd.argoproj.io/sync-wave']), int(gitlab['metadata']['annotations']['argocd.argoproj.io/sync-wave']))
@@ -174,6 +177,22 @@ class SecurityImagesTest(unittest.TestCase):
                         pod = document['spec']['template']['spec']
                         self.assertTrue(pod['containers'][0]['image'].startswith(registry + '/'))
                         self.assertEqual(bool(pod.get('imagePullSecrets')), enabled)
+
+    def assert_keycloak_permissions(self, deployment, enabled):
+        pod = deployment['spec']['template']['spec']
+        self.assertEqual(bool(pod['imagePullSecrets']), enabled)
+        self.assertEqual(pod['securityContext']['runAsUser'], 10001 if enabled else 1000)
+        self.assertEqual(pod['securityContext']['runAsGroup'], 10001 if enabled else 0)
+        self.assertEqual(pod['securityContext']['fsGroup'], 10001 if enabled else 0)
+        main = next(c for c in pod['containers'] if c['name'] == 'keycloak')
+        self.assertEqual(main['image'].startswith('registry.example.test/'), enabled)
+        self.assertEqual(main['securityContext']['readOnlyRootFilesystem'], enabled)
+        self.assertEqual('--optimized' in main['args'], enabled)
+        mounts = {m['mountPath']: m for m in main['volumeMounts']}
+        self.assertTrue(mounts['/opt/keycloak/data/import']['readOnly'])
+        volumes = {v['name']: v for v in pod['volumes']}
+        for path in ('/tmp', '/opt/keycloak/data'):
+            self.assertIn('emptyDir', volumes[mounts[path]['name']])
 
     def assert_sonar_permissions(self, deployment, enabled):
         pod = deployment['spec']['template']['spec']
