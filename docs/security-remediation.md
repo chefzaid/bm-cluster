@@ -72,6 +72,58 @@ volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
 The remaining GitLab matches are vendor examples/test fixtures and stay visible.
 No production credentials were copied into these images.
 
+### SonarQube runtime and libraries
+
+SonarQube keeps Community Build **26.8.0.126808** and its database schema. Its
+Wolfi/OpenJDK 25 runtime and verified dependency updates reduce the image from
+268 vulnerabilities (25 High, 197 Medium, 46 Low) to **zero at every severity**,
+with zero exposed secrets. The application, embedded Elasticsearch, scanner
+engine and language analyzers remain included. The full JDK is required by
+Elasticsearch's entitlement module; a JRE-only runtime does not start correctly.
+
+`images/security/sonarqube.Dockerfile` uses the pinned vendor image and applies
+`sonarqube-libraries.py` before copying the payload into the final runtime.
+`sonarqube-maven-lock.json` pins both original and replacement Maven artifacts
+by SHA-256. The patcher verifies original class bytes, replaces the corresponding
+implementation and metadata together, preserves merged service providers, and
+updates Elasticsearch's nested-library listing. It refuses modified or relocated
+classes and signed aggregate jars. It never rewrites a version without updating
+the library implementation.
+
+Updates cover Jackson, Netty/Reactor, PostgreSQL JDBC, HTTP components, logging,
+mail, LZ4 and Apache SSHD. SSHD uses the existing Bouncy Castle Ed25519 provider
+instead of the optional, unmaintained `net.i2p.crypto:eddsa` implementation.
+The regression fixture checks valid signatures, rejection of a non-canonical
+signature, SSH authentication, host-key verification and an SSH command through
+the scanner's unchanged SVNKit client.
+
+The patched image and theme initializer use UID/GID/fsGroup 10001 with a
+read-only root and dropped capabilities. Public bootstrap retains UID/GID 1000
+because the vendor payload's directory permissions require its original owner.
+Both Helm and the shared installer/Ansible renderer select the matching profile.
+Existing volume files keep their UID; kubelet updates group access through
+`fsGroup`. The disposable-volume test verifies a restart with files owned by
+UID 1000 and confirms the saved analysis remains readable.
+
+Before deployment, run the candidate against disposable Docker volumes and a
+verified [SonarScanner CLI](https://docs.sonarsource.com/sonarqube-community-build/analyzing-source-code/scanners/sonarscanner).
+The test binds only to loopback, creates temporary credentials, processes Java,
+JavaScript and Python analysis, and removes its containers and volumes afterward:
+
+```bash
+docker build -f images/security/sonarqube.Dockerfile \
+  -t sonarqube-security:review images/security
+python3 scripts/test-sonarqube-image.py sonarqube-security:review \
+  --scanner /path/to/verified/sonar-scanner-cli.jar \
+  --logs /path/to/private/sonarqube-test-logs
+```
+
+The test requires Java/javac 21 or newer on the host; the SSH regression runs
+inside the candidate's JDK. Take a private PostgreSQL custom-format backup before
+the existing cluster's Recreate rollout, validate it with `pg_restore`, and check
+the new digest's live vulnerability, secret and configuration reports afterward.
+These results apply to SonarQube; the platform as a whole still has findings.
+
 ### GitLab Runner and job helpers
 
 The 19.3.1 Runner rebuild uses the supported Alpine distribution, Go 1.26.7

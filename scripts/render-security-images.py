@@ -60,6 +60,7 @@ def render(root, enabled):
         content = content.replace("__SECURITY_IMAGE_PROFILE__", profile)
         content = content.replace("__SECURITY_SCANNER_REGISTRY__", scanner_registry)
         content = content.replace("__SECURITY_PULL_SECRETS__", '["platform-registry-auth"]' if enabled else '[]')
+        content = content.replace("__SONAR_RUNTIME_UID__", "10001" if enabled else "1000")
         path.write_text(content)
     values = root / "k8s/values.yaml"
     content = values.read_text().replace(

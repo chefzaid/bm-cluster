@@ -73,6 +73,8 @@ class SecurityImagesTest(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), directory)
                 root = Path(directory)
+                sonar_docs = list(yaml.safe_load_all((root / 'k8s/platform/sonarqube.yaml').read_text()))
+                self.assert_sonar_permissions(next(d for d in sonar_docs if d and d['kind'] == 'Deployment'), enabled)
                 documents = []
                 for path in (root / 'k8s').rglob('*.yaml'):
                     if 'templates' not in path.parts:
@@ -132,6 +134,7 @@ class SecurityImagesTest(unittest.TestCase):
                 self.assertNotIn('__SECURITY_', result.stdout)
                 documents = list(yaml.safe_load_all(result.stdout))
                 resources = {document.get('kind', '') + '/' + document.get('metadata', {}).get('name', ''): document for document in documents if document}
+                self.assert_sonar_permissions(resources['Deployment/sonarqube'], enabled)
                 cache = resources['DaemonSet/gitlab-image-cache']
                 gitlab = resources['Deployment/gitlab']
                 self.assertLess(int(cache['metadata']['annotations']['argocd.argoproj.io/sync-wave']), int(gitlab['metadata']['annotations']['argocd.argoproj.io/sync-wave']))
@@ -152,6 +155,21 @@ class SecurityImagesTest(unittest.TestCase):
                         pod = document['spec']['template']['spec']
                         self.assertTrue(pod['containers'][0]['image'].startswith(registry + '/'))
                         self.assertEqual(bool(pod.get('imagePullSecrets')), enabled)
+
+    def assert_sonar_permissions(self, deployment, enabled):
+        pod = deployment['spec']['template']['spec']
+        uid = 10001 if enabled else 1000
+        self.assertEqual(pod['securityContext']['fsGroup'], uid)
+        self.assertEqual(pod['securityContext']['runAsUser'], uid)
+        self.assertEqual(pod['securityContext']['runAsGroup'], uid)
+        main = next(c for c in pod['containers'] if c['name'] == 'sonarqube')
+        theme = next(c for c in pod['initContainers'] if c['name'] == 'prepare-theme')
+        self.assertEqual(main['image'], theme['image'])
+        self.assertEqual(main['image'].startswith('registry.example.test/'), enabled)
+        for container in (main, theme):
+            self.assertEqual(container['securityContext']['runAsUser'], uid)
+            self.assertEqual(container['securityContext']['runAsGroup'], uid)
+            self.assertTrue(container['securityContext']['readOnlyRootFilesystem'])
 
 
 if __name__ == '__main__':

@@ -662,6 +662,31 @@
         },
         "secrets": 0
       }
+    },
+    {
+      "component": "sonarqube",
+      "before": {
+        "image": "docker.io/library/sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 25,
+          "MEDIUM": 197,
+          "LOW": 46,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/sonarqube:26.8.0-20260909.1@sha256:7c243ac15b5df71387fe0b41e9ffaf9b164aa7f165f38dcf6c1209ea6c1a812d",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
     }
   ],
   "applicationRuntimeImages": [

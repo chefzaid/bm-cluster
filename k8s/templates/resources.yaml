@@ -14,6 +14,7 @@
 {{- $content = replace "__SECURITY_IMAGE_PROFILE__" $profile $content -}}
 {{- $content = replace "__SECURITY_PULL_SECRETS__" (ternary "[\"platform-registry-auth\"]" "[]" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__SECURITY_SCANNER_REGISTRY__" $scannerRegistry $content -}}
+{{- $content = replace "__SONAR_RUNTIME_UID__" (ternary "10001" "1000" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__PUBLIC_DOMAIN__" (required "publicDomain is required" $root.Values.publicDomain) $content -}}
 {{- $content = replace "__INTERNAL_DNS_ZONE__" (required "internalDnsZone is required" $root.Values.internalDnsZone) $content -}}
 {{- $content = replace "__GITOPS_REPOSITORY_URL__" (required "gitopsRepositoryURL is required" $root.Values.gitopsRepositoryURL) $content -}}
