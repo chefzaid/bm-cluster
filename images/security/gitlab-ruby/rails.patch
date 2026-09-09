@@ -1,0 +1,593 @@
+--- a/Gemfile
++++ b/Gemfile
+@@ -40,7 +40,7 @@
+ 
+ gem 'bootsnap', '~> 1.25.0', require: false, feature_category: :rails_platform
+ 
+-gem 'ffi', '~> 1.17.3', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
++gem 'ffi', '~> 1.17.3', force_ruby_platform: true, feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ 
+ gem 'openssl', '~> 3.3.2', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ 
+@@ -88,7 +88,7 @@
+   feature_category: :system_access
+ gem 'bcrypt', '~> 3.1', '>= 3.1.14', feature_category: :system_access
+ gem 'doorkeeper', '~> 5.8', '>= 5.8.1', feature_category: :system_access
+-gem 'doorkeeper-openid_connect', '~> 1.9.0', feature_category: :system_access
++gem 'doorkeeper-openid_connect', '~> 1.10.0', feature_category: :system_access
+ gem 'doorkeeper-device_authorization_grant', '~> 1.0.0', feature_category: :system_access
+ gem 'rexml', '~> 3.4.0', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ gem 'ruby-saml', '~> 1.18', feature_category: :system_access
+@@ -172,7 +172,7 @@
+ gem 'rack-cors', '~> 2.0.1', require: 'rack/cors', feature_category: :api
+ 
+ # GraphQL API
+-gem 'graphql', '2.6.3', feature_category: :api
++gem 'graphql', '2.6.9', feature_category: :api
+ gem 'graphql-docs', '~> 5.2.0', group: [:development, :test], feature_category: :api
+ gem 'apollo_upload_server', '~> 2.1.6', feature_category: :api
+ 
+@@ -205,7 +205,7 @@
+ gem 'hamlit', '~> 3.0.0', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ 
+ # Files attachments
+-gem 'carrierwave', '~> 1.3', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
++gem 'carrierwave', '~> 1.3', '>= 1.3.4', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ gem 'mini_magick', '~> 4.12', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ gem 'marcel', '~> 1.0.4', feature_category: :shared # rubocop:todo Gemfile/MissingFeatureCategory -- https://gitlab.com/gitlab-org/gitlab/-/issues/581839
+ 
+@@ -309,7 +309,7 @@
+ 
+ # Background jobs
+ gem 'sidekiq', path: 'vendor/gems/sidekiq', require: 'sidekiq', feature_category: :scalability
+-gem 'sidekiq-cron', '~> 2.3.0', feature_category: :scalability
++gem 'sidekiq-cron', '~> 2.4.0', feature_category: :scalability
+ gem 'gitlab-sidekiq-fetcher',
+   path: 'vendor/gems/sidekiq-reliable-fetch',
+   require: 'sidekiq-reliable-fetch',
+@@ -718,7 +718,7 @@
+ # `config/initializers/mail_starttls_patch.rb` has also been patched to
+ # fix STARTTLS handling until https://github.com/mikel/mail/pull/1536 is
+ # released.
+-gem 'mail', '= 2.9.0', feature_category: :notifications
++gem 'mail', '= 2.9.1', feature_category: :notifications
+ gem 'mail-smtp_pool', '~> 0.1.0', path: 'gems/mail-smtp_pool', require: false, feature_category: :notifications
+ 
+ gem 'microsoft_graph_mailer', '~> 0.1.0', path: 'vendor/gems/microsoft_graph_mailer',
+@@ -810,3 +810,7 @@
+ 
+ # Gems required in omnibus-gitlab pipeline
+ gem 'license_finder', '~> 7.0', require: false, feature_category: :build
++
++# CSS 3 requires an SSRF filter incompatible with CarrierWave 1.3.4.
++# Keep the compatible security patch until the uploader can be migrated.
++gem 'css_parser', '1.22.0', feature_category: :shared
+--- a/Gemfile.lock
++++ b/Gemfile.lock
+@@ -302,29 +302,29 @@
+       base64 (~> 0.2)
+       faraday (>= 1.0, < 3.0.0)
+       faraday-retry (>= 1.0, < 3.0.0)
+-    actioncable (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actioncable (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       nio4r (~> 2.0)
+       websocket-driver (>= 0.6.1)
+       zeitwerk (~> 2.6)
+-    actionmailbox (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      activejob (= 7.2.3.1)
+-      activerecord (= 7.2.3.1)
+-      activestorage (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actionmailbox (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      activejob (= 7.2.3.2)
++      activerecord (= 7.2.3.2)
++      activestorage (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       mail (>= 2.8.0)
+-    actionmailer (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      actionview (= 7.2.3.1)
+-      activejob (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actionmailer (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      actionview (= 7.2.3.2)
++      activejob (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       mail (>= 2.8.0)
+       rails-dom-testing (~> 2.2)
+-    actionpack (7.2.3.1)
+-      actionview (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actionpack (7.2.3.2)
++      actionview (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       cgi
+       nokogiri (>= 1.8.5)
+       racc
+@@ -334,36 +334,36 @@
+       rails-dom-testing (~> 2.2)
+       rails-html-sanitizer (~> 1.6)
+       useragent (~> 0.16)
+-    actiontext (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      activerecord (= 7.2.3.1)
+-      activestorage (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actiontext (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      activerecord (= 7.2.3.2)
++      activestorage (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       globalid (>= 0.6.0)
+       nokogiri (>= 1.8.5)
+-    actionview (7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    actionview (7.2.3.2)
++      activesupport (= 7.2.3.2)
+       builder (~> 3.1)
+       cgi
+       erubi (~> 1.11)
+       rails-dom-testing (~> 2.2)
+       rails-html-sanitizer (~> 1.6)
+-    activejob (7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    activejob (7.2.3.2)
++      activesupport (= 7.2.3.2)
+       globalid (>= 0.3.6)
+-    activemodel (7.2.3.1)
+-      activesupport (= 7.2.3.1)
+-    activerecord (7.2.3.1)
+-      activemodel (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    activemodel (7.2.3.2)
++      activesupport (= 7.2.3.2)
++    activerecord (7.2.3.2)
++      activemodel (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       timeout (>= 0.4.0)
+-    activestorage (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      activejob (= 7.2.3.1)
+-      activerecord (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    activestorage (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      activejob (= 7.2.3.2)
++      activerecord (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       marcel (~> 1.0)
+-    activesupport (7.2.3.1)
++    activesupport (7.2.3.2)
+       base64
+       benchmark (>= 0.3)
+       bigdecimal
+@@ -550,12 +550,12 @@
+     crack (1.0.1)
+       bigdecimal
+       rexml
+-    crass (1.0.6)
++    crass (1.0.7)
+     creole (0.5.0)
+     cronex (0.15.0)
+       tzinfo
+       unicode (>= 0.4.4.5)
+-    css_parser (1.14.0)
++    css_parser (1.22.0)
+       addressable
+     cssbundling-rails (1.4.3)
+       railties (>= 6.0.0)
+@@ -635,7 +635,7 @@
+       railties (>= 5)
+     doorkeeper-device_authorization_grant (1.0.3)
+       doorkeeper (~> 5.5)
+-    doorkeeper-openid_connect (1.9.0)
++    doorkeeper-openid_connect (1.10.5)
+       doorkeeper (>= 5.5, < 6.0)
+       jwt (>= 2.5)
+       ostruct (>= 0.5)
+@@ -692,7 +692,7 @@
+       tzinfo
+     ethon (0.16.0)
+       ffi (>= 1.15.0)
+-    excon (1.3.0)
++    excon (1.7.1)
+       logger
+     execjs (2.8.1)
+     expgen (0.1.1)
+@@ -734,11 +734,6 @@
+       racc
+     ffaker (2.25.0)
+     ffi (1.17.4)
+-    ffi (1.17.4-aarch64-linux-gnu)
+-    ffi (1.17.4-arm64-darwin)
+-    ffi (1.17.4-x86-linux-gnu)
+-    ffi (1.17.4-x86_64-darwin)
+-    ffi (1.17.4-x86_64-linux-gnu)
+     ffi-compiler (1.0.1)
+       ffi (>= 1.0.0)
+       rake
+@@ -1130,7 +1125,7 @@
+       grape (>= 2.4.0)
+       rack
+     graphlyte (1.0.0)
+-    graphql (2.6.3)
++    graphql (2.6.9)
+       base64
+       fiber-storage
+       logger
+@@ -1268,7 +1263,7 @@
+       character_set (~> 1.4)
+       regexp_parser (~> 2.11)
+       regexp_property_values (~> 1.0)
+-    json (2.19.2)
++    json (2.19.9)
+     json-jwt (1.16.6)
+       activesupport (>= 4.2)
+       aes_key_wrap
+@@ -1356,12 +1351,12 @@
+       activesupport (>= 4)
+       railties (>= 4)
+       request_store (~> 1.0)
+-    loofah (2.25.1)
++    loofah (2.25.2)
+       crass (~> 1.0.2)
+       nokogiri (>= 1.12.0)
+     lru_redux (1.1.0)
+     lumberjack (1.2.7)
+-    mail (2.9.0)
++    mail (2.9.1)
+       logger
+       mini_mime (>= 0.1.1)
+       net-imap
+@@ -1431,16 +1426,16 @@
+     nio4r (2.7.5)
+     nkf (0.2.0)
+     no_proxy_fix (0.1.2)
+-    nokogiri (1.19.3)
++    nokogiri (1.19.4)
+       mini_portile2 (~> 2.8.2)
+       racc (~> 1.4)
+-    nokogiri (1.19.3-aarch64-linux-gnu)
++    nokogiri (1.19.4-aarch64-linux-gnu)
+       racc (~> 1.4)
+-    nokogiri (1.19.3-arm64-darwin)
++    nokogiri (1.19.4-arm64-darwin)
+       racc (~> 1.4)
+-    nokogiri (1.19.3-x86_64-darwin)
++    nokogiri (1.19.4-x86_64-darwin)
+       racc (~> 1.4)
+-    nokogiri (1.19.3-x86_64-linux-gnu)
++    nokogiri (1.19.4-x86_64-linux-gnu)
+       racc (~> 1.4)
+     notiffany (0.1.3)
+       nenv (~> 0.1)
+@@ -1778,11 +1773,11 @@
+       matrix (~> 0.4)
+       pdf-core (~> 0.10.0)
+       ttfunk (~> 1.8)
+-    prawn-svg (0.37.0)
+-      css_parser (~> 1.6)
++    prawn-svg (0.40.3)
++      css_parser (>= 1.17.1, < 4)
+       matrix (~> 0.4.2)
+       prawn (>= 0.11.1, < 3)
+-      rexml (>= 3.3.9, < 4)
++      rexml (>= 3.4.2, < 4)
+     premailer (1.23.0)
+       addressable
+       css_parser (>= 1.12.0)
+@@ -1870,20 +1865,20 @@
+     rackup (1.0.1)
+       rack (< 3)
+       webrick
+-    rails (7.2.3.1)
+-      actioncable (= 7.2.3.1)
+-      actionmailbox (= 7.2.3.1)
+-      actionmailer (= 7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      actiontext (= 7.2.3.1)
+-      actionview (= 7.2.3.1)
+-      activejob (= 7.2.3.1)
+-      activemodel (= 7.2.3.1)
+-      activerecord (= 7.2.3.1)
+-      activestorage (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    rails (7.2.3.2)
++      actioncable (= 7.2.3.2)
++      actionmailbox (= 7.2.3.2)
++      actionmailer (= 7.2.3.2)
++      actionpack (= 7.2.3.2)
++      actiontext (= 7.2.3.2)
++      actionview (= 7.2.3.2)
++      activejob (= 7.2.3.2)
++      activemodel (= 7.2.3.2)
++      activerecord (= 7.2.3.2)
++      activestorage (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       bundler (>= 1.15.0)
+-      railties (= 7.2.3.1)
++      railties (= 7.2.3.2)
+     rails-controller-testing (1.0.5)
+       actionpack (>= 5.0.1.rc1)
+       actionview (>= 5.0.1.rc1)
+@@ -1892,15 +1887,15 @@
+       activesupport (>= 5.0.0)
+       minitest
+       nokogiri (>= 1.6)
+-    rails-html-sanitizer (1.7.0)
+-      loofah (~> 2.25)
++    rails-html-sanitizer (1.7.1)
++      loofah (~> 2.25, >= 2.25.2)
+       nokogiri (>= 1.15.7, != 1.16.7, != 1.16.6, != 1.16.5, != 1.16.4, != 1.16.3, != 1.16.2, != 1.16.1, != 1.16.0.rc1, != 1.16.0)
+     rails-i18n (7.0.10)
+       i18n (>= 0.7, < 2)
+       railties (>= 6.0.0, < 8)
+-    railties (7.2.3.1)
+-      actionpack (= 7.2.3.1)
+-      activesupport (= 7.2.3.1)
++    railties (7.2.3.2)
++      actionpack (= 7.2.3.2)
++      activesupport (= 7.2.3.2)
+       cgi
+       irb (~> 1.13)
+       rackup (>= 1.0.0)
+@@ -1968,7 +1963,7 @@
+     request_store (1.7.0)
+       rack (>= 1.4)
+     require-hooks (0.2.3)
+-    resolv (0.7.1)
++    resolv (0.7.2)
+     resolv-replace (0.2.0)
+       resolv
+     responders (3.0.1)
+@@ -2136,7 +2131,7 @@
+     shellany (0.0.1)
+     shoulda-matchers (6.4.0)
+       activesupport (>= 5.2.0)
+-    sidekiq-cron (2.3.1)
++    sidekiq-cron (2.4.0)
+       cronex (>= 0.13.0)
+       fugit (~> 1.8, >= 1.11.1)
+       globalid (>= 1.0.1)
+@@ -2378,7 +2373,7 @@
+       hashdiff (>= 0.4.0, < 2.0.0)
+     webrick (1.9.2)
+     websocket (1.2.10)
+-    websocket-driver (0.8.0)
++    websocket-driver (0.8.2)
+       base64
+       websocket-extensions (>= 0.1.0)
+     websocket-extensions (0.1.5)
+@@ -2451,7 +2446,7 @@
+   bullet (~> 8.0.0)
+   capybara (~> 3.40)
+   capybara-screenshot (~> 1.0.26)
+-  carrierwave (~> 1.3)
++  carrierwave (~> 1.3, >= 1.3.4)
+   charlock_holmes (~> 0.7.9)
+   circuitbox (= 2.0.0)
+   click_house-client (= 0.12.0)
+@@ -2461,6 +2456,7 @@
+   countries (~> 4.0.0)
+   coverband (= 6.2.1)
+   creole (~> 0.5.0)
++  css_parser (= 1.22.0)
+   cssbundling-rails (= 1.4.3)
+   csv_builder!
+   cvss-suite (~> 4.1.1)
+@@ -2477,7 +2473,7 @@
+   diffy (~> 3.4)
+   doorkeeper (~> 5.8, >= 5.8.1)
+   doorkeeper-device_authorization_grant (~> 1.0.0)
+-  doorkeeper-openid_connect (~> 1.9.0)
++  doorkeeper-openid_connect (~> 1.10.0)
+   drb (~> 2.2)
+   duo_api (~> 1.3)
+   ed25519 (~> 1.4.0)
+@@ -2582,7 +2578,7 @@
+   grape-swagger-entity (~> 0.7.0)
+   grape_logging (~> 3.0)
+   graphlyte (~> 1.0.0)
+-  graphql (= 2.6.3)
++  graphql (= 2.6.9)
+   graphql-docs (~> 5.2.0)
+   grpc (~> 1.81.0)
+   grpc-tools (~> 1.83.0)
+@@ -2625,7 +2621,7 @@
+   lograge (~> 0.5)
+   loofah (~> 2.25.0)
+   lru_redux
+-  mail (= 2.9.0)
++  mail (= 2.9.1)
+   mail-smtp_pool (~> 0.1.0)!
+   marcel (~> 1.0.4)
+   memory_profiler (~> 1.0)
+@@ -2752,7 +2748,7 @@
+   sentry-sidekiq (~> 5.23.0)
+   shoulda-matchers (~> 6.4.0)
+   sidekiq!
+-  sidekiq-cron (~> 2.3.0)
++  sidekiq-cron (~> 2.4.0)
+   sigdump (~> 0.2.4)
+   simple_po_parser (~> 1.1.6)
+   simplecov (~> 0.22)
+@@ -2810,18 +2806,18 @@
+   RedCloth (4.3.4) sha256=5231b2fdd91a933915cba330e5fd1a74025e77b56f57b7404c7191ebf2812297
+   acme-client (2.0.32) sha256=fbc0b8dfba099af4c65ab9a2d3ec35332fcc7578ba906b6457502ba449334b3d
+   action_dispatch-draw_all (0.1.0)
+-  actioncable (7.2.3.1) sha256=d3bf40a3f4fc79a09709878f0e5c43a5e2d8e6607089f6b38f9472b8715eb33c
+-  actionmailbox (7.2.3.1) sha256=a4e73480c97ab2fff5a416f92c54b065b1a6564ea4a807d42e0b83a94d4ec541
+-  actionmailer (7.2.3.1) sha256=f578b6d5c5f81a20b6f6a796187698890c8348c041daa5e2e7cf7814ac520467
+-  actionpack (7.2.3.1) sha256=b66afe7f937273270cb63f03bde7af7ba850017867766e8848d06d3e12e1e4ca
+-  actiontext (7.2.3.1) sha256=5b1418f407ea347b98084a62b9b6caa1d3b1eb482d18dbbb69fad43f242843e3
+-  actionview (7.2.3.1) sha256=de19b86843391762ac24a6287c30fbba11cd475fa4d4b664924d5fb7a2f1ff7c
+-  activejob (7.2.3.1) sha256=0bc4227ce371b82da119cd27ed91e0deb9b744bbfa266b86e4bd8d1e2a8f6ed8
+-  activemodel (7.2.3.1) sha256=39e1869b85e7a0b64a8ccddf19f3fb0c44261b329785384bb88f878eab51c0d0
+-  activerecord (7.2.3.1) sha256=b89513e275da5b34183c5f2a497c154b02dcc7c811d399ab557e67e36170a05d
++  actioncable (7.2.3.2) sha256=04ffd91519942bae45f443bfc166308e6eb17870870cdfc1ca36bc95273c6b57
++  actionmailbox (7.2.3.2) sha256=d19f6e98c5b630c391e14ce1a830f199f249bf3fd6208392f92d232a7a6d8ca5
++  actionmailer (7.2.3.2) sha256=45a6c326872867cdb28d2960d236c3c8fa4ff1198e9bc7ece4ddc3810b67b759
++  actionpack (7.2.3.2) sha256=c1fbb1c4df0f2473ee064ab1412fc2a44c2c2ef337924c5ba3c7998c8529652b
++  actiontext (7.2.3.2) sha256=19ab7e2a07ab976a5456a9aa98b93e1b899a7729b931ca1e9e01a3e8bd33f0b0
++  actionview (7.2.3.2) sha256=42bfd966040c93271dfa9f3243d73c40aa0228108696f956e1f287f3b02edc01
++  activejob (7.2.3.2) sha256=b83fa070898911823f0c4cb8c0d1d25dabb5d00f18379d5b4fe01b84e173a93a
++  activemodel (7.2.3.2) sha256=3777c67cd8dd1560f30387523013dacb370a0a1cf532037410887819e4416927
++  activerecord (7.2.3.2) sha256=e62d24ba7e5f820d24ed122eb9225491b0aaa8398778783b400067c3467285c7
+   activerecord-gitlab (0.2.0)
+-  activestorage (7.2.3.1) sha256=0b224ea42e6256d3e33768bdccad8e3c9110a5140fc9faf98bde8873dd5dffab
+-  activesupport (7.2.3.1) sha256=11ebed516a43a0bb47346227a35ebae4d9427465a7c9eb197a03d5c8d283cb34
++  activestorage (7.2.3.2) sha256=863cb4b21b83505555be2addb939fefb856ab05f6c6d24bab00d6f1a7e4edbfc
++  activesupport (7.2.3.2) sha256=ddc90d11dd88086d78ace03407fe3c2a3f5c8853c3c3046313db5ed823ef3312
+   addressable (2.9.0) sha256=7fdf6ac3660f7f4e867a0838be3f6cf722ace541dd97767fa42bc6cfa980c7af
+   aes_key_wrap (1.1.0) sha256=b935f4756b37375895db45669e79dfcdc0f7901e12d4e08974d5540c8e0776a5
+   akismet (3.0.0) sha256=74991b8e3d3257eeea996b47069abb8da2006c84a144255123e8dffd1c86b230
+@@ -2904,10 +2900,10 @@
+   countries (4.0.1) sha256=d32e8a3c0b22949f1a41ea6d9005f5168ffce226f8fe077d1d6be785fffa81c5
+   coverband (6.2.1) sha256=1d306da2a76d8515db895040341155d93b35ef5127de1e221d4fcdc1198d8762
+   crack (1.0.1) sha256=ff4a10390cd31d66440b7524eb1841874db86201d5b70032028553130b6d4c7e
+-  crass (1.0.6) sha256=dc516022a56e7b3b156099abc81b6d2b08ea1ed12676ac7a5657617f012bd45d
++  crass (1.0.7) sha256=94868719948664c89ddcaf0a37c65048413dfcb1c869470a5f7a7ceb5390b295
+   creole (0.5.0) sha256=951701e2d80760f156b1cb2a93471ca97c076289becc067a33b745133ed32c03
+   cronex (0.15.0) sha256=21c794e085fad2951c4f2e279f440340a35ba2297e0b738f22f263f69fbe2186
+-  css_parser (1.14.0) sha256=f2ce6148cd505297b07bdbe7a5db4cce5cf530071f9b732b9a23538d6cdc0113
++  css_parser (1.22.0) sha256=f274988a40c6178305530d60e7deb5162f7b5538b701b61b5488fc703e5b40c1
+   cssbundling-rails (1.4.3) sha256=53aecd5a7d24ac9c8fcd92975acd0e830fead4ee4583d3d3d49bb64651946e41
+   csv (3.3.0) sha256=0bbd1defdc31134abefed027a639b3723c2753862150f4c3ee61cab71b20d67d
+   csv_builder (0.1.0)
+@@ -2939,7 +2935,7 @@
+   domain_name (0.5.20190701) sha256=000a600454cb4a344769b2f10b531765ea7bd3a304fe47ed12e5ca1eab969851
+   doorkeeper (5.9.0) sha256=edad053b3dcb6bf51e3181fc423333e7fba28863beb2122379643ce6463b6336
+   doorkeeper-device_authorization_grant (1.0.3) sha256=94c3ac12a0d50942850ecd58ed64298b397a5e903e8880cb68d4085600932679
+-  doorkeeper-openid_connect (1.9.0) sha256=f689f727bbe60a0e7174b00ccd1e38c52a12c0c34dd096d49018b98cfaec7eb3
++  doorkeeper-openid_connect (1.10.5) sha256=1382e5573e2fdfef2b16ce9969af777e61496b8e9cff0197789d8bf9c12efb02
+   dotenv (2.7.6) sha256=2451ed5e8e43776d7a787e51d6f8903b98e446146c7ad143d5678cc2c409d547
+   drb (2.2.3) sha256=0b00d6fdb50995fe4a45dea13663493c841112e4068656854646f418fda13373
+   dry-cli (1.0.0) sha256=28ead169f872954dd08910eb8ead59cf86cd18b4aab321e8eeefe945749569f0
+@@ -2965,7 +2961,7 @@
+   escape_utils (1.3.0) sha256=dffb7010922880ace6ceed642156c64e2a64620f27e0849f43bc4f68fd3c2c09
+   et-orbi (1.2.11) sha256=d26e868cc21db88280a9ec1a50aa3da5d267eb9b2037ba7b831d6c2731f5df64
+   ethon (0.16.0) sha256=bba0da1cea8ac3e1f5cdd7cb1cb5fc78d7ac562c33736f18f0c3eb2b63053d9e
+-  excon (1.3.0) sha256=d83d3bc2a46a74f969406071e0acc32971381a01d7382a79fa75529fb28046be
++  excon (1.7.1) sha256=dd2d870eece1b5ce4e4f9efd938e67a69ccd8c003c3825b638b937e1082eaac2
+   execjs (2.8.1) sha256=6d939919cfd81bcc4d6556f322c3995a70cfe4289ea0bd3b1f999b489c323088
+   expgen (0.1.1) sha256=4e6a0f65b210a201d6045debb3e62a24e33251a49f81a11b067d303a60d3a239
+   expression_parser (0.9.0) sha256=2b56db3cffc48c3337f4f29f5bc2374c86e7ba29acb40269c74bb55af9f868a4
+@@ -2985,11 +2981,6 @@
+   fast_gettext (4.1.0) sha256=8e6b612676d601209662d2cd793ed4a067f834c8ca65ede793bacc9bcc1c2763
+   ffaker (2.25.0) sha256=e485c5adf8195aac55662875b7f515469bca46d77b60d0e7d08db6861bcbec40
+   ffi (1.17.4) sha256=bcd1642e06f0d16fc9e09ac6d49c3a7298b9789bcb58127302f934e437d60acf
+-  ffi (1.17.4-aarch64-linux-gnu) sha256=b208f06f91ffd8f5e1193da3cae3d2ccfc27fc36fba577baf698d26d91c080df
+-  ffi (1.17.4-arm64-darwin) sha256=19071aaf1419251b0a46852abf960e77330a3b334d13a4ab51d58b31a937001b
+-  ffi (1.17.4-x86-linux-gnu) sha256=38e150df5f4ca555e25beca4090823ae09657bceded154e3c52f8631c1ed72cf
+-  ffi (1.17.4-x86_64-darwin) sha256=aa70390523cf3235096cf64962b709b4cfbd5c082a2cb2ae714eb0fe2ccda496
+-  ffi (1.17.4-x86_64-linux-gnu) sha256=9d3db14c2eae074b382fa9c083fe95aec6e0a1451da249eab096c34002bc752d
+   ffi-compiler (1.0.1) sha256=019f389b078a2fec9de7f4f65771095f80a447e34436b4588bcb629e2a564c30
+   ffi-yajl (2.6.0) sha256=69baa612273991e4c79667464eb25f3feb169899aab33929a33b03234af24336
+   fiber-annotation (0.2.0) sha256=7abfadf1d119f508867d4103bf231c0354d019cc39a5738945dec2edadaf6c03
+@@ -3124,7 +3115,7 @@
+   grape-swagger-entity (0.7.1) sha256=082144811cdd14c15b9d9f0a27a4e3ff9c27c7081130d334a3de59953769b37d
+   grape_logging (3.0.0) sha256=7b62d984ce96df15d120508668debe307e6a59ac1c511f1d9b5f3b4bea793e13
+   graphlyte (1.0.0) sha256=b5af4ab67dde6e961f00ea1c18f159f73b52ed11395bb4ece297fe628fa1804d
+-  graphql (2.6.3) sha256=31fe845b509fda27db38d09380f27ffc0de1c7ea2f9f3b12fa42bdde8317239b
++  graphql (2.6.9) sha256=afe7bc03164f1a61abc66a415744ffd315c5aca116c9f3438c57391a431e4fe5
+   graphql-docs (5.2.0) sha256=44d41724529f531adf9265ded7478b74b0c4b927cddc8b9f114337a73f32de08
+   grpc (1.81.1) sha256=9e5772153fe13a389654e9d397a90400f0077307fb4369f79f941d96c72e89cb
+   grpc (1.81.1-aarch64-linux-gnu) sha256=aa24d7253a2b15d2c3570265a2f58bb8aca0ecd2e1116b7a259d633ebf582445
+@@ -3176,7 +3167,7 @@
+   jmespath (1.6.2) sha256=238d774a58723d6c090494c8879b5e9918c19485f7e840f2c1c7532cf84ebcb1
+   js-routes (2.3.7) sha256=56e97bb300f34f2c569268bf28358b7ed82f455a32975c7c7d38befa76b722ed
+   js_regex (3.14.0) sha256=49547691c75cf201769f7e432fde3e2071cbd3e0c4ef42bd341e260b683350a3
+-  json (2.19.2) sha256=e7e1bd318b2c37c4ceee2444841c86539bc462e81f40d134cf97826cb14e83cf
++  json (2.19.9) sha256=9b9025b7cdddafa38d316eca0b2358488e42d417045c1b90d216a9fefe46b79a
+   json-jwt (1.16.6) sha256=ab451f9cd8743cecc4137f4170806046c1d8a6d4ee6e8570e0b5c958409b266c
+   json_schemer (2.4.0) sha256=56cb6117bb5748d925b33ad3f415b513d41d25d0bbf57fe63c0a78ff05597c24
+   jsonb_accessor (1.4.2) sha256=e0197ce6f13b2ef489a67aa1c63c634e8efe49553191b5e61e9e2628dd554013
+@@ -3206,10 +3197,10 @@
+   lockbox (1.4.1) sha256=92a5aad33bd3da8ee0ce5b2ddde4c343e98f644e3b0dbc06157661acbc597260
+   logger (1.7.0) sha256=196edec7cc44b66cfb40f9755ce11b392f21f7967696af15d274dde7edff0203
+   lograge (0.11.2) sha256=4cbd1554b86f545d795eff15a0c24fd25057d2ac4e1caa5fc186168b3da932ef
+-  loofah (2.25.1) sha256=d436c73dbd0c1147b16c4a41db097942d217303e1f7728704b37e4df9f6d2e04
++  loofah (2.25.2) sha256=2007f746959ac65552456e04b433e83deb22759ab38c838b4445c70e43425918
+   lru_redux (1.1.0) sha256=ee71d0ccab164c51de146c27b480a68b3631d5b4297b8ffe8eda1c72de87affb
+   lumberjack (1.2.7) sha256=a5c6aae6b4234f1420dbcd80b23e3bca0817bd239440dde097ebe3fa63c63b1f
+-  mail (2.9.0) sha256=6fa6673ecd71c60c2d996260f9ee3dd387d4673b8169b502134659ece6d34941
++  mail (2.9.1) sha256=06574eca475253d6c18145dd70af80d0eb970182d55053497c5f4d797ea160e8
+   mail-smtp_pool (0.1.0)
+   marcel (1.0.4) sha256=0d5649feb64b8f19f3d3468b96c680bae9746335d02194270287868a661516a4
+   matrix (0.4.2) sha256=71083ccbd67a14a43bfa78d3e4dc0f4b503b9cc18e5b4b1d686dc0f9ef7c4cc0
+@@ -3254,11 +3245,11 @@
+   nio4r (2.7.5) sha256=6c90168e48fb5f8e768419c93abb94ba2b892a1d0602cb06eef16d8b7df1dca1
+   nkf (0.2.0) sha256=fbc151bda025451f627fafdfcb3f4f13d0b22ae11f58c6d3a2939c76c5f5f126
+   no_proxy_fix (0.1.2) sha256=4e9b4c31bb146de7fcf347dc1087bb13ac2039b56d50aa019e61036256abcd00
+-  nokogiri (1.19.3) sha256=78312cbac32a40c812780d9678221b79d51288eec00054c1a8d15f7ce05960e8
+-  nokogiri (1.19.3-aarch64-linux-gnu) sha256=46b89e5d7b9e844c2ee360794240c6ea2a4e6fa0c5892a4ed487db621224b639
+-  nokogiri (1.19.3-arm64-darwin) sha256=71b9bd424b1b7abc18b05052a1a3cfd3627abdca62be280854cc411791357e42
+-  nokogiri (1.19.3-x86_64-darwin) sha256=77f3fba57d46c53ab31e62fc6c28f705109d1bf6264356c76f132b2be5728d4d
+-  nokogiri (1.19.3-x86_64-linux-gnu) sha256=2f5078620fe12e83669b5b17311b32532a8153d02eee7ad06948b926d6080976
++  nokogiri (1.19.4) sha256=50c951611c92bca05c51411aef45f1cbc50f2821c4802758c5c6d34696533ab5
++  nokogiri (1.19.4-aarch64-linux-gnu) sha256=1269fb644a6de405057a53dd5c762b1209b43ca7424f839454d3dbc677c31a8f
++  nokogiri (1.19.4-arm64-darwin) sha256=a46db9853286e6597b36ebc6953817d15acf3a299583eb3f89fdc6f91dd63527
++  nokogiri (1.19.4-x86_64-darwin) sha256=7fd17057d3e1f00e9954a74b3cd76595d3d4a5ef233b7ed9599047c204f70551
++  nokogiri (1.19.4-x86_64-linux-gnu) sha256=379fae440b28915e3f19d752ce2dcf8465ed2b2fbefd2a7ca0dd497bc981a06a
+   notiffany (0.1.3) sha256=d37669605b7f8dcb04e004e6373e2a780b98c776f8eb503ac9578557d7808738
+   numerizer (0.2.0) sha256=e58076d5ee5370417b7e52d9cb25836d62acd1b8d9a194c308707986c1705d7b
+   oauth (1.1.7) sha256=a8cd8a96b8b90d738714da628b5f4a36565e278d1d28d82def3b3664bd71f069
+@@ -3371,7 +3362,7 @@
+   png_quantizator (0.2.1) sha256=6023d4d064125c3a7e02929c95b7320ed6ac0d7341f9e8de0c9ea6576ef3106b
+   pp (0.6.3) sha256=2951d514450b93ccfeb1df7d021cae0da16e0a7f95ee1e2273719669d0ab9df6
+   prawn (2.5.0) sha256=f4e20e3b4f30bf5b9ae37dad15eb421831594553aa930b2391b0fa0a99c43cb6
+-  prawn-svg (0.37.0) sha256=271bdd032c066777b2e76fe971b570e24cb6f4890d5658588106e8aa5b6e2830
++  prawn-svg (0.40.3) sha256=26237d3a7268143b5ffc6c1354ab93d0a4b81366573c749b6316e6f6f7733c0c
+   premailer (1.23.0) sha256=f0d7f6ba299559c96ddf982aa5263f85e5617c86437c8d8ffff120813b2d7efb
+   premailer-rails (1.12.0) sha256=c13815d161b9bc7f7d3d81396b0bb0a61a90fa9bd89931548bf4e537c7710400
+   prettyprint (0.2.0) sha256=2bc9e15581a94742064a3cc8b0fb9d45aae3d03a1baa6ef80922627a0766f193
+@@ -3403,12 +3394,12 @@
+   rack-test (2.2.0) sha256=005a36692c306ac0b4a9350355ee080fd09ddef1148a5f8b2ac636c720f5c463
+   rack-timeout (0.7.0) sha256=757337e9793cca999bb73a61fe2a7d4280aa9eefbaf787ce3b98d860749c87d9
+   rackup (1.0.1) sha256=ba86604a28989fe1043bff20d819b360944ca08156406812dca6742b24b3c249
+-  rails (7.2.3.1) sha256=96c0a0160081ef3f1e407438880f6194c6ec94cdf40c8f83fc7bb22c279eba94
++  rails (7.2.3.2) sha256=279290679f9005b0f79514f953a2af613f95de7baa94cbd87744c09122c1113c
+   rails-controller-testing (1.0.5) sha256=741448db59366073e86fc965ba403f881c636b79a2c39a48d0486f2607182e94
+   rails-dom-testing (2.3.0) sha256=8acc7953a7b911ca44588bf08737bc16719f431a1cc3091a292bca7317925c1d
+-  rails-html-sanitizer (1.7.0) sha256=28b145cceaf9cc214a9874feaa183c3acba036c9592b19886e0e45efc62b1e89
++  rails-html-sanitizer (1.7.1) sha256=e797a7c9b01e567307e317c576b49ab4168017e63eea4dba9ce3cb587e2f22c2
+   rails-i18n (7.0.10) sha256=efae16e0ac28c0f42e98555c8db1327d69ab02058c8b535e0933cb106dd931ca
+-  railties (7.2.3.1) sha256=aea3393ee10243ceedcbeccb45458a0d58b524b6d21bf32eff8b93853baae15a
++  railties (7.2.3.2) sha256=f626c6dfcc00a9f85b139619cfac4a648934c93e36fe5b9242184b9f45ffc29e
+   rainbow (3.1.1) sha256=039491aa3a89f42efa1d6dec2fc4e62ede96eb6acd95e52f1ad581182b79bc6a
+   rake (13.4.2) sha256=cb825b2bd5f1f8e91ca37bddb4b9aaf345551b4731da62949be002fa89283701
+   rake-compiler-dock (1.12.0) sha256=f13205c2738f3d2053afcd03491a9e4541b22a59a0bfc53fc8bc883bd8188023
+@@ -3441,7 +3432,7 @@
+   representable (3.2.0) sha256=cc29bf7eebc31653586849371a43ffe36c60b54b0a6365b5f7d95ec34d1ebace
+   request_store (1.7.0) sha256=e1b75d5346a315f452242a68c937ef8e48b215b9453a77a6c0acdca2934c88cb
+   require-hooks (0.2.3) sha256=224be5b4be0fd2a47cb73286c500da366704a54ec195b6627366380c950efac8
+-  resolv (0.7.1) sha256=27d9d5972a61d6401f4e26c84136f1cab6c3ca1938bba7119415df3e926894b8
++  resolv (0.7.2) sha256=626d044d975ab2daac759bf898416f1b51e2cb8dcd6727c2b5b5b28b97ead2e1
+   resolv-replace (0.2.0) sha256=76d2c92dc6a744b9e27a915d1962b641c52e2c6ef6662a23335672a3ca593b30
+   responders (3.0.1) sha256=613fe28e498987f4feaa3230aa6313ca4bd5f0563a3da83511b0dd6cd8f47292
+   rest-client (2.1.0) sha256=35a6400bdb14fae28596618e312776c158f7ebbb0ccad752ff4fa142bf2747e3
+@@ -3507,7 +3498,7 @@
+   shellany (0.0.1) sha256=0e127a9132698766d7e752e82cdac8250b6adbd09e6c0a7fbbb6f61964fedee7
+   shoulda-matchers (6.4.0) sha256=9055bb7f4bb342125fb860809798855c630e05ef5e75837b3168b8e6ee1608b0
+   sidekiq (7.3.9)
+-  sidekiq-cron (2.3.1) sha256=96ab3da372289a30dc744c1daa2ae2e85960b2444a6f6ed68df1ff7882c44aac
++  sidekiq-cron (2.4.0) sha256=25595c5aee0c16d13a89466e5108af047fa4cfbf388199b39e1a600ca39472d4
+   sigdump (0.2.5) sha256=bb706c1cce70458b285d2c3a57121e801ccb79f68be7f7377692eb40b5437242
+   signet (0.19.0) sha256=537f3939f57f141f691e6069a97ec40f34fadafc4c7e5ba94edb06cf4350dd31
+   simple_po_parser (1.1.6) sha256=122687d44d3de516a0e69e2f383a4180f5015e8c5ed5a7f2258f2b376f64cbf3
+@@ -3609,7 +3600,7 @@
+   webmock (3.26.2) sha256=774556f2ea6371846cca68c01769b2eac0d134492d21f6d0ab5dd643965a4c90
+   webrick (1.9.2) sha256=beb4a15fc474defed24a3bda4ffd88a490d517c9e4e6118c3edce59e45864131
+   websocket (1.2.10) sha256=2cc1a4a79b6e63637b326b4273e46adcddf7871caa5dc5711f2ca4061a629fa8
+-  websocket-driver (0.8.0) sha256=ed0dba4b943c22f17f9a734817e808bc84cdce6a7e22045f5315aa57676d4962
++  websocket-driver (0.8.2) sha256=97c556b019bf3410b4961002ac501621e9322d3f8a7bc02161a09301cc4c4146
+   websocket-extensions (0.1.5) sha256=1c6ba63092cda343eb53fc657110c71c754c56484aad42578495227d717a8241
+   wikicloth (0.8.1) sha256=7ac8a9ca0a948cf472851e521afc6c2a6b04a8f91ef1d824ba6a61ffbd60e6ca
+   wisper (2.0.1) sha256=ce17bc5c3a166f241a2e6613848b025c8146fce2defba505920c1d1f3f88fae6

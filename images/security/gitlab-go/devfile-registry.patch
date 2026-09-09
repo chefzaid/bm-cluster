@@ -1,0 +1,240 @@
+--- a/registry-library/go.mod
++++ b/registry-library/go.mod
+@@ -10,7 +10,6 @@
+ 	github.com/mitchellh/go-homedir v1.1.0
+ 	github.com/spf13/cobra v1.8.0
+ 	github.com/spf13/viper v1.18.2
+-	oras.land/oras-go v1.2.5
+ )
+ 
+ require (
+@@ -87,6 +86,7 @@
+ 	k8s.io/apimachinery v0.26.10 // indirect
+ 	k8s.io/klog/v2 v2.90.1 // indirect
+ 	k8s.io/utils v0.0.0-20230220204549-a5ecb0141aa5 // indirect
++	oras.land/oras-go/v2 v2.6.2
+ 	sigs.k8s.io/json v0.0.0-20220713155537-f223a00ba0e2 // indirect
+ 	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
+ )
+--- a/registry-library/library/library.go
++++ b/registry-library/library/library.go
+@@ -17,6 +17,7 @@
+ 
+ import (
+ 	"archive/zip"
++	"context"
+ 	"encoding/json"
+ 	"fmt"
+ 	"io"
+@@ -26,18 +27,21 @@
+ 	"path"
+ 	"path/filepath"
+ 	"reflect"
++	"slices"
+ 	"strings"
+ 	"text/tabwriter"
+ 	"time"
+ 
+ 	"github.com/hashicorp/go-multierror"
+-	orasctx "oras.land/oras-go/pkg/context"
+ 
+-	"github.com/containerd/containerd/remotes/docker"
+ 	indexSchema "github.com/devfile/registry-support/index/generator/schema"
+ 	versionpkg "github.com/hashicorp/go-version"
+-	"oras.land/oras-go/pkg/content"
+-	"oras.land/oras-go/pkg/oras"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++	"oras.land/oras-go/v2"
++	"oras.land/oras-go/v2/content"
++	"oras.land/oras-go/v2/content/file"
++	"oras.land/oras-go/v2/registry/remote"
++	"oras.land/oras-go/v2/registry/remote/auth"
+ )
+ 
+ const (
+@@ -264,7 +268,7 @@
+ 	}
+ 
+ 	// Pull stack initialization
+-	ctx := orasctx.Background()
++	ctx := context.Background()
+ 	urlObj, err := url.Parse(registry)
+ 	if err != nil {
+ 		return err
+@@ -278,13 +282,33 @@
+ 	headers := make(http.Header)
+ 	setHeaders(&headers, options)
+ 
+-	resolver := docker.NewResolver(docker.ResolverOptions{Headers: headers, PlainHTTP: plainHTTP, Client: httpClient})
+ 	ref := path.Join(urlObj.Host, stackLink)
+-	fileStore := content.NewFile(destDir)
++	repository, err := remote.NewRepository(ref)
++	if err != nil {
++		return err
++	}
++	repository.PlainHTTP = plainHTTP
++	repository.Client = &auth.Client{Client: httpClient, Header: headers, Cache: auth.NewCache()}
++	fileStore, err := file.New(destDir)
++	if err != nil {
++		return err
++	}
+ 	defer fileStore.Close()
+ 
+-	// Pull stack from registry and save it to disk
+-	_, err = oras.Copy(ctx, resolver, ref, fileStore, ref, oras.WithAllowedMediaTypes(allowedMediaTypes))
++	// Retain the v1 behavior: an empty allow-list selects every media type;
++	// otherwise traverse manifests and only the requested layers.
++	copyOptions := oras.DefaultCopyOptions
++	copyOptions.FindSuccessors = func(ctx context.Context, fetcher content.Fetcher, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {
++		children, err := content.Successors(ctx, fetcher, desc)
++		if err != nil || len(allowedMediaTypes) == 0 {
++			return children, err
++		}
++		return slices.DeleteFunc(children, func(child ocispec.Descriptor) bool {
++			return child.MediaType != ocispec.MediaTypeImageManifest && child.MediaType != ocispec.MediaTypeImageIndex &&
++				!slices.Contains(allowedMediaTypes, child.MediaType)
++		}), nil
++	}
++	_, err = oras.Copy(ctx, repository, repository.Reference.Reference, fileStore, ref, copyOptions)
+ 	if err != nil {
+ 		return fmt.Errorf("failed to pull stack %s from %s with allowed media types %v: %v", stack, ref, allowedMediaTypes, err)
+ 	}
+--- a/registry-library/library/oras_security_test.go
++++ b/registry-library/library/oras_security_test.go
+@@ -0,0 +1,136 @@
++// Copyright Red Hat
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++package library
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++
++	digest "github.com/opencontainers/go-digest"
++	specs "github.com/opencontainers/image-spec/specs-go"
++	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
++)
++
++func TestSecurityORASRegistryPull(t *testing.T) {
++	for _, test := range []struct {
++		name      string
++		allowed   []string
++		want      []string
++		traversal bool
++		tls       bool
++	}{
++		{name: "all", want: []string{"devfile.yaml", "logo.svg"}},
++		{name: "filtered", allowed: []string{DevfileMediaType}, want: []string{"devfile.yaml"}},
++		{name: "unsupported", allowed: []string{"not/a-devfile"}},
++		{name: "tls", want: []string{"devfile.yaml", "logo.svg"}, tls: true},
++		{name: "traversal", traversal: true},
++	} {
++		t.Run(test.name, func(t *testing.T) {
++			payloads := map[digest.Digest][]byte{}
++			descriptor := func(media, name string, data []byte) ocispec.Descriptor {
++				hash := digest.FromBytes(data)
++				payloads[hash] = data
++				d := ocispec.Descriptor{MediaType: media, Digest: hash, Size: int64(len(data))}
++				if name != "" {
++					d.Annotations = map[string]string{ocispec.AnnotationTitle: name}
++				}
++				return d
++			}
++			title := "devfile.yaml"
++			if test.traversal {
++				title = "../escape.yaml"
++			}
++			manifest := ocispec.Manifest{Versioned: specs.Versioned{SchemaVersion: 2}, MediaType: ocispec.MediaTypeImageManifest,
++				Config: descriptor("application/vnd.unknown.config.v1+json", "", []byte("{}")),
++				Layers: []ocispec.Descriptor{descriptor(DevfileMediaType, title, []byte("schemaVersion: 2.3.0\n")), descriptor(DevfileSVGLogoMediaType, "logo.svg", []byte("<svg/>"))}}
++			body, err := json.Marshal(manifest)
++			if err != nil {
++				t.Fatal(err)
++			}
++			root := descriptor(ocispec.MediaTypeImageManifest, "", body)
++			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if strings.HasPrefix(r.URL.Path, "/v2/") && r.Header.Get("Client") != "security-fixture" {
++					t.Error("registry telemetry header lost")
++				}
++				if r.URL.Path == "/index" {
++					w.Header().Set("Content-Type", "application/json")
++					fmt.Fprint(w, `[{"name":"fixture","links":{"self":"devfile-catalog/fixture:1.0"}}]`)
++					return
++				}
++				if r.URL.Path == "/v2/" {
++					w.WriteHeader(http.StatusOK)
++					return
++				}
++				var data []byte
++				var key digest.Digest
++				media := "application/octet-stream"
++				if strings.Contains(r.URL.Path, "/manifests/") {
++					key = root.Digest
++					data = body
++					media = root.MediaType
++				} else if _, suffix, ok := strings.Cut(r.URL.Path, "/blobs/"); ok {
++					key = digest.Digest(suffix)
++					data = payloads[key]
++				}
++				if data == nil {
++					http.NotFound(w, r)
++					return
++				}
++				w.Header().Set("Content-Type", media)
++				w.Header().Set("Docker-Content-Digest", key.String())
++				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
++				if r.Method != "HEAD" {
++					_, _ = w.Write(data)
++				}
++			})
++			var server *httptest.Server
++			if test.tls {
++				server = httptest.NewTLSServer(handler)
++			} else {
++				server = httptest.NewServer(handler)
++			}
++			defer server.Close()
++			parent := t.TempDir()
++			dest := filepath.Join(parent, "download")
++			options := RegistryOptions{SkipTLSVerify: test.tls, Telemetry: TelemetryData{Client: "security-fixture"}}
++			err = PullStackByMediaTypesFromRegistry(server.URL, "fixture", test.allowed, dest, options)
++			if test.traversal {
++				if err == nil {
++					t.Fatal("path traversal must fail")
++				}
++				if _, err := os.Stat(filepath.Join(parent, "escape.yaml")); !os.IsNotExist(err) {
++					t.Fatal("file escaped download directory")
++				}
++				return
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			files, err := os.ReadDir(dest)
++			if err != nil && !(len(test.want) == 0 && os.IsNotExist(err)) {
++				t.Fatal(err)
++			}
++			if len(files) != len(test.want) {
++				t.Fatalf("downloaded %d files, want %d", len(files), len(test.want))
++			}
++			for _, name := range test.want {
++				data, err := os.ReadFile(filepath.Join(dest, name))
++				if err != nil || len(data) == 0 {
++					t.Fatalf("missing downloaded file %s: %v", name, err)
++				}
++			}
++		})
++	}
++}

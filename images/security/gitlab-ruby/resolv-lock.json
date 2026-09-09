@@ -1,0 +1,10 @@
+{
+  "0.3.1": {
+    "url": "https://rubygems.org/downloads/resolv-0.3.1.gem",
+    "sha256": "4f3925765fd142f9861e3525f901882b40dea0f9a3e5bf47f4f9e1000259570c"
+  },
+  "0.3.2": {
+    "url": "https://rubygems.org/downloads/resolv-0.3.2.gem",
+    "sha256": "483b7e9b34562e1925c8c2b4d4c28e294ba7e2c483b137f44bc01ed154b2dc8c"
+  }
+}

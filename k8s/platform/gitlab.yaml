@@ -167,7 +167,9 @@ spec:
           type: RuntimeDefault
       containers:
       - name: gitlab
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260908.2@sha256:a15389e933a2105b8ea0f32016fe45d5660f5bf28813f21aab24f00a40be90c6
+        securityContext:
+          allowPrivilegeEscalation: false
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260909.1@sha256:2e760e52b48cbadc2fe91409174a688e2fa3978155c84081f3fe1f834d7e0891
         env:
         - name: KEYCLOAK_CLIENT_SECRET
           valueFrom:

@@ -22,7 +22,11 @@ if [[ -n "${KANIKO_EXECUTOR:-}" ]]; then
     --destination "$image" --cache=false --cleanup \
     --insecure-registry "$REGISTRY_PUSH_HOST" --digest-file "$output/digest.txt"
 else
-  DOCKER_BUILDKIT=0 docker build --pull --no-cache --memory=2g --memory-swap=2g --cpu-quota=100000 \
+  # Omnibus includes Prometheus's large provider SDKs; its serialized Go build
+  # needs 3 GiB. Keep other image builds at their existing limit.
+  build_memory=2g
+  [[ "$component" != gitlab ]] || build_memory=3g
+  DOCKER_BUILDKIT=0 docker build --pull --no-cache --memory="$build_memory" --memory-swap="$build_memory" --cpu-quota=100000 \
     -f "$root/images/security/$component.Dockerfile" -t "$image" "$root/images/security"
 fi
 if [[ -n "${TRIVY_EXECUTABLE:-}" ]]; then

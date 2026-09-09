@@ -232,24 +232,24 @@
     {
       "component": "gitlab",
       "before": {
-        "image": "docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f",
-        "vulnerabilities": {
-          "CRITICAL": 25,
-          "HIGH": 384,
-          "MEDIUM": 217,
-          "LOW": 46,
-          "UNKNOWN": 72
-        },
-        "secrets": 25
-      },
-      "after": {
         "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260908.2@sha256:a15389e933a2105b8ea0f32016fe45d5660f5bf28813f21aab24f00a40be90c6",
         "vulnerabilities": {
           "CRITICAL": 25,
-          "HIGH": 384,
-          "MEDIUM": 122,
+          "HIGH": 405,
+          "MEDIUM": 151,
           "LOW": 31,
           "UNKNOWN": 72
+        },
+        "secrets": 22
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260909.1@sha256:2e760e52b48cbadc2fe91409174a688e2fa3978155c84081f3fe1f834d7e0891",
+        "vulnerabilities": {
+          "CRITICAL": 3,
+          "HIGH": 19,
+          "MEDIUM": 35,
+          "LOW": 11,
+          "UNKNOWN": 20
         },
         "secrets": 22
       }

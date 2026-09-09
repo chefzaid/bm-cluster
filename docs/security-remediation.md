@@ -10,9 +10,10 @@ or vulnerability suppressions were added to obtain these results.
 
 A checksum-verified Trivy 0.74.0 client scanned all 59 active image references
 against the cluster's Trivy server, including init containers and standalone
-Longhorn pods. Some references resolve to the same image. Both old and candidate
-images were scanned against the same database; the figures below count package
-occurrences, not distinct CVEs. Retired ReplicaSet reports are not a reliable
+Longhorn pods. Some references resolve to the same image. Each batch compares
+old and candidate images using the cluster Trivy server; the figures below
+count package occurrences, not distinct CVEs. Database updates
+can change counts between batches. Retired ReplicaSet reports are not a reliable
 measure of the running cluster.
 
 [The sanitized scan summary](security-scan-summary.json) records the image pins,
@@ -42,12 +43,12 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Grafana | 3 / 159 / 32 / 13 / 36 | 3 / 157 / 26 / 1 / 16 |
 | Dashboard sidecar | 0 / 8 / 10 / 12 / 0 | 0 / 0 / 0 / 0 / 0 |
 | Vault | 1 / 12 / 6 / 12 / 3 | 1 / 10 / 0 / 0 / 3 |
-| GitLab | 25 / 384 / 217 / 46 / 72 | 25 / 384 / 122 / 31 / 72 |
+| GitLab | 25 / 405 / 151 / 31 / 72 | 3 / 19 / 35 / 11 / 20 |
 | Elasticsearch | 0 / 40 / 114 / 60 / 0 | 0 / 34 / 52 / 0 / 0 |
 | Kibana | 0 / 9 / 135 / 86 / 0 | 0 / 5 / 15 / 4 / 0 |
 | Logstash | 0 / 15 / 85 / 65 / 0 | 0 / 7 / 15 / 1 / 0 |
 
-Across these thirteen images, findings decrease from 2,998 to 1,406. This is an
+Across these thirteen images, findings decrease from 2,938 to 860. This is an
 image comparison, not a sum of Kubernetes reports or a statement that all
 remaining findings are exploitable.
 
@@ -123,6 +124,83 @@ inside the candidate's JDK. Take a private PostgreSQL custom-format backup befor
 the existing cluster's Recreate rollout, validate it with `pg_restore`, and check
 the new digest's live vulnerability, secret and configuration reports afterward.
 These results apply to SonarQube; the platform as a whole still has findings.
+
+### GitLab application and bundled tools
+
+The latest GitLab image comparison reduces 684 vulnerabilities
+(25 Critical, 405 High, 151 Medium, 31 Low, 72 Unknown) to 88
+(3 Critical, 19 High, 35 Medium, 11 Low, 20 Unknown). All three remaining
+Critical matches identify the bundled VS Code Handlebars extension as the
+unrelated npm package. Reports remain unsuppressed. The Ruby portion decreases
+from 55 to eight findings; 22 vendor secret examples remain visible.
+
+The expanded `gitlab.Dockerfile` retains Omnibus 19.3.1, its PostgreSQL major,
+Ruby 3.3.12, and the GitLab database schema. `gitlab-go/components.json` pins
+fourteen source repositories/modules and the build flags and installation paths
+for 26 Go executables. Gitaly's four embedded Go helpers are rebuilt too; its
+nine native Git executables come from the pinned vendor image. Go 1.26.7 and
+compatible dependency patches include the
+[gRPC 1.83.2 security fix](https://github.com/grpc/grpc-go/releases/tag/v1.83.2).
+Prometheus moves from 3.11.2 to 3.11.3, with its real release recorded in the
+Omnibus inventory.
+
+Prometheus's Docker discovery uses the maintained Moby client/API modules.
+Devfile's registry client uses ORAS v2, with tests for HTTP/TLS pulls, media-type
+selection and path traversal. GitLab Shell's SSH configuration preserves the
+`source-address` restriction when authenticating certificates; matching,
+nonmatching and malformed CIDRs are covered by real handshake tests.
+
+`gitlab-ruby/` maintains separate patches for Rails and the administration
+bundle. Updates cover Rails 7.2.3.2, GraphQL 2.6.9, XML/HTML parsing, mail,
+HTTP clients, scheduling and supporting gems. Cinc remains 18.3.0 and InSpec
+remains 6.6.0. Both bundles explicitly select Omnibus's existing native FFI
+build so libcurl and libarchive resolve from its embedded library directory.
+Matching Ruby headers are regenerated from a checksum-verified source archive
+only in the build stage, without replacing the interpreter or libruby.
+
+The build rejects dependency downgrades. It preserves all locked gem versions
+and dependencies of other installed Omnibus gems when removing complete
+superseded installations. It replaces the default Resolv implementation and
+specification together after verifying both original and replacement artifacts.
+The final image starts with a fresh Ruby directory, preventing Docker's directory
+merge behavior from retaining removed versions.
+
+GitLab's Sidekiq Cron patch keeps its polling behavior with 2.4.0. The upstream
+change adds a process-count override; tests cover that option, explicit GitLab
+and Sidekiq intervals, and scaling when neither is configured. Library tests
+also cover native loading, JSON/HTML/GraphQL parsing, PDF rendering and CSS
+inlining. The compatible CSS 1.22.0 patch is pinned because CSS 3 would make
+Bundler downgrade CarrierWave to satisfy conflicting SSRF-filter requirements.
+
+Builds run source tests and produce three additional Gitaly test executables
+under `/build/gitaly-tests` in the `gitlab-go-build` stage. Those native suites
+must run with the matching Omnibus Git/shared libraries. Before promotion, run
+the complete candidate with disposable volumes:
+
+```bash
+scripts/build-security-image.sh gitlab gitlab-security:review
+python3 scripts/test-gitlab-image.py gitlab-security:review \
+  --logs /path/to/private/gitlab-test-logs
+```
+
+The integration test needs Docker, Git and OpenSSH on the host. It bounds the
+test container to 5 GiB and two CPUs, binds ports only to loopback, and verifies
+reconfiguration, password checks, REST/GraphQL, HTTP and SSH repository pushes,
+authenticated OCI uploads/downloads, and persisted data after restart. It
+removes its containers and volumes on exit. Keep its logs outside Git because
+vendor startup can log generated fixture credentials.
+
+The deployment disables privilege escalation, matching the integration test.
+Promotion also requires private, validated backups of all bundled PostgreSQL
+databases (including the registry database), roles and configuration,
+the existing GitLab image-cache DaemonSet, repository validation, and checks of
+the new digest's live reports and delivery pipeline. This work does not make
+Omnibus a non-root application. Remaining uploader/authentication/ZIP dependency
+constraints, vendor examples, unpatched advisories and image-classification
+issues remain visible; do not remove scan coverage or rewrite package versions
+to report zero. In particular, Trivy can confuse VS Code extension manifests
+with npm packages, as described in the
+[upstream report](https://github.com/aquasecurity/trivy/discussions/6112).
 
 ### GitLab Runner and job helpers
 
@@ -392,8 +470,8 @@ false positives, but the reports are retained without an ignore rule.
 Many vendor images still bundle affected Go, Java, Ruby, Node, or OS packages.
 Some have no fixed version in their supported distribution. A package-level
 fixed version does not establish that a compatible fixed vendor image exists.
-GitLab, PostgreSQL, MongoDB, Grafana, Elastic, Argo CD, ingress NGINX,
-SonarQube, GitLab Runner, Odoo, Longhorn/CSI, and other infrastructure retain
+GitLab, PostgreSQL, MongoDB, Grafana, Elastic, Argo CD,
+GitLab Runner, Odoo, Longhorn/CSI, and other infrastructure retain
 findings. Further supported upgrades or maintained rebuilds with integration
 testing are required. Moving PostgreSQL between distributions also requires a
 collation/extension migration plan; changing Longhorn's generated CSI sidecars

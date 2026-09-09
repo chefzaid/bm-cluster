@@ -1,0 +1,380 @@
+{
+  "alertmanager": {
+    "repository": "https://github.com/prometheus/alertmanager.git",
+    "commit": "7a639ba087d6e877038cabfdaa645230f79001b8",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "alertmanager",
+        "package": "./cmd/alertmanager",
+        "target": "opt/gitlab/embedded/bin/alertmanager",
+        "flags": "-X github.com/prometheus/common/version.Version=0.31.1 -X github.com/prometheus/common/version.Branch=master -X github.com/prometheus/common/version.BuildUser=GitLab-Omnibus -s -w",
+        "tags": "",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./config/...",
+      "./notify/..."
+    ],
+    "tag": "v0.31.1"
+  },
+  "cosign": {
+    "repository": "https://github.com/sigstore/cosign.git",
+    "commit": "7914231b348c4057891edeb321772aad3ed04fce",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "cosign",
+        "package": "./cmd/cosign",
+        "target": "opt/gitlab/embedded/bin/cosign",
+        "flags": "-s -w",
+        "tags": "",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./pkg/cosign",
+      "./pkg/signature/..."
+    ],
+    "tag": "v3.1.1"
+  },
+  "gitaly": {
+    "repository": "https://gitlab.com/gitlab-org/gitaly.git",
+    "commit": "4d1b8a69ddfbf20f83811fc5537dc0fe1cf62bc3",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "gitaly",
+        "package": "./cmd/gitaly",
+        "target": "opt/gitlab/embedded/bin/gitaly",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "continuous_profiler_stackdriver",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitaly-backup",
+        "package": "./cmd/gitaly-backup",
+        "target": "opt/gitlab/embedded/bin/gitaly-backup",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitaly-blackbox",
+        "package": "./cmd/gitaly-blackbox",
+        "target": "opt/gitlab/embedded/bin/gitaly-blackbox",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitaly-debug",
+        "package": "./cmd/gitaly-debug",
+        "target": "opt/gitlab/embedded/bin/gitaly-debug",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitaly-wrapper",
+        "package": "./cmd/gitaly-wrapper",
+        "target": "opt/gitlab/embedded/bin/gitaly-wrapper",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "",
+        "cgo": "1"
+      },
+      {
+        "binary": "praefect",
+        "package": "./cmd/praefect",
+        "target": "opt/gitlab/embedded/bin/praefect",
+        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "tags": "continuous_profiler_stackdriver",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./internal/backoff/...",
+      "./internal/stream/...",
+      "./internal/grpc/..."
+    ]
+  },
+  "gitlab-kas": {
+    "repository": "https://gitlab.com/gitlab-org/cluster-integration/gitlab-agent.git",
+    "commit": "25304d832a72c67d699bc5b1ddeae89afb42c1c5",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "gitlab-kas",
+        "package": "./cmd/kas",
+        "target": "opt/gitlab/embedded/bin/gitlab-kas",
+        "flags": "-X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.Version=v19.3.0\" -X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.GitRef=v19.3.0\"",
+        "tags": "",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./internal/tool/grpctool/...",
+      "./pkg/..."
+    ]
+  },
+  "gitlab-pages": {
+    "repository": "https://gitlab.com/gitlab-org/gitlab-pages.git",
+    "commit": "80421286f333777f747e3d894668b41d68236128",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "gitlab-pages",
+        "package": ".",
+        "target": "opt/gitlab/embedded/bin/gitlab-pages",
+        "flags": "-X main.VERSION=19.3.0 -X main.REVISION=80421286 -B gobuildid",
+        "tags": "continuous_profiler_stackdriver",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./internal/config/...",
+      "./internal/auth/...",
+      "./internal/tls/...",
+      "./internal/routing/..."
+    ]
+  },
+  "workhorse": {
+    "repository": "https://gitlab.com/gitlab-org/gitlab-foss.git",
+    "commit": "2c30df7828b86f8ac1fca26e96385fe712b0669f",
+    "module": "workhorse",
+    "commands": [
+      {
+        "binary": "gitlab-resize-image",
+        "package": "./cmd/gitlab-resize-image",
+        "target": "opt/gitlab/embedded/bin/gitlab-resize-image",
+        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-workhorse",
+        "package": "./cmd/gitlab-workhorse",
+        "target": "opt/gitlab/embedded/bin/gitlab-workhorse",
+        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-zip-cat",
+        "package": "./cmd/gitlab-zip-cat",
+        "target": "opt/gitlab/embedded/bin/gitlab-zip-cat",
+        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-zip-metadata",
+        "package": "./cmd/gitlab-zip-metadata",
+        "target": "opt/gitlab/embedded/bin/gitlab-zip-metadata",
+        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./internal/config/...",
+      "./internal/api/...",
+      "./internal/secret/...",
+      "./internal/transport/...",
+      "./internal/imageresizer/...",
+      "./internal/zipartifacts/..."
+    ]
+  },
+  "go-crond": {
+    "repository": "https://github.com/webdevops/go-crond.git",
+    "commit": "4f2e74e2a5544a72c6523c22f687d72be593e981",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "go-crond",
+        "package": ".",
+        "target": "opt/gitlab/embedded/bin/go-crond",
+        "flags": "-X \"main.gitTag=23.12.0\" -X \"main.gitCommit=4f2e74e\" -extldflags \"-static\" -s -w",
+        "tags": "",
+        "cgo": "0"
+      }
+    ],
+    "tests": [
+      "./..."
+    ]
+  },
+  "node-exporter": {
+    "repository": "https://github.com/prometheus/node_exporter.git",
+    "commit": "f2ec547b49af53815038a50265aa2adcd1275959",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "node_exporter",
+        "package": ".",
+        "target": "opt/gitlab/embedded/bin/node_exporter",
+        "flags": "-X github.com/prometheus/common/version.Version=1.9.1 -X github.com/prometheus/common/version.Branch=master -X github.com/prometheus/common/version.BuildUser=GitLab-Omnibus -s -w",
+        "tags": "",
+        "cgo": "0"
+      }
+    ],
+    "tests": [
+      "./collector/..."
+    ]
+  },
+  "postgres-exporter": {
+    "repository": "https://github.com/prometheus-community/postgres_exporter.git",
+    "commit": "333363aeb548b66340a61a7fb2b3f0e8a8d39f90",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "postgres_exporter",
+        "package": "./cmd/postgres_exporter",
+        "target": "opt/gitlab/embedded/bin/postgres_exporter",
+        "flags": "-X github.com/prometheus/common/version.Version=0.19.1 -X github.com/prometheus/common/version.Branch=master -X github.com/prometheus/common/version.BuildUser=GitLab-Omnibus -s -w",
+        "tags": "",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./collector/..."
+    ]
+  },
+  "prometheus": {
+    "repository": "https://github.com/prometheus/prometheus.git",
+    "commit": "eb173f5256d4022afba1e9bc3d19740a76859fae",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "prometheus",
+        "package": "./cmd/prometheus",
+        "target": "opt/gitlab/embedded/bin/prometheus",
+        "flags": "-X github.com/prometheus/common/version.Version=3.11.3 -X github.com/prometheus/common/version.Branch=master -X github.com/prometheus/common/version.BuildUser=GitLab-Omnibus -s -w",
+        "tags": "netgo,builtinassets,stringlabels",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./config/...",
+      "./model/...",
+      "./discovery/moby/..."
+    ],
+    "tag": "v0.311.3"
+  },
+  "redis-exporter": {
+    "repository": "https://github.com/oliver006/redis_exporter.git",
+    "commit": "c4dac6ba37ea9c7da7652beb329612af977106aa",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "redis_exporter",
+        "package": ".",
+        "target": "opt/gitlab/embedded/bin/redis_exporter",
+        "flags": "-X main.BuildVersion=1.86.0 -X main.BuildDate= -X main.BuildCommitSha= -s -w",
+        "tags": "",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "-run",
+      "^(TestKeyspaceStringParser|TestCreateClientTLSConfig|TestCreateServerTLSConfig)$",
+      "./exporter/..."
+    ]
+  },
+  "registry": {
+    "repository": "https://gitlab.com/gitlab-org/container-registry.git",
+    "commit": "34f70d33f60ad826e0ca8a5897bdba7820d598a5",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "registry",
+        "package": "./cmd/registry",
+        "target": "opt/gitlab/embedded/bin/registry",
+        "flags": "-s -w -X github.com/docker/distribution/version.Version=v4.41.0-gitlab -X github.com/docker/distribution/version.Revision=34f70d33f60ad826e0ca8a5897bdba7820d598a5 -X github.com/docker/distribution/version.Package=github.com/docker/distribution -X github.com/docker/distribution/version.BuildTime=2026-08-18T21:16:41 ",
+        "tags": "include_gcs,include_oss",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./configuration/...",
+      "./registry/auth/..."
+    ]
+  },
+  "devfile-amd64-linux": {
+    "repository": "https://gitlab.com/gitlab-org/ruby/gems/devfile-gem.git",
+    "commit": "846d13fd58d270ff553c79880f19f08d6f1eeb45",
+    "module": "ext",
+    "commands": [
+      {
+        "binary": "devfile-amd64-linux",
+        "package": ".",
+        "target": "opt/gitlab/embedded/lib/ruby/gems/3.3.0/gems/devfile-0.5.3-x86_64-linux/out/devfile-amd64-linux",
+        "flags": "-s -w",
+        "tags": "",
+        "cgo": "0"
+      }
+    ],
+    "tests": [
+      "./..."
+    ],
+    "registrySupport": {
+      "repository": "https://github.com/devfile/registry-support.git",
+      "commit": "89fc566cb0246538ed4508bf1af47c46185d6628",
+      "version": "v0.0.0-20240521161747-89fc566cb024"
+    }
+  },
+  "gitlab-shell": {
+    "repository": "https://gitlab.com/gitlab-org/gitlab-shell.git",
+    "commit": "c2a338e1b8d4db720ce8a3ecd900d32ed433a9c9",
+    "module": ".",
+    "commands": [
+      {
+        "binary": "gitlab-shell",
+        "package": "./cmd/gitlab-shell",
+        "target": "opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell",
+        "flags": "-X main.Version=v14.56.1 -X main.BuildTime=20260820.013238",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver,gssapi",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-shell-authorized-keys-check",
+        "package": "./cmd/gitlab-shell-authorized-keys-check",
+        "target": "opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-authorized-keys-check",
+        "flags": "-X main.Version=v14.56.1 -X main.BuildTime=20260820.013238",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver,gssapi",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-shell-authorized-principals-check",
+        "package": "./cmd/gitlab-shell-authorized-principals-check",
+        "target": "opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-authorized-principals-check",
+        "flags": "-X main.Version=v14.56.1 -X main.BuildTime=20260820.013238",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver,gssapi",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-shell-check",
+        "package": "./cmd/gitlab-shell-check",
+        "target": "opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-shell-check",
+        "flags": "-X main.Version=v14.56.1 -X main.BuildTime=20260820.013238",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver,gssapi",
+        "cgo": "1"
+      },
+      {
+        "binary": "gitlab-sshd",
+        "package": "./cmd/gitlab-sshd",
+        "target": "opt/gitlab/embedded/service/gitlab-shell/bin/gitlab-sshd",
+        "flags": "-X main.Version=v14.56.1 -X main.BuildTime=20260820.013238",
+        "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver,gssapi",
+        "cgo": "1"
+      }
+    ],
+    "tests": [
+      "./internal/config/...",
+      "./internal/keyline/...",
+      "./internal/pktline/...",
+      "./internal/sshenv/...",
+      "./internal/sshd/..."
+    ]
+  }
+}
