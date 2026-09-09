@@ -73,7 +73,7 @@ spec:
         - name: mongodb
           # MongoDB 8.x refuses Linux 6.19-7.0.13; 7.0.40 is the newest
           # stable version compatible with Ubuntu 26.04's current 7.0.0 kernel.
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/mongodb:7.0.40-20260908.1@sha256:9aedeece952620e585dffaec3f5d936c7bb9dd0e48cc279c70c038c6d8722456
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/mongodb:7.0.40-20260909.1@sha256:9573f6c233fd6ab8aa0de331186819415d7fd884ea89ca7c3b88e052930940f8
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

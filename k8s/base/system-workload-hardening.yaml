@@ -158,3 +158,181 @@ metadata:
     argocd.argoproj.io/sync-wave: "-9"
 spec:
   policyName: bm-k3s-stateless-controller-hardening
+---
+# Both the public SUSE image and the rebuilt NGINX image were tested with these
+# mounts. The UI proxies the manager API and does not need a Kubernetes token.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-ui-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: longhorn-ui-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'longhorn-ui'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  automountServiceAccountToken: false,
+                  securityContext: Object.spec.template.spec.securityContext{
+                    runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001,
+                    seccompProfile: Object.spec.template.spec.securityContext.seccompProfile{type: 'RuntimeDefault'}
+                  },
+                  volumes: ['tmp', 'logs', 'lib'].map(n,
+                    Object.spec.template.spec.volumes{
+                      name: 'bm-nginx-' + n, emptyDir: Object.spec.template.spec.volumes.emptyDir{}
+                    }
+                  ),
+                  containers: object.spec.template.spec.containers.filter(c, c.name == 'longhorn-ui').map(c,
+                    Object.spec.template.spec.containers{
+                      name: c.name,
+                      securityContext: Object.spec.template.spec.containers.securityContext{
+                        runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
+                        allowPrivilegeEscalation: false, readOnlyRootFilesystem: true
+                      },
+                      volumeMounts: [
+                        Object.spec.template.spec.containers.volumeMounts{name: 'bm-nginx-tmp', mountPath: '/tmp'},
+                        Object.spec.template.spec.containers.volumeMounts{name: 'bm-nginx-logs', mountPath: '/var/log/nginx'},
+                        Object.spec.template.spec.containers.volumeMounts{name: 'bm-nginx-lib', mountPath: '/var/lib/nginx'}
+                      ],
+                      resources: Object.spec.template.spec.containers.resources{
+                        requests: {
+                          'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '25m',
+                          'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '32Mi'
+                        },
+                        limits: {
+                          'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                          'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '128Mi'
+                        }
+                      }
+                    }
+                  )
+                }
+              }
+            }
+          }
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          object.spec.template.spec.containers.transformList(i, c, c.name == 'longhorn-ui',
+            JSONPatch{
+              op: 'add', path: '/spec/template/spec/containers/' + string(i) + '/securityContext/capabilities',
+              value: {'drop': ['ALL']}
+            }
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-ui-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-longhorn-ui-hardening
+---
+# This controller only calls the Kubernetes/Longhorn APIs; it has no host mounts.
+# Its API credential remains enabled because it creates the CSI controllers.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-driver-deployer-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: driver-deployer-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'longhorn-driver-deployer'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  automountServiceAccountToken: true,
+                  securityContext: Object.spec.template.spec.securityContext{
+                    runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001,
+                    seccompProfile: Object.spec.template.spec.securityContext.seccompProfile{type: 'RuntimeDefault'}
+                  },
+                  volumes: [Object.spec.template.spec.volumes{name: 'bm-security-tmp', emptyDir: Object.spec.template.spec.volumes.emptyDir{}}],
+                  containers: object.spec.template.spec.containers.map(c,
+            Object.spec.template.spec.containers{
+              name: c.name,
+              securityContext: Object.spec.template.spec.containers.securityContext{
+                runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
+                allowPrivilegeEscalation: false, readOnlyRootFilesystem: true
+              },
+              volumeMounts: [Object.spec.template.spec.containers.volumeMounts{name: 'bm-security-tmp', mountPath: '/tmp'}],
+              resources: Object.spec.template.spec.containers.resources{
+                requests: {
+                  'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '25m',
+                  'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '64Mi'
+                },
+                limits: {
+                  'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                  'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '256Mi'
+                }
+              }
+            }
+          ),
+                  initContainers: has(object.spec.template.spec.initContainers) ? object.spec.template.spec.initContainers.map(c,
+            Object.spec.template.spec.initContainers{
+              name: c.name,
+              securityContext: Object.spec.template.spec.initContainers.securityContext{
+                runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001,
+                allowPrivilegeEscalation: false, readOnlyRootFilesystem: true
+              },
+              volumeMounts: [Object.spec.template.spec.initContainers.volumeMounts{name: 'bm-security-tmp', mountPath: '/tmp'}],
+              resources: Object.spec.template.spec.initContainers.resources{
+                requests: {
+                  'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '25m',
+                  'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '64Mi'
+                },
+                limits: {
+                  'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                  'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '256Mi'
+                }
+              }
+            }
+          ) : []
+                }
+              }
+            }
+          }
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          object.spec.template.spec.containers.transformList(i, c, JSONPatch{op: 'add', path: '/spec/template/spec/containers/' + string(i) + '/securityContext/capabilities', value: {'drop': ['ALL']}}) +
+          (has(object.spec.template.spec.initContainers) ? object.spec.template.spec.initContainers.transformList(i, c, JSONPatch{op: 'add', path: '/spec/template/spec/initContainers/' + string(i) + '/securityContext/capabilities', value: {'drop': ['ALL']}}) : [])
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-driver-deployer-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-longhorn-driver-deployer-hardening

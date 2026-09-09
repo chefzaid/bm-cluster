@@ -53,3 +53,59 @@ metadata:
     argocd.argoproj.io/sync-wave: "-3"
 spec:
   policyName: bm-coredns-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-ui-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: longhorn-ui-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'longhorn-ui'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'longhorn-ui',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/longhorn-ui:1.12.1-20260909.1@sha256:668baf58aa165952036182d306f69c18f68d639a821bc107faf2fd519289535b'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-ui-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-longhorn-ui-security-image

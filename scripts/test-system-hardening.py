@@ -74,6 +74,34 @@ class SystemHardeningTest(unittest.TestCase):
                 before, after = self.preview(namespace, name, kind)
                 self.assertEqual(before, after)
 
+    def test_longhorn_ui_has_no_api_token_and_keeps_bootstrap_write_paths(self):
+        before, after = self.preview('longhorn-system', 'longhorn-ui')
+        self.assertFalse(after['automountServiceAccountToken'])
+        self.assertEqual(after['securityContext']['runAsUser'], 10001)
+        container = after['containers'][0]
+        self.assertTrue(container['securityContext']['readOnlyRootFilesystem'])
+        self.assertEqual(container['securityContext']['capabilities']['drop'], ['ALL'])
+        mounts = {m['mountPath'].rstrip('/') for m in container['volumeMounts']}
+        self.assertTrue({'/var/lib/nginx', '/var/log/nginx', '/var/config/nginx', '/var/cache/nginx', '/var/run', '/tmp'} <= mounts)
+        self.assertEqual(container['env'], before['containers'][0]['env'])
+        self.assertEqual(container['ports'], before['containers'][0]['ports'])
+
+    def test_driver_deployer_hardens_init_and_retains_controller_credentials(self):
+        before, after = self.preview('longhorn-system', 'longhorn-driver-deployer')
+        self.assertTrue(after['automountServiceAccountToken'])
+        self.assertEqual(after['serviceAccountName'], before['serviceAccountName'])
+        self.assertEqual(after['securityContext']['runAsUser'], 10001)
+        for field in ('containers', 'initContainers'):
+            for original, actual in zip(before[field], after[field], strict=True):
+                self.assertEqual(actual['command'], original['command'])
+                self.assertEqual(actual.get('env'), original.get('env'))
+                context = actual['securityContext']
+                self.assertEqual(context['runAsUser'], 10001)
+                self.assertEqual(context['capabilities']['drop'], ['ALL'])
+                self.assertTrue(context['readOnlyRootFilesystem'])
+                self.assertFalse(context['allowPrivilegeEscalation'])
+                self.assertTrue(actual['resources']['limits']['memory'])
+
     def test_reapplying_policies_is_idempotent(self):
         for namespace, name in (("longhorn-system", "csi-attacher"), ("kube-system", "metrics-server")):
             before, after = self.preview(namespace, name)

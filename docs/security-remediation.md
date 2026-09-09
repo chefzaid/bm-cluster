@@ -92,6 +92,32 @@ These are image comparisons against the same Trivy database, not a claim that
 the entire cluster is clean. Verify the running digest and its current report
 after every rollout.
 
+Longhorn UI 1.12.1 retains the upstream static assets and manager proxy behavior
+on an updated NGINX Alpine runtime. Its live vulnerability and configuration
+reports both show zero findings. The public bootstrap image and patched image
+were tested with the same non-root UID/GID 10001, read-only root, dropped
+capabilities and writable NGINX directories. The UI does not mount a Kubernetes
+service-account token. Its deployment is protected by the same foundation and
+image-override mechanism as the system controllers.
+The separate driver deployer and its readiness init container also run as
+UID/GID 10001 with bounded resources, seccomp, dropped capabilities and a
+read-only root. Their Kubernetes credential remains enabled because the
+deployer creates the CSI controllers. Engines and host-facing CSI plugins
+retain their required storage permissions.
+
+MongoDB retains server 7.0.40, shell 2.10.0 and database tools 100.18.0, with a
+Wolfi runtime, patched YAML helper and rebuilt Go tools. Kerberos/GSSAPI and PIE
+builds are preserved. The candidate scan falls from 130 findings to eight
+Unknown OpenPGP module advisories, with zero exposed secrets. Tests cover an
+existing volume created by the old image, authenticated writes, all eight
+tool commands, and dump/restore with readback. A live archive is taken before
+deployment.
+
+MongoDB keeps UID/GID 999. An isolated test showed that changing only the UID
+and volume group prevents WiredTiger from opening its existing files. An owner
+migration needs a separate tested data-migration procedure; the remaining owner
+ID checks are not resolved by granting extra capabilities to the database.
+
 ## Configuration and reporting fixes
 
 - A validating admission policy rejects Pods using `gitRepo` volumes, including
