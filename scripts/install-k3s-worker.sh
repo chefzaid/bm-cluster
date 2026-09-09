@@ -96,10 +96,10 @@ usage() {
         cat <<'EOF'
 Join this host to an existing embedded-etcd K3s cluster as a control plane.
 
-Prefer ./scripts/add-k3s-control-planes.sh on the bootstrap control plane.
+Prefer ./add-node.sh --role control-plane --mode remote on the bootstrap control plane.
 For direct use, provide the server token through stdin and the exact cluster
 version, and run through private SSH from the bootstrap control plane:
-  ./scripts/install-k3s-server.sh --token-stdin --non-interactive \
+  ./add-node.sh --role control-plane --mode local --token-stdin --non-interactive \
     --server-url https://10.0.0.10:6443 --node-ip 10.0.0.11 \
     --node-name cp-02 --domain example.com --transport vrack \
     --node-network-cidr 10.0.0.0/24 --k3s-version vX.Y.Z+k3s1 \
@@ -136,6 +136,9 @@ Required server token: sudo cat /var/lib/rancher/k3s/server/token
 This installs a private server with embedded etcd, Traefik disabled, and secrets
 encryption enabled. It does not initialize a new cluster or install platform
 services. Existing K3s services require the enrollment manager's identity checks.
+Interactive use asks for the exact cluster version and whether this server may
+run workloads. Local joins do not convert the bootstrap datastore or validate
+the final cluster count; use remote enrollment for those steps.
 EOF
         return
     fi
@@ -143,10 +146,10 @@ EOF
 Install this machine as a K3s worker (agent).
 
 Interactive usage:
-  ./install-worker.sh --worker
+  ./add-node.sh --role worker --mode local
 
 Automation usage (the token is deliberately accepted only through stdin):
-  printf '%s\n' "$K3S_JOIN_TOKEN" | ./install-worker.sh --worker \
+  printf '%s\n' "$K3S_JOIN_TOKEN" | ./add-node.sh --role worker --mode local \
     --non-interactive \
     --transport vrack \
     --server-url https://10.0.0.10:6443 \
@@ -192,7 +195,7 @@ Workers never accept public ingress. Both transports may retain a provider
 interface for bootstrap and outbound updates, but UFW adds no inbound rule to
 it. Final hardening is refused unless this installer is running through private
 SSH from the exact control-plane address to the worker's vRack/Tailscale IP.
-Prefer running install-worker.sh --control-plane so that path is proven first.
+Prefer running add-node.sh --role worker --mode remote so that path is proven first.
 EOF
 }
 
@@ -253,7 +256,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$ENROLLMENT_ROLE" =~ ^(worker|control-plane)$ ]] || error "Invalid enrollment role: $ENROLLMENT_ROLE"
+# Reject role collisions before transport/account setup or any host changes.
+if systemctl cat k3s.service >/dev/null 2>&1; then
+    error "This machine already has a K3s server service. Use the control-plane enrollment manager to validate and reuse an existing server."
+fi
+if [[ "$ENROLLMENT_ROLE" == "control-plane" ]] && systemctl cat k3s-agent.service >/dev/null 2>&1; then
+    error "This machine already has a K3s worker service; refusing to change its role."
+fi
 if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
+    if [[ "$NON_INTERACTIVE" != true ]]; then
+        installer_prompt_section "Control-plane join settings" \
+            "The existing cluster must already use embedded etcd; match its version and scheduling policy." \
+            "Use remote enrollment to prepare the datastore and complete an odd final server count."
+        [[ -n "$K3S_VERSION" ]] || installer_prompt_value K3S_VERSION \
+            "Exact K3s version on the existing control plane (sudo k3s --version)"
+        [[ -n "$CONTROL_PLANE_SCHEDULABLE" ]] || installer_prompt_value CONTROL_PLANE_SCHEDULABLE \
+            "May this control plane run workloads? Enter true or false to match the cluster"
+    fi
     [[ "$CONTROL_PLANE_SCHEDULABLE" =~ ^(true|false)$ ]] || \
         error "Server joins require --control-plane-schedulable true|false."
     [[ -n "$K3S_VERSION" ]] || error "Server joins require the bootstrap server's exact --k3s-version."
@@ -264,7 +283,7 @@ fi
 if [[ -z "$REGISTRY_HOST" ]]; then
     [[ "$NON_INTERACTIVE" != "true" ]] || error "Set --domain or K3S_REGISTRY_HOST."
     installer_prompt_section "Cluster identity" \
-        "The public domain determines this worker's GitLab Registry host."
+        "The public domain determines this node's GitLab Registry host."
     installer_prompt_value PLATFORM_DOMAIN "Public base domain for this cluster"
     PLATFORM_DOMAIN="${PLATFORM_DOMAIN,,}"
     [[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || error "Invalid public domain."
@@ -331,7 +350,7 @@ if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then
             --auth-key-expiry "$TAILSCALE_AUTH_KEY_EXPIRY_SECONDS"
         )
         tailscale_args+=(--api-token-stdin --non-interactive)
-        info "Automating the Tailscale account, role policy, and this worker node."
+        info "Automating the Tailscale account, role policy, and this $ENROLLMENT_ROLE node."
         printf '%s\n' "$TAILSCALE_API_TOKEN" | "$TAILSCALE_CONFIGURATOR" "${tailscale_args[@]}" >/dev/null
     fi
     command -v tailscale >/dev/null 2>&1 || error "Tailscale is not installed."
@@ -360,22 +379,22 @@ if [[ "$TOKEN_STDIN" == "true" ]]; then
 fi
 
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
-    installer_prompt_section "Control plane and worker identity" \
+    installer_prompt_section "Join endpoint and $ENROLLMENT_ROLE identity" \
         "Provide the private join endpoint, token, node network, and Kubernetes metadata."
     [[ -n "$SERVER_URL" ]] || installer_prompt_value SERVER_URL "Control-plane private IPv4 address or K3s URL"
     SERVER_URL="$(normalize_server_url "$SERVER_URL")" || error "Invalid control-plane URL: $SERVER_URL"
     SERVER_PRIVATE_IP="$(server_url_ipv4 "$SERVER_URL")" || \
         error "Use the control plane's RFC1918 or Tailscale IPv4 address, not a public address or hostname."
-    [[ -n "$CONTROL_PLANE_IP" ]] || installer_prompt_value CONTROL_PLANE_IP "Control-plane private IPv4 allowed to SSH to this worker" "$SERVER_PRIVATE_IP"
+    [[ -n "$CONTROL_PLANE_IP" ]] || installer_prompt_value CONTROL_PLANE_IP "Control-plane private IPv4 allowed to SSH to this node" "$SERVER_PRIVATE_IP"
     if [[ -z "$JOIN_TOKEN" ]]; then
         installer_prompt_secret JOIN_TOKEN "K3s join token (input hidden)"
     fi
     [[ -n "$NODE_NAME" ]] || installer_prompt_value NODE_NAME "Unique node name" "$(hostname -s | tr '[:upper:]' '[:lower:]')"
     if [[ -z "$NODE_IP" ]]; then
         if [[ "$NODE_TRANSPORT" == "vrack" ]]; then
-            installer_prompt_value NODE_IP "This worker's unique OVHcloud vRack RFC1918 address"
+            installer_prompt_value NODE_IP "This node's unique OVHcloud vRack RFC1918 address"
         else
-            installer_prompt_value NODE_IP "This worker's Tailscale IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
+            installer_prompt_value NODE_IP "This node's Tailscale IPv4 address" "$(detect_node_ip "$SERVER_PRIVATE_IP")"
         fi
     fi
     [[ -n "$NODE_LABELS" ]] || installer_prompt_value NODE_LABELS "Initial labels, comma-separated (optional)"
@@ -383,7 +402,7 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     [[ -n "$NODE_NETWORK_CIDR" ]] || installer_prompt_value NODE_NETWORK_CIDR "RFC1918 node CIDR or Tailscale 100.64.0.0/10"
     [[ -n "$K3S_VERSION" ]] || installer_prompt_value K3S_VERSION "Exact K3s version (blank to use the current stable release)"
     while [[ -z "$NODE_NETWORK_CIDR" ]]; do
-        installer_prompt_value NODE_NETWORK_CIDR "Trusted private node CIDR required for the worker firewall (e.g. 10.0.0.0/24)"
+        installer_prompt_value NODE_NETWORK_CIDR "Trusted private node CIDR required for the node firewall (e.g. 10.0.0.0/24)"
     done
 fi
 
@@ -462,20 +481,13 @@ else
     "${SUDO[@]}" -v
 fi
 
-if "${SUDO[@]}" systemctl cat k3s.service >/dev/null 2>&1; then
-    error "This machine already has a K3s server service. Use the control-plane enrollment manager to validate and reuse an existing server."
-fi
-if [[ "$ENROLLMENT_ROLE" == "control-plane" ]] && "${SUDO[@]}" systemctl cat k3s-agent.service >/dev/null 2>&1; then
-    error "This machine already has a K3s worker service; refusing to change its role."
-fi
-
-command -v apt-get >/dev/null 2>&1 || error "This installer currently supports Debian/Ubuntu workers (apt-get is required)."
+command -v apt-get >/dev/null 2>&1 || error "This installer currently supports Debian/Ubuntu nodes (apt-get is required)."
 missing_packages=()
 for package in ca-certificates curl open-iscsi nfs-common; do
     dpkg -s "$package" >/dev/null 2>&1 || missing_packages+=("$package")
 done
 if [[ ${#missing_packages[@]} -gt 0 ]]; then
-    info "Installing worker prerequisites: ${missing_packages[*]}"
+    info "Installing $ENROLLMENT_ROLE prerequisites: ${missing_packages[*]}"
     "${SUDO[@]}" apt-get update -qq
     "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing_packages[@]}" >/dev/null
 fi

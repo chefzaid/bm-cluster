@@ -1,0 +1,40 @@
+---
+- name: Install bm-cluster through the shared host and platform workflow
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars:
+    repository_root: "{{ playbook_dir }}/.."
+    # Optional mapping supplied through an encrypted or local extra-vars file.
+    # Unspecified inputs retain the installer's environment/default behavior.
+    installer_environment: {}
+
+  tasks:
+    - name: Validate installer environment mapping
+      ansible.builtin.assert:
+        that: installer_environment is mapping
+        fail_msg: Supply installer_environment as a mapping of installer environment variables.
+      no_log: true
+
+    - name: Verify passwordless sudo for unattended installation
+      ansible.builtin.command: sudo -n true
+      changed_when: false
+
+    - name: Install hosts, enroll nodes, and deploy the platform
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/install-control-plane.sh"
+          - --yes
+        chdir: "{{ repository_root }}"
+      environment: "{{ installer_environment }}"
+      no_log: true
+
+    - name: Report installation completion
+      ansible.builtin.debug:
+        msg: >-
+          Installation completed through the shared installer, including its
+          node readiness and platform checks. Use ansible/deploy.yml for later
+          platform reconciliation and add-node.sh for role-aware enrollment.
+      when: not ansible_check_mode

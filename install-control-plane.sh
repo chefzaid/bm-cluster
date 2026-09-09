@@ -54,11 +54,11 @@ VAULT_VALUES_FILE="$SCRIPT_DIR/config/vault-values.yaml"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
-WORKER_INSTALLER_SCRIPT="$SCRIPT_DIR/install-worker.sh"
-CONTROL_PLANE_ENROLLMENT_SCRIPT="$SCRIPT_DIR/scripts/add-k3s-control-planes.sh"
+NODE_ENROLLMENT_SCRIPT="$SCRIPT_DIR/add-node.sh"
 K3S_HA_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-ha.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
+REPLICATE_REPO_SCRIPT="$SCRIPT_DIR/replicate-repo.sh"
 GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/scripts/lib/gitlab-admin-token.sh"
 LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT="$SCRIPT_DIR/scripts/rotate-local-admin-passwords.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
@@ -100,7 +100,6 @@ PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
 INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-}"
 CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
 CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-}"
-REPOSITORY_SYNC_MAPPINGS="${REPOSITORY_SYNC_MAPPINGS:-}"
 GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
 GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-}"
@@ -233,17 +232,15 @@ github_repository_url() {
 }
 
 configure_repository_delivery() {
-    local default_gitops github_url github_slug mapping normalized_mappings=""
+    local default_gitops github_url
     local repository_name
     repository_name="$(basename "$SCRIPT_DIR")"
-    github_url="$(github_repository_url)"
-    github_slug="${github_url#https://github.com/}"
-    github_slug="${github_slug%.git}"
+    github_url="$(github_repository_url || true)"
 
     if [[ -z "$CONFIGURE_REPOSITORY_SYNC" ]]; then
         if [[ "$AUTO_APPROVE" == "true" ]]; then
             CONFIGURE_REPOSITORY_SYNC=false
-        elif ask_with_default "Synchronize selected repositories bidirectionally between GitHub and GitLab?" "N"; then
+        elif ask_with_default "Duplicate GitHub repositories to GitLab and configure two-way sync?" "N"; then
             CONFIGURE_REPOSITORY_SYNC=true
         else
             CONFIGURE_REPOSITORY_SYNC=false
@@ -255,71 +252,25 @@ configure_repository_delivery() {
         *) error "CONFIGURE_REPOSITORY_SYNC must be true or false." ;;
     esac
 
-    if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
-        if [[ "$AUTO_APPROVE" != "true" ]]; then
-            installer_prompt_value GITLAB_GROUP_PATH "GitLab group path" "$GITLAB_GROUP_PATH"
-            installer_prompt_value GITLAB_GROUP_NAME "GitLab group display name" "$GITLAB_GROUP_NAME"
-        fi
-        [[ "$GITLAB_GROUP_PATH" =~ ^[A-Za-z0-9_.-]+$ ]] || \
-            error "The GitLab group path is invalid."
-        GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
-        if [[ "$AUTO_APPROVE" != "true" ]]; then
-            installer_prompt_value GITLAB_PROJECT_PATH "GitLab path for this cluster repository" "$GITLAB_PROJECT_PATH"
-        fi
-        [[ "$GITLAB_PROJECT_PATH" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$ ]] || \
-            error "The GitLab project path is invalid."
-
-        if [[ -z "$REPOSITORY_SYNC_MAPPINGS" && -n "$github_slug" ]]; then
-            REPOSITORY_SYNC_MAPPINGS="$github_slug=$GITLAB_PROJECT_PATH"
-        fi
-        if [[ "$AUTO_APPROVE" != "true" ]]; then
-            cat >&2 <<EOF
-
-Enter each repository pair as GitHub-owner/repository=GitLab-group/repository.
-Separate multiple pairs with commas. Example:
-  company/web=platform/web,company/api=platform/api
-EOF
-            installer_prompt_value REPOSITORY_SYNC_MAPPINGS "Repository pairs" "$REPOSITORY_SYNC_MAPPINGS"
-        fi
-        [[ -n "$REPOSITORY_SYNC_MAPPINGS" ]] || error "At least one repository pair is required for synchronization."
-        IFS=',' read -r -a repository_mappings <<< "$REPOSITORY_SYNC_MAPPINGS"
-        for mapping in "${repository_mappings[@]}"; do
-            mapping="${mapping//[[:space:]]/}"
-            [[ "$mapping" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+=[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || \
-                error "Invalid repository mapping: $mapping"
-            normalized_mappings+="${normalized_mappings:+,}$mapping"
-        done
-        REPOSITORY_SYNC_MAPPINGS="$normalized_mappings"
-        GITOPS_REPOSITORY_URL="https://gitlab.$PLATFORM_DOMAIN/$GITLAB_PROJECT_PATH.git"
-    else
-        GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
-        default_gitops="${GITOPS_REPOSITORY_URL:-$github_url}"
-        if [[ "$AUTO_APPROVE" != "true" ]]; then
-            installer_prompt_value GITOPS_REPOSITORY_URL "GitOps repository URL" "$default_gitops"
-        else
-            GITOPS_REPOSITORY_URL="$default_gitops"
-        fi
-        [[ "$GITOPS_REPOSITORY_URL" =~ ^https?://[^[:space:]]+\.git$ ]] || \
-            error "Set GITOPS_REPOSITORY_URL to an HTTP(S) .git repository accessible by Argo CD."
+    if [[ -n "${REPOSITORY_SYNC_MAPPINGS:-}" ]]; then
+        error "REPOSITORY_SYNC_MAPPINGS was replaced by GITHUB_USERNAME, GITHUB_REPOSITORIES, and GITLAB_GROUP_PATH; see docs/repository-replication.md."
     fi
-    export CONFIGURE_REPOSITORY_SYNC REPOSITORY_SYNC_MAPPINGS GITLAB_GROUP_PATH
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        installer_prompt_value GITLAB_GROUP_PATH "GitLab group path" "$GITLAB_GROUP_PATH"
+        installer_prompt_value GITLAB_GROUP_NAME "GitLab group display name" "$GITLAB_GROUP_NAME"
+    fi
+    [[ "$GITLAB_GROUP_PATH" =~ ^[A-Za-z0-9_.-]+$ ]] || error "The platform GitLab group must be a top-level group."
+    GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
+    default_gitops="${GITOPS_REPOSITORY_URL:-$github_url}"
+    if [[ "$AUTO_APPROVE" != "true" ]]; then
+        installer_prompt_value GITOPS_REPOSITORY_URL "Cluster GitOps repository URL (must already be accessible)" "$default_gitops"
+    else
+        GITOPS_REPOSITORY_URL="$default_gitops"
+    fi
+    [[ "$GITOPS_REPOSITORY_URL" =~ ^https?://[^[:space:]]+\.git$ ]] || \
+        error "Set GITOPS_REPOSITORY_URL to an HTTP(S) .git repository accessible by Argo CD."
+    export CONFIGURE_REPOSITORY_SYNC GITLAB_GROUP_PATH
     export GITLAB_GROUP_NAME GITLAB_PROJECT_PATH GITOPS_REPOSITORY_URL
-}
-
-prompt_github_admin_token() {
-    [[ -z "${GITHUB_ADMIN_TOKEN:-}" ]] || return 0
-    [[ "$AUTO_APPROVE" != "true" ]] || error "Set GITHUB_ADMIN_TOKEN when CONFIGURE_REPOSITORY_SYNC=true."
-    cat >&2 <<'EOF'
-
-Create a GitHub fine-grained personal access token:
-  1. Open https://github.com/settings/personal-access-tokens/new.
-  2. Select every repository entered above.
-  3. Grant Administration, Actions, Contents, Secrets, and Variables read/write.
-  4. Use the shortest practical expiry and paste the token below.
-EOF
-    installer_prompt_secret GITHUB_ADMIN_TOKEN "GitHub repository-management token (input hidden)"
-    [[ -n "$GITHUB_ADMIN_TOKEN" ]] || error "A GitHub token is required for repository synchronization."
-    export GITHUB_ADMIN_TOKEN
 }
 
 configure_backup_destination() {
@@ -635,56 +586,8 @@ download_installer() {
     printf -v "$destination_variable" '%s' "$destination"
 }
 
-ensure_tls_secret() {
-    local namespace="$1"
-    local secret_name="$2"
-    shift 2
-    local domains=("$@")
-
-    if kubectl get secret "$secret_name" -n "$namespace" >/dev/null 2>&1; then
-        warn "TLS secret '$secret_name' already exists in namespace '$namespace', reusing it."
-        return 0
-    fi
-
-    local tmpdir openssl_config cert key
-    tmpdir="$(mktemp -d)"
-    openssl_config="$tmpdir/openssl.cnf"
-    cert="$tmpdir/tls.crt"
-    key="$tmpdir/tls.key"
-
-    {
-        echo "[req]"
-        echo "distinguished_name = req_distinguished_name"
-        echo "x509_extensions = v3_req"
-        echo "prompt = no"
-        echo ""
-        echo "[req_distinguished_name]"
-        echo "CN = ${domains[0]}"
-        echo ""
-        echo "[v3_req]"
-        echo "subjectAltName = @alt_names"
-        echo ""
-        echo "[alt_names]"
-        local i=1
-        for domain in "${domains[@]}"; do
-            echo "DNS.$i = $domain"
-            i=$((i + 1))
-        done
-    } > "$openssl_config"
-
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$key" \
-        -out "$cert" \
-        -config "$openssl_config" >/dev/null 2>&1
-
-    kubectl create secret tls "$secret_name" \
-        --cert="$cert" \
-        --key="$key" \
-        -n "$namespace" >/dev/null
-
-    rm -rf "$tmpdir"
-    info "Created TLS secret '$secret_name' in namespace '$namespace'."
-}
+# shellcheck source=scripts/lib/tls.sh
+source "$SCRIPT_DIR/scripts/lib/tls.sh"
 
 # ---------- Combined pre-flight checks -----------------------------------------
 [[ $EUID -eq 0 ]] && error "Do not run as root. The script uses sudo when needed."
@@ -710,6 +613,18 @@ installer_prompt_section "Cluster identity and deployment scope" \
 prompt_cluster_identity
 
 SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
+if [[ "$AUTO_APPROVE" == true ]]; then
+    CONFIGURE_CLOUDFLARE="${CONFIGURE_CLOUDFLARE:-$([[ "$SERVER_EXPOSURE" == internet ]] && printf true || printf false)}"
+    [[ "$CONFIGURE_CLOUDFLARE" =~ ^(true|false)$ ]] || error "CONFIGURE_CLOUDFLARE must be true or false."
+    if [[ "$CONFIGURE_CLOUDFLARE" == true ]]; then
+        [[ "$SERVER_EXPOSURE" == internet ]] || error "Cloudflare requires internet exposure."
+        [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || error "Set CLOUDFLARE_API_TOKEN or CONFIGURE_CLOUDFLARE=false for --yes."
+        if [[ "${CLOUDFLARE_ENABLE_ACCESS:-true}" == true ]]; then
+            [[ -n "${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}" ]] || \
+                error "Set CLOUDFLARE_ACCESS_ALLOWED_EMAILS or CLOUDFLARE_ENABLE_ACCESS=false for --yes."
+        fi
+    fi
+fi
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
     info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and control-plane Lynis."
 else
@@ -856,9 +771,9 @@ configure_platform_component_selection
 installer_prompt_section "Recovery and public access" \
     "Configure off-node backups and, for internet-facing clusters, public DNS and TLS."
 configure_backup_destination
-if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
+if [[ "$SERVER_EXPOSURE" == "internet" && "$AUTO_APPROVE" != true ]]; then
     ask_with_default "Configure Cloudflare public DNS and Origin TLS?" "Y" && CONFIGURE_CLOUDFLARE=true || CONFIGURE_CLOUDFLARE=false
-else
+elif [[ "$SERVER_EXPOSURE" != internet ]]; then
     CONFIGURE_CLOUDFLARE=false
 fi
 if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$AUTO_APPROVE" != "true" ]]; then
@@ -873,6 +788,11 @@ export CLOUDFLARE_ACCESS_TEAM_NAME
 installer_prompt_section "GitOps and repository delivery" \
     "Choose the Argo CD source and optionally configure GitHub/GitLab synchronization."
 configure_repository_delivery
+if [[ "$CONFIGURE_REPOSITORY_SYNC" == true && "$AUTO_APPROVE" == true ]]; then
+    [[ -n "${GITHUB_USERNAME:-${GITHUB_OWNER:-}}" && -n "${GITHUB_ADMIN_TOKEN:-}" &&
+       -n "${GITHUB_REPOSITORIES:-}" && -n "${DEPLOY_REPOSITORIES:-}" ]] || \
+        error "Repository replication with --yes requires GITHUB_USERNAME, GITHUB_ADMIN_TOKEN, GITHUB_REPOSITORIES, and DEPLOY_REPOSITORIES (all, none, or names)."
+fi
 
 if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" && "$DEPLOY_DATA_STORES" != "true" ]]; then
     warn "Platform services depend on data stores; enabling data store deployment."
@@ -935,6 +855,8 @@ if [[ "$INSTALL_PREREQS" == "true" ]]; then
         dnsutils \
         jq \
         git \
+        python3-yaml \
+        libsodium23 \
         openssl \
         > /dev/null
 
@@ -1066,7 +988,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$ADD_K3S_CONTROL_PLANES" == "true" ]]; then
-        [[ -x "$CONTROL_PLANE_ENROLLMENT_SCRIPT" ]] || error "Control-plane enrollment script is not executable."
+        [[ -x "$NODE_ENROLLMENT_SCRIPT" ]] || error "Node enrollment script is not executable."
         control_plane_manager_args=(--defer-topology --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE"
             --transport "$K3S_NODE_TRANSPORT" --server-url "https://${K3S_PRIVATE_ADDRESS}:6443")
         if [[ -n "${K3S_CONTROL_PLANE_HOSTS:-}" ]]; then
@@ -1084,14 +1006,14 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Joining additional K3s control-plane servers..."
         if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
             TAILSCALE_API_TOKEN="$TAILSCALE_API_TOKEN" \
-                "$CONTROL_PLANE_ENROLLMENT_SCRIPT" "${control_plane_manager_args[@]}"
+                "$NODE_ENROLLMENT_SCRIPT" --role control-plane --mode remote "${control_plane_manager_args[@]}"
         else
-            "$CONTROL_PLANE_ENROLLMENT_SCRIPT" "${control_plane_manager_args[@]}"
+            "$NODE_ENROLLMENT_SCRIPT" --role control-plane --mode remote "${control_plane_manager_args[@]}"
         fi
     fi
 
     if [[ "$ADD_K3S_WORKERS" == "true" ]]; then
-        [[ -x "$WORKER_INSTALLER_SCRIPT" ]] || error "Worker installer not found or not executable at $WORKER_INSTALLER_SCRIPT"
+        [[ -x "$NODE_ENROLLMENT_SCRIPT" ]] || error "Node enrollment script is not executable: $NODE_ENROLLMENT_SCRIPT"
         worker_manager_args=()
         worker_ip_list="${K3S_WORKER_IPS:-}"
         [[ -z "$worker_ip_list" ]] || worker_manager_args+=(--worker-ips "$worker_ip_list")
@@ -1114,9 +1036,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Adding K3s worker nodes..."
         if [[ "$K3S_NODE_TRANSPORT" == "tailscale" ]]; then
             TAILSCALE_API_TOKEN="$TAILSCALE_API_TOKEN" \
-                "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
+                "$NODE_ENROLLMENT_SCRIPT" --role worker --mode remote "${worker_manager_args[@]}"
         else
-            "$WORKER_INSTALLER_SCRIPT" --control-plane "${worker_manager_args[@]}"
+            "$NODE_ENROLLMENT_SCRIPT" --role worker --mode remote "${worker_manager_args[@]}"
         fi
     fi
 
@@ -1329,33 +1251,9 @@ EOF
         # shellcheck source=scripts/lib/gitlab-admin-token.sh
         source "$GITLAB_TOKEN_LIBRARY"
         gitlab_acquire_admin_token
-        if [[ "$CONFIGURE_REPOSITORY_SYNC" == "true" ]]; then
-            prompt_github_admin_token
-            IFS=',' read -r -a repository_mappings <<< "$REPOSITORY_SYNC_MAPPINGS"
-            for repository_mapping in "${repository_mappings[@]}"; do
-                github_slug="${repository_mapping%%=*}"
-                gitlab_path="${repository_mapping#*=}"
-                gitlab_group="${gitlab_path%%/*}"
-                gitlab_project="${gitlab_path##*/}"
-                gitlab_group_name="$gitlab_group"
-                [[ "$gitlab_group" != "$GITLAB_GROUP_PATH" ]] || gitlab_group_name="$GITLAB_GROUP_NAME"
-                step "Configuring and initializing $github_slug <-> $gitlab_path..."
-                GITHUB_OWNER="${github_slug%%/*}" \
-                GITHUB_REPOSITORY="${github_slug##*/}" \
-                GITLAB_GROUP_PATH="$gitlab_group" \
-                GITLAB_GROUP_NAME="$gitlab_group_name" \
-                GITLAB_PROJECT_PATH="$gitlab_path" \
-                GITLAB_PROJECT_NAME="$gitlab_project" \
-                GITLAB_PUBLIC_URL="https://gitlab.$PLATFORM_DOMAIN" \
-                CONFIGURE_REPOSITORY_SYNC=true \
-                    "$GITLAB_CI_SCRIPT"
-            done
-        else
-            GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$(basename "$SCRIPT_DIR")}" \
-            GITLAB_PUBLIC_URL="https://gitlab.$PLATFORM_DOMAIN" \
-            CONFIGURE_REPOSITORY_SYNC=false \
-                "$GITLAB_CI_SCRIPT"
-        fi
+        GITLAB_PUBLIC_URL="https://gitlab.$PLATFORM_DOMAIN" \
+        CONFIGURE_REPOSITORY_SYNC=false \
+            "$GITLAB_CI_SCRIPT"
         gitlab_revoke_ephemeral_admin_token
     fi
 
@@ -1388,13 +1286,21 @@ EOF
             --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
             --wait --timeout "$ARGOCD_HELM_TIMEOUT"
 
-        step "Applying GitLab-backed Argo CD applications..."
+        step "Applying the platform Argo CD Application..."
         for manifest in "${POST_ARGOCD_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"
         done
     fi
 else
     warn "All Kubernetes feature groups were skipped."
+fi
+
+if [[ "$CONFIGURE_REPOSITORY_SYNC" == true ]]; then
+    step "Importing repositories, configuring two-way sync, and selecting deployments..."
+    [[ -x "$REPLICATE_REPO_SCRIPT" ]] || error "Repository assistant is not executable: $REPLICATE_REPO_SCRIPT"
+    replication_args=()
+    [[ "$AUTO_APPROVE" != true ]] || replication_args+=(--yes)
+    "$REPLICATE_REPO_SCRIPT" "${replication_args[@]}"
 fi
 
 info ""
@@ -1443,7 +1349,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         echo "  Odoo:     username admin; password: kubectl get secret -n corp odoo-secret -o jsonpath='{.data.ODOO_ADMIN_PASSWORD}' | base64 -d"
     fi
     echo "  Descheduler trigger: kubectl create -f k8s/addons/descheduler-run-job.yaml"
-    echo "  Add workers:          ./install-worker.sh"
+    echo "  Add nodes:            ./add-node.sh"
     echo "  Worker join token:    sudo cat /var/lib/rancher/k3s/server/node-token"
     echo ""
 

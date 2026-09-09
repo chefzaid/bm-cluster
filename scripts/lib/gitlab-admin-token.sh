@@ -57,7 +57,8 @@ gitlab_acquire_admin_token() {
     info "The local GitLab command line could not issue a token; interactive credentials are required"
   fi
 
-  [[ -t 0 ]] || fail "Set GITLAB_ADMIN_TOKEN; automatic local GitLab token creation was unavailable."
+  [[ "${GITLAB_ADMIN_TOKEN_NONINTERACTIVE:-false}" != true && -t 0 ]] || \
+    fail "Set GITLAB_ADMIN_TOKEN; automatic local GitLab token creation was unavailable."
   gitlab_prompt_admin_token
 }
 

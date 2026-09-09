@@ -16,6 +16,8 @@
 *~
 
 # Generated validation and OS files
+__pycache__/
+*.py[cod]
 *.log
 *.retry
 .DS_Store

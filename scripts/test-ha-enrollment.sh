@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
     fixture = Path(directory)
     scripts = fixture / "scripts"
     scripts.mkdir()
+    shutil.copy2(source.parent / "add-node.sh", fixture / "add-node.sh")
     shutil.copytree(source / "lib", scripts / "lib")
     for name in ("install-k3s-worker.sh", "install-k3s-server.sh", "add-k3s-control-planes.sh", "add-k3s-workers.sh"):
         shutil.copy2(source / name, scripts / name)
@@ -68,12 +69,14 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
               "--transport", "vrack", "--node-network-cidr", "10.40.0.0/24",
               "--k3s-version", "v1.35.1+k3s1"]
 
-    def run(extra=(), role="control-plane", existing="", expected=0, arguments=None):
+    def run(extra=(), role="control-plane", existing="", expected=0, arguments=None,
+            input_data="fixture-secret-never-in-argv\n"):
         log.write_text("")
-        current = dict(environment, K3S_ENROLLMENT_ROLE=role, MOCK_EXISTING_SERVICE=existing)
-        result = subprocess.run(["bash", str(scripts / "install-k3s-worker.sh"),
+        current = dict(environment, K3S_ENROLLMENT_ROLE="worker" if role == "control-plane" else "control-plane",
+                       MOCK_EXISTING_SERVICE=existing)
+        result = subprocess.run(["bash", str(fixture / "add-node.sh"), "--role", role, "--mode", "local",
                                  *(common if arguments is None else arguments), *extra],
-                                input="fixture-secret-never-in-argv\n", text=True,
+                                input=input_data, text=True,
                                 capture_output=True, env=current)
         assert (result.returncode == 0) == (expected == 0), result.stdout + result.stderr
         calls = [json.loads(line) for line in log.read_text().splitlines()]
@@ -120,6 +123,16 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
     _, output = run(["--control-plane-schedulable", "true", "--taints",
                      "node-role.kubernetes.io/control-plane=true:NoSchedule"], expected=1)
     assert "through --control-plane-schedulable" in output
+
+    # Interactive local control planes collect required version/scheduling
+    # settings before validation; transport account work is isolated here.
+    with (scripts / "lib/transport-guide.sh").open("a") as guide:
+        guide.write('\ntransport_guide_vrack_account() { :; }\n')
+    interactive = common[2:-2]
+    calls, output = run(arguments=interactive,
+                        input_data="v1.35.1+k3s1\ntrue\n\nfixture-secret-never-in-argv\n\n\n")
+    install = next(call for call in calls if call["tool"] == "mock-k3s-install")
+    assert install["args"][0] == "server" and install["version"] == "v1.35.1+k3s1"
 
 print("PASS: server/agent joins, exact version, private exposure, NoSchedule, secret handling, and role collision guards")
 PY
@@ -231,5 +244,38 @@ PY
     WORKER_HOSTS=cp-02.example.com,cp-03.example.com
     preflight_control_plane_count
     [[ "$EXPECTED_CONTROL_PLANE_COUNT" == 3 ]]
+
+    # Only a validated server expansion can prepare the bootstrap datastore.
+    load_function prepare_control_plane_datastore
+    export MOCK_DATASTORE_DIR="$TEST_DIR/datastore"
+    mkdir "$MOCK_DATASTORE_DIR"
+    mock_privileged() {
+        case "$*" in
+            'test -d /var/lib/rancher/k3s/server/db/etcd/member') [[ -f "$MOCK_DATASTORE_DIR/etcd" ]] ;;
+            'test -s /var/lib/rancher/k3s/server/db/state.db') [[ -f "$MOCK_DATASTORE_DIR/sqlite" ]] ;;
+            'cat /var/lib/rancher/k3s/server/token') printf 'refreshed-fixture-token\n' ;;
+            *) return 1 ;;
+        esac
+    }
+    LOCAL_SUDO=(mock_privileged)
+    K3S_HA_SCRIPT="$TEST_DIR/prepare-etcd.sh"
+    cat > "$K3S_HA_SCRIPT" <<'MOCK'
+#!/bin/sh
+touch "$MOCK_DATASTORE_DIR/prepared" "$MOCK_DATASTORE_DIR/etcd"
+MOCK
+    chmod +x "$K3S_HA_SCRIPT"
+    ENROLLMENT_ROLE=worker
+    prepare_control_plane_datastore
+    [[ ! -f "$MOCK_DATASTORE_DIR/prepared" ]]
+    ENROLLMENT_ROLE=control-plane
+    if (prepare_control_plane_datastore) > "$TEST_DIR/error" 2>&1; then exit 1; fi
+    [[ ! -f "$MOCK_DATASTORE_DIR/prepared" ]]
+    touch "$MOCK_DATASTORE_DIR/sqlite"
+    preflight_control_plane_count
+    prepare_control_plane_datastore
+    [[ -f "$MOCK_DATASTORE_DIR/prepared" && "$JOIN_TOKEN" == refreshed-fixture-token ]]
+    rm "$MOCK_DATASTORE_DIR/prepared"
+    prepare_control_plane_datastore
+    [[ ! -f "$MOCK_DATASTORE_DIR/prepared" ]]
 )
-printf '%s\n' 'PASS: remote dependency bundle, role collision checks, CP reuse, pre-join quorum validation, and partial-run recovery'
+printf '%s\n' 'PASS: remote dependency bundle, role collision checks, CP reuse, quorum validation, datastore preparation, and partial-run recovery'

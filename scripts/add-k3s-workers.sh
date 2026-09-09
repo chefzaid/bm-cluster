@@ -46,6 +46,7 @@ K3S_NETWORK_CONFIGURATOR="$SCRIPT_DIR/configure-k3s-control-plane-network.sh"
 TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
 CLUSTER_TOPOLOGY_RECONCILER="$SCRIPT_DIR/reconcile-cluster-topology.sh"
+K3S_HA_SCRIPT="$SCRIPT_DIR/configure-k3s-ha.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
 WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
 REQUESTED_WORKER_COUNT="${K3S_WORKER_COUNT:-}"
@@ -108,10 +109,10 @@ usage() {
         cat <<'EOF'
 Join additional Debian/Ubuntu K3s control planes over private SSH.
 
-Run on an existing embedded-etcd control plane:
-  ./scripts/add-k3s-control-planes.sh --control-plane-count 2
-  ./scripts/add-k3s-control-planes.sh --transport vrack \
-    --control-plane-ips 10.0.0.11,10.0.0.12 --node-network-cidr 10.0.0.0/24 \
+Run on the existing bootstrap control plane:
+  ./add-node.sh --role control-plane --mode remote --count 2
+  ./add-node.sh --role control-plane --mode remote --transport vrack \
+    --ips 10.0.0.11,10.0.0.12 --node-network-cidr 10.0.0.0/24 \
     --control-plane-schedulable false
 
 Control-plane options:
@@ -141,8 +142,10 @@ Control-plane options:
   --non-interactive         Fail instead of prompting; implied by either node list
   -h, --help                Show this help
 
-The existing server must use embedded etcd. A completed cluster must have an
-odd control-plane count. Server joins use its server token and exact version,
+The final control-plane count must be odd. After validating that plan, an
+existing SQLite server is backed up and converted to embedded etcd if needed.
+Existing etcd membership is preserved; external datastores are not converted.
+Server joins use the existing server token and exact version,
 disable Traefik, enable secrets encryption, and remain private. Already joined
 nodes with matching names, roles, and private IPs are checked and reused.
 Private SSH is proved before the provider-facing firewall is closed. Join
@@ -155,10 +158,10 @@ EOF
 Add one or more Debian/Ubuntu machines to this K3s cluster as workers.
 
 Interactive usage (run on the K3s control-plane node):
-  ./install-worker.sh --control-plane
+  ./add-node.sh --role worker --mode remote
 
 Non-interactive worker selection:
-  ./install-worker.sh --control-plane \
+  ./add-node.sh --role worker --mode remote \
     --transport vrack \
     --worker-ips 10.0.0.12,10.0.0.13 \
     --node-network-cidr 10.0.0.0/24 \
@@ -314,8 +317,6 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
-    "${LOCAL_SUDO[@]}" test -d /var/lib/rancher/k3s/server/db/etcd/member || \
-        error "Additional control planes require embedded etcd; rerun install-control-plane.sh with the desired odd control-plane count first."
     # New nodes must inherit an actual scheduling mode even when the caller
     # asks to preserve the existing cluster's scheduling policy.
     JOIN_CONTROL_PLANE_SCHEDULABLE="$CONTROL_PLANE_SCHEDULABLE"
@@ -753,6 +754,26 @@ preflight_control_plane_count() {
     info "Validated control-plane plan: $current_count existing + $new_count new = $planned_count total."
 }
 
+prepare_control_plane_datastore() {
+    [[ "$ENROLLMENT_ROLE" == control-plane ]] || return 0
+    if "${LOCAL_SUDO[@]}" test -d /var/lib/rancher/k3s/server/db/etcd/member; then
+        info "Using the existing embedded-etcd datastore."
+        return 0
+    fi
+    # This entry point expands an existing cluster; never initialize a fresh
+    # server merely because the kubeconfig reaches some other cluster.
+    "${LOCAL_SUDO[@]}" test -s /var/lib/rancher/k3s/server/db/state.db || \
+        error "Run control-plane enrollment on the existing SQLite or embedded-etcd bootstrap server."
+    [[ -x "$K3S_HA_SCRIPT" ]] || error "Embedded-etcd configurator is missing: $K3S_HA_SCRIPT"
+    info "Backing up SQLite and preparing embedded etcd for the validated control-plane plan..."
+    "$K3S_HA_SCRIPT" || error "Embedded-etcd preparation failed; no additional control planes were enrolled."
+    "${LOCAL_SUDO[@]}" test -d /var/lib/rancher/k3s/server/db/etcd/member || \
+        error "Embedded etcd is not ready; no additional control planes were enrolled."
+    # Read again after conversion so joins use the current secure server token.
+    JOIN_TOKEN="$("${LOCAL_SUDO[@]}" cat /var/lib/rancher/k3s/server/token)"
+    [[ -n "$JOIN_TOKEN" ]] || error "The server token is empty after embedded-etcd preparation."
+}
+
 install_worker() {
     local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5" control_plane_ip="$6"
     local remote_dir="" remote_installer="" remote_hardener=""
@@ -871,6 +892,7 @@ DEFAULT_WORKER_SSH_PORT="$SSH_PORT"
 DEFAULT_WORKER_IDENTITY_FILE="$IDENTITY_FILE"
 
 preflight_control_plane_count
+prepare_control_plane_datastore
 
 if [[ "$NON_INTERACTIVE" == "true" ]]; then
     if [[ "$NODE_TRANSPORT" == "tailscale" ]]; then

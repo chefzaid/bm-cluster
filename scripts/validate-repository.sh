@@ -128,7 +128,8 @@ prompt_test_output="$(
 prompt_consumers_ok=true
 for prompt_consumer in \
     install-control-plane.sh \
-    install-worker.sh \
+    add-node.sh \
+    replicate-repo.sh \
     scripts/add-k3s-workers.sh \
     scripts/install-k3s-worker.sh; do
     grep -Fq 'source "$PROMPT_LIBRARY"' "$REPOSITORY_ROOT/$prompt_consumer" || \
@@ -172,7 +173,7 @@ else
     fail "install and worker enrollment share control-plane and Longhorn topology policy"
 fi
 
-for topology_test in test-cluster-plan.sh test-cluster-topology.sh test-ha-network.sh test-k3s-ha.sh test-k3s-backups.sh test-ha-enrollment.sh; do
+for topology_test in test-cluster-plan.sh test-cluster-topology.sh test-ha-network.sh test-k3s-ha.sh test-k3s-backups.sh test-ha-enrollment.sh test-add-node.sh; do
     if bash "$SCRIPT_DIR/$topology_test"; then
         pass "$topology_test behavioral checks"
     else
@@ -568,6 +569,16 @@ if command -v node >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; 
     fi
 fi
 
+if python3 -c 'import yaml' >/dev/null 2>&1; then
+    if "$SCRIPT_DIR/test-repository-replication.sh"; then
+        pass "repository import, deployment selection, privacy, and bidirectional Git reconciliation"
+    else
+        fail "repository import, deployment selection, privacy, and bidirectional Git reconciliation"
+    fi
+else
+    fail "PyYAML is required for repository replication behavioral checks"
+fi
+
 info "Checking Kubernetes workload policy"
 image_failed=false
 while read -r location image; do
@@ -677,11 +688,20 @@ if command -v helm >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; 
 fi
 
 if command -v ansible-playbook >/dev/null 2>&1; then
-    if ansible-playbook -i "$REPOSITORY_ROOT/ansible/inventory" \
-        --syntax-check "$REPOSITORY_ROOT/ansible/deploy.yml" >/dev/null; then
-        pass "Ansible playbook syntax"
+    ansible_syntax_ok=true
+    for playbook in "$REPOSITORY_ROOT"/ansible/*.yml; do
+        ansible-playbook -i "$REPOSITORY_ROOT/ansible/inventory" \
+            --syntax-check "$playbook" >/dev/null || ansible_syntax_ok=false
+    done
+    if [[ "$ansible_syntax_ok" == true ]]; then
+        pass "Ansible installation and reconciliation playbook syntax"
     else
-        fail "Ansible playbook syntax"
+        fail "Ansible installation and reconciliation playbook syntax"
+    fi
+    if python3 "$SCRIPT_DIR/test-ansible.py"; then
+        pass "Ansible installation and reconciliation behavioral checks"
+    else
+        fail "Ansible installation and reconciliation behavioral checks"
     fi
 else
     info "ansible-playbook is unavailable; skipping Ansible syntax validation"

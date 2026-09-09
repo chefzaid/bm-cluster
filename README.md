@@ -138,14 +138,23 @@ the `bm-cluster` Argo CD Application. Centrally owned Odoo resources under
 the website remain outside this infrastructure GitOps boundary and reconcile
 through their own Argo CD Applications.
 
-Repository synchronization is optional. When selected in the installer, it asks
-for any number of `GitHub-owner/repository=GitLab-group/repository` mappings and
-a GitHub fine-grained token. GitHub pushes start
-`.github/workflows/sync-gitlab.yml`; GitLab push and tag webhooks dispatch the
-same reconciler. It discovers each GitLab project ID through the API,
-initializes an empty GitLab repository automatically, fast-forwards the lagging
-side, merges divergent branches without force pushing, and refuses conflicting
-tag rewrites. A monthly schedule self-rotates the managed GitLab credential.
+Repository synchronization is optional. The installer asks whether to duplicate
+GitHub repositories into GitLab and calls `./replicate-repo.sh` after platform
+setup. The standalone assistant asks for your GitHub username, a hidden personal
+access token, and comma-separated repository names. It installs the sync workflow,
+configures both directions, and waits for each import to finish. GitHub pushes
+start `.github/workflows/sync-gitlab.yml`; GitLab push/tag webhooks dispatch the
+same reconciler. It fast-forwards the lagging side, merges non-conflicting
+divergence without force pushing, and refuses conflicting tag rewrites. A monthly
+schedule self-rotates the managed GitLab credential.
+
+After importing, the assistant asks which repositories to deploy, with all
+successful names prefilled. It checks `.gitlab-ci.yml`, the app-owned Argo CD
+Application, and its source path before enabling CI, registering repository
+credentials, applying the Application, and starting a pipeline. Missing or
+invalid configuration is reported per repository; the imported source remains
+synchronized. See [repository replication](docs/repository-replication.md) for
+the complete flow, supported files, permissions, prerequisites, and automation.
 
 GitLab stores private OCI images at `registry.<your-domain>`. Application
 pipelines retain downloadable build, test, coverage, browser, and quality
@@ -179,9 +188,10 @@ The three application repositories use one bootstrap and operator-reconciliation
 Each application pipeline exposes ordered `build`, `verify`, `release`, and
 `version` stages. Compilation and package validation are required; unit tests
 and the 80 percent coverage policy fail only the non-blocking test job. Manual
-E2E remains independent; `02-quality` and the separately runnable `03-security`
-Trivy scan are optional manual branches in standard mode and run automatically
-as non-blocking branches in full mode. Numeric naming places security after
+E2E remains independent; default-branch `02-quality` runs automatically in both
+standard and full mode. The separately runnable `03-security` Trivy scan is
+manual in standard mode and automatic in full mode. Both remain non-blocking.
+Numeric naming places security after
 quality in the verify-stage display without making it depend on quality.
 Release depends on the required build path, deploy depends on release, and the
 manual major-version action is never allowed to fail silently.
@@ -205,25 +215,18 @@ their JSON container logs into the existing Elasticsearch/Kibana pipeline.
 
 GitLab CI/registry setup does not require a manually created token when run on
 the control plane. The configurator creates a one-day administrator token with
-`gitlab-rails`, uses it through the API, and revokes it on exit. For optional
-GitHub/GitLab synchronization, provide the public domain, repository mapping,
-and GitHub token:
+`gitlab-rails`, uses it through the API, and revokes it on exit. To import more
+repositories on an existing cluster, run:
 
 ```bash
-PLATFORM_DOMAIN='<your-domain>' \
-CONFIGURE_REPOSITORY_SYNC=true \
-GITHUB_OWNER='<github-owner>' \
-GITHUB_REPOSITORY='<repository>' \
-GITLAB_GROUP_PATH='<gitlab-group>' \
-GITLAB_PROJECT_PATH='<gitlab-group>/<repository>' \
-GITHUB_ADMIN_TOKEN='...' \
-  ./scripts/configure-gitlab-ci.sh
+./replicate-repo.sh
 ```
 
-The script always reconciles the group, project, Dependency Proxy, image
-retention policy, instance runner, and Vault tokens. Repository secrets,
-variables, the first synchronization, and the GitLab dispatch webhook are
-created only when synchronization is enabled. No credential is committed.
+The installer separately runs `scripts/configure-gitlab-ci.sh` to reconcile the
+platform group/project, Dependency Proxy, image retention, instance runner, and
+Vault tokens. The repository assistant reuses the installed platform and manages
+only selected repositories and their deployment bootstraps. No credential is
+committed.
 
 The catalog, icons, Kubernetes read-only status integration, Deployment,
 Service, and Ingress are defined together in `k8s/platform/homepage.yaml`. Both
@@ -244,6 +247,10 @@ For a new cluster, run the guided installer on the first control-plane host:
 ```bash
 ./install-control-plane.sh
 ```
+
+The other standalone entry points are `./add-node.sh` to add control planes or workers and
+`./replicate-repo.sh` to import, synchronize, and select repositories to deploy.
+Both can be used later without rerunning the cluster installation.
 
 It first asks for the public base domain and the K3s control-plane node name.
 The private service zone is derived as `internal.<your-domain>`; manifests are
@@ -324,21 +331,23 @@ control-plane and total node counts, select **OVHcloud-only vRack** or
 Use one transport consistently for every node in an enrollment run. The first
 control plane initializes embedded etcd for a multi-control-plane deployment;
 additional control planes join as K3s servers, and workers join as K3s agents.
-Rerun the main installer on the original control plane to expand to the next
-odd control-plane count. Existing SQLite clusters are converted to embedded
-etcd before the new servers join; existing etcd clusters retain their datastore.
+For later expansion, run `./add-node.sh` on the original control plane. Choose
+**control plane** or **worker**, then **remote enrollment**. The assistant also
+supports a local join when run on a new node. Role and execution location are
+separate choices; see the [node enrollment guide](docs/node-enrollment.md).
+Remote control-plane enrollment checks that the final server count is odd.
+Existing SQLite clusters are converted to embedded etcd before the new servers
+join; existing etcd clusters retain their datastore.
 Before conversion, the installer writes an integrity-checked SQLite backup and
 server configuration/token archive under
 `/var/backups/bm-cluster/k3s/pre-etcd-<timestamp>` with access restricted to root.
 Adding workers increases workload capacity independently of control-plane quorum.
 
-For an existing embedded-etcd cluster, the lower-level
-`scripts/add-k3s-control-planes.sh` assistant accepts `--control-plane-count`
-as the number of additional targets, with `--control-plane-hosts` for Tailscale
-or `--control-plane-ips` for vRack. It uses the shared SSH and transport options
-shown by `--help`, and checks the final control-plane count is odd. The main
-installer remains the entry point for converting a SQLite cluster and choosing
-the complete desired topology.
+`./add-node.sh --role control-plane --mode remote --count 2` adds two control
+planes, for example expanding from one server to three. For automation, use
+`--hosts` with Tailscale bootstrap SSH hosts or `--ips` with preconfigured vRack
+addresses. `--count` always means new nodes to add. The main installer continues
+to accept desired final cluster counts and invokes the same node entry point.
 
 After enrollment, `scripts/reconcile-cluster-topology.sh` updates the stored
 total, control-plane, and worker counts, including each role's Ready count, and
@@ -347,7 +356,7 @@ existing volumes. Once workers exist, Longhorn stops scheduling storage on the
 control planes and safely evicts their old replicas to Ready worker storage in
 the background. Registered workers keep control-plane storage excluded during
 worker outages; eviction is requested only while at least one worker is Ready.
-Standalone `./install-worker.sh --control-plane` enrollment asks whether to
+Standalone `./add-node.sh --role worker --mode remote` enrollment asks whether to
 convert the control plane to controller-only after the new worker is Ready; the
 default answer is yes. It skips that question when every control-plane node
 already has the standard controller-only `NoSchedule` taint. Non-interactive
@@ -414,21 +423,27 @@ To provision only a provider-neutral mesh, without K3s workers:
 ./scripts/configure-tailscale.sh --fleet
 ```
 
-To add workers later, run the unified worker assistant from either the control
-plane or the new worker:
+To add nodes later, run the unified node assistant from either the existing
+control plane or the new machine:
 
 ```bash
-./install-worker.sh
+./add-node.sh
 ```
 
-Control-plane mode enrolls any requested number of workers and waits for each
-to become Ready. Worker mode joins only the current host and shows the commands
-used to obtain its K3s join token:
+Choose the new node's role first. Remote mode enrolls the requested nodes over
+SSH and waits for each to become Ready; local mode joins only the current host.
+Control-plane nodes use the server token and matching server configuration;
+worker nodes use an agent-compatible join token. To obtain a worker token:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
 sudo k3s token create --ttl 1h --description worker-join
 ```
+
+For local control-plane joins, use `/var/lib/rancher/k3s/server/token`, the exact
+cluster version, and the cluster's workload scheduling mode. The bootstrap
+server must already use embedded etcd. Remote mode handles datastore conversion,
+quorum planning, readiness, and topology reconciliation automatically.
 
 Workers have no internet-facing mode. UFW is default-deny inbound and permits
 SSH only from the exact control-plane address plus required K3s/Longhorn peer
@@ -717,124 +732,30 @@ survive disk or host loss.
 
 ### Interactive scripts versus Ansible
 
-| Path | Use it for | Prerequisites | Behavior |
-|---|---|---|---|
-| `./install-control-plane.sh` and `./install-worker.sh` | First installation, guided transport preparation, K3s installation, control-plane expansion, and worker onboarding | Supported Ubuntu/Debian host, non-root sudo user; remote nodes also need SSH keys and passwordless sudo; vRack needs tested KVM/rescue access | Interactive and resumable; pauses for account work, verifies it, configures private networking before UFW, then installs K3s/platform resources |
-| `ansible/deploy.yml` | Repeatable platform reconciliation on an existing control plane, including CI | Working K3s cluster and kubeconfig, `ansible-playbook`, `kubectl`, Helm, repository checkout, and sudo; transport account prerequisites must already be complete | Non-interactive; uses `config/platform.env` and the same transport/security scripts, but does not install K3s or enroll additional hosts |
+| Path | Use it for | Behavior |
+|---|---|---|
+| `./install-control-plane.sh` | Guided full installation | Installs K3s, enrolls the planned control planes/workers and deploys the platform |
+| `./add-node.sh` | Later control-plane or worker enrollment | Chooses server/agent configuration, private transport and role-specific security |
+| `./replicate-repo.sh` | GitHub imports, two-way sync and selected deployments | Validates each application's CI/Argo CD configuration before deployment |
+| `ansible/install.yml` | Unattended full installation through Ansible | Runs the shared installer with explicit environment inputs, including topology, transport, security, recovery and optional replication |
+| `ansible/deploy.yml` | Repeatable reconciliation of an installed platform | Uses the same versions, inventories and helpers on the existing bootstrap control plane |
 
-Run Ansible from the control-plane repository checkout with its local inventory:
+Both Ansible entry points run locally from the first control-plane checkout.
+`install.yml` requires Ansible, Python, Git and a non-root user with passwordless
+sudo; `deploy.yml` additionally requires local K3s, its kubeconfig, kubectl,
+Helm, jq and OpenSSL. Node enrollment uses the shared SSH workflow.
 
 ```bash
-export PLATFORM_DOMAIN='example.com'
-export INTERNAL_DNS_ZONE='internal.example.com'
-export CONTROL_PLANE_NODE_NAME='control-plane-01'
-export CLOUDFLARE_NODE_DNS_LABEL='node-01'
-export CONTROL_PLANE_SCHEDULABLE='false'
-export GITOPS_REPOSITORY_URL='https://github.com/example/bm-cluster.git'
-export CLOUDFLARE_ACCESS_TEAM_NAME='example-team'
-export KEYCLOAK_SSO_BOOTSTRAP_USERNAME='platform-admin'
-export KEYCLOAK_SSO_BOOTSTRAP_PASSWORD='Replace-With-A-Strong-Password-1!'
+# Supply identity, topology and secret inputs as documented below.
+ansible-playbook -i ansible/inventory ansible/install.yml
+# Reconcile an already installed platform:
 ansible-playbook -i ansible/inventory ansible/deploy.yml
-ansible-playbook -i ansible/inventory ansible/deploy.yml -e server_exposure=local
-ansible-playbook -i ansible/inventory ansible/deploy.yml -e install_apps=false
 ```
 
-Ansible uses the same release versions, ordered manifest inventories,
-dependencies, and readiness checks as the interactive installer. It reconciles
-all feature groups by default except Cloudflare. Feature switches are
-`install_longhorn`, `install_ingress`, `install_vault_stack`,
-`deploy_data_stores`, `deploy_platform_services`, `install_apps`, `install_odoo`,
-`install_descheduler`, and `install_argocd`. Dependencies are enabled
-automatically: `install_apps=false` disables Odoo, platform services and Odoo
-require data stores, data stores require Vault and External Secrets, and
-Cloudflare requires ingress.
-Ansible preserves the installer-selected scheduling mode across all control planes by default and
-uses the same Ready-worker Longhorn replica rule. Set
-`CONTROL_PLANE_SCHEDULABLE=true|false` only when intentionally changing it.
-Additional control planes retain their private exposure and disabled public
-ServiceLB labels during reconciliation.
-
-Local infrastructure password alignment is also explicit in Ansible. To run
-the same post-deployment reconciliation as the installer without exposing the
-password on the command line, export the secret only for the playbook process:
-
-```bash
-read -rsp 'Local administrator password: ' LOCAL_ADMIN_PASSWORD; echo
-export LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS=true
-ansible-playbook -i ansible/inventory ansible/deploy.yml
-unset LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS
-```
-
-The playbook passes the value to the existing rotation script over stdin and
-marks the task `no_log`; it does not alter SSO identities or application users.
-
-Transport reconciliation is opt-in because it can change host networking. It
-always runs before K3s network binding and host UFW. Ansible does not pause for
-account setup: first complete the same prerequisites shown by the interactive
-wizard, then export secrets in the current shell.
-
-For vRack that means an activated OVHcloud vRack, tested KVM/rescue access, an
-unused RFC1918 subnet, the service name and private NIC for each server, and a
-temporary AK/AS/CK allowed `GET /vrack`, `GET /vrack/*`,
-`POST /vrack/*/dedicatedServerInterface`, and
-`GET /dedicated/server/*/networking`. For Tailscale it means a tailnet and a
-short-lived personal `tskey-api-` token created by an Owner, Admin, IT admin, or
-Network admin. Revoke temporary credentials after reconciliation.
-
-For an already activated OVHcloud vRack, with API attachment enabled:
-
-```bash
-export OVH_API_ENDPOINT=ovh-eu
-export OVH_APPLICATION_KEY='temporary application key'
-export OVH_APPLICATION_SECRET='temporary application secret'
-export OVH_CONSUMER_KEY='temporary consumer key'
-export OVH_VRACK_SERVICE_NAME='pn-XXXXXX'
-export OVH_CONTROL_PLANE_SERVICE_NAME='nsXXXXXX.ip-XX-XX-XX.eu'
-ansible-playbook -i ansible/inventory ansible/deploy.yml \
-  -e manage_private_transport=true \
-  -e k3s_node_transport=vrack \
-  -e ovh_vrack_automate_account=true \
-  -e k3s_private_address=10.50.0.10 \
-  -e k3s_private_interface=eno2 \
-  -e k3s_node_network_cidr=10.50.0.0/24
-```
-
-For Tailscale, after creating the personal `tskey-api-` access token:
-
-```bash
-export TAILSCALE_API_TOKEN='temporary tskey-api token'
-export TAILSCALE_TAILNET='example.com' # or '-' for the token's tailnet
-export TAILSCALE_MESH_NAME='bm-cluster'
-export TAILSCALE_NODE_HOSTNAME='bm-control-plane'
-ansible-playbook -i ansible/inventory ansible/deploy.yml \
-  -e manage_private_transport=true \
-  -e k3s_node_transport=tailscale
-```
-
-Unset or revoke temporary credentials after the run. To reconcile only the
-platform on an already configured private network, omit
-`manage_private_transport`; provide `K3S_NODE_NETWORK_CIDR` when host security
-must trust worker traffic.
-
-To run the same non-interactive Cloudflare reconciliation from Ansible, export
-the secret inputs and opt in explicitly:
-
-```bash
-export CLOUDFLARE_API_TOKEN='your Cloudflare User API Token (cfut_... type)'
-export CLOUDFLARE_ACCESS_ALLOWED_EMAILS='admin@example.com'
-export CLOUDFLARE_ACCESS_TEAM_NAME='example-team'
-ansible-playbook -i ansible/inventory ansible/deploy.yml -e configure_cloudflare=true
-```
-
-For off-node recovery, additionally export
-`CONFIGURE_OFFSITE_BACKUPS=true`, `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`,
-`BACKUP_S3_REGION`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY`, and
-`BACKUP_REPOSITORY_PASSWORD`. Ansible is non-interactive and therefore never
-prompts for missing secret inputs.
-
-The playbook deploys platform resources through the active kubeconfig; K3s
-control-plane installation and remote host provisioning remain the
-responsibility of the installers above.
+See the [Ansible guide](docs/ansible.md) for complete first-install examples,
+feature switches, private networking, Cloudflare, recovery, repository
+replication, secret handling and validation. Manual account/registrar
+prerequisites must be completed before unattended installation.
 
 Release defaults and ordered service inventories live only in
 `config/platform.env`. Before committing or deploying, validate shell syntax,
@@ -864,11 +785,12 @@ EditorConfig and Git attributes keep text formatting portable.
 | `config/multipath/` | Host multipath configuration required by Longhorn |
 | `config/systemd/` | Host services and timers installed by platform scripts |
 | `install-control-plane.sh` | Install or reconcile an odd number of K3s control planes, enroll workers, and deploy platform services |
-| `install-worker.sh` | Unified worker assistant for control-plane SSH enrollment or local self-join |
-| `scripts/add-k3s-workers.sh` | Internal multi-worker SSH enrollment implementation |
+| `add-node.sh` | Unified control-plane/worker assistant with remote SSH enrollment or local self-join |
+| `replicate-repo.sh` | Standalone GitHub-to-GitLab import, two-way synchronization, and deployment-selection assistant; also called by the installer |
+| `scripts/add-k3s-workers.sh` | Shared remote node enrollment implementation, selected by role |
 | `scripts/add-k3s-control-planes.sh` | Additional K3s server enrollment using the shared private transport and SSH workflow |
 | `scripts/install-k3s-server.sh` | Internal local K3s server join with the existing cluster's token and exact version |
-| `scripts/install-k3s-worker.sh` | Internal local worker installation implementation |
+| `scripts/install-k3s-worker.sh` | Shared local server/agent installation implementation, selected by role |
 | `scripts/audit-cluster-nodes.sh` | Control-plane Lynis runner for local and transient remote audits |
 | `scripts/configure-lynis-schedule.sh` | Monthly control-plane Lynis timer and twelve-month local report retention |
 | `scripts/configure-cloudflare.sh` | Cloudflare DNS, edge security, TLS, and Access reconciliation |
@@ -882,10 +804,13 @@ EditorConfig and Git attributes keep text formatting portable.
 | `scripts/configure-k3s-registry-mirror.sh` | Reconcile the node runtime mirror for GitLab Container Registry |
 | `scripts/configure-gitlab-ci.sh` | GitLab group, project, Dependency Proxy, instance runner, and Vault token reconciliation |
 | `scripts/configure-repository-sync.sh` | Optional project-discovered GitHub/GitLab mirroring, webhook, variables, secrets, and first sync |
+| `scripts/replicate-repositories.py` | Project/workflow onboarding, deployment contract checks, Argo CD registration, and pipeline launch |
+| `scripts/test-repository-replication.sh` | Offline onboarding/deployment checks and real local Git reconciliation tests |
 | `scripts/render-cluster-config.sh` | Render installer-selected domains and GitOps source from neutral templates |
 | `scripts/configure-node-security.sh` | Host firewall, intrusion prevention, and Lynis schedule setup |
 | `scripts/reconcile-cluster-topology.sh` | Reconcile control-plane taints, stored node topology, and worker-derived Longhorn replication |
 | `scripts/test-cluster-topology.sh` | Mocked CLI regression checks for quorum inputs, role counts, readiness, scheduling, and storage policy |
+| `scripts/test-add-node.sh` | Public node role/mode selection, argument forwarding, and secret stdin regression checks |
 | `scripts/lib/installer-prompts.sh` | Shared section, value, secret, confirmation, yes/no, and node-transport prompt primitives |
 | `scripts/lib/cluster-plan.sh` | Validate desired control-plane/worker counts against registered nodes and derive enrollment targets |
 | `scripts/lib/network.sh` | Shared RFC1918, Tailscale, CIDR, and interface validation |
@@ -899,7 +824,8 @@ EditorConfig and Git attributes keep text formatting portable.
 | `k8s/corp/` | Centrally owned corporate applications (Odoo) |
 | `k8s/addons/` | Optional cluster add-ons and their manually triggered jobs |
 | `k8s/Chart.yaml` | Argo CD Helm entry point that renders the selected public/private domains and vendors the pinned Trivy Operator dependency |
-| `ansible/` | Ansible deployment entry point |
+| `ansible/install.yml` | Unattended full installation through the shared host, node and platform installer |
+| `ansible/deploy.yml` | Reconcile an installed platform with the shared contracts and optional repository replication |
 
 ## Security notes
 

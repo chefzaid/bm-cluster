@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 umask 077
 
 REPOSITORY_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
@@ -36,6 +37,16 @@ done
 [[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
 source "$GITLAB_TOKEN_LIBRARY"
+# Install cleanup before acquiring credentials, including on prompt failure.
+work_dir="$(mktemp -d "/tmp/$REPOSITORY_NAME-repository-sync.XXXXXX")"
+cleanup() {
+  rm -r -- "$work_dir"
+  gitlab_revoke_ephemeral_admin_token
+  unset GITHUB_ADMIN_TOKEN sync_token 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 gitlab_acquire_admin_token
 if [[ -z "${GITHUB_ADMIN_TOKEN:-}" ]]; then
   [[ -t 0 ]] || fail "Set GITHUB_ADMIN_TOKEN to configure repository sync non-interactively."
@@ -45,7 +56,8 @@ GitHub repository-management token required:
   1. Open https://github.com/settings/personal-access-tokens/new.
   2. Select only the repositories that will be synchronized.
   3. Grant repository Administration (read/write), Actions (read/write),
-     Secrets (read/write), Variables (read/write), and Contents (read/write).
+     Secrets (read/write), Variables (read/write), Contents (read/write), and
+     Workflows (read/write).
   4. Create the shortest practical expiry, then paste the token below.
 
 The token configures encrypted Actions secrets and the GitLab webhook. It is
@@ -56,13 +68,6 @@ EOF
 fi
 [[ -n "${GITHUB_ADMIN_TOKEN:-}" ]] || fail "A GitHub repository-management token is required."
 
-work_dir="$(mktemp -d "/tmp/$REPOSITORY_NAME-repository-sync.XXXXXX")"
-cleanup() {
-  rm -r -- "$work_dir"
-  gitlab_revoke_ephemeral_admin_token
-  unset GITHUB_ADMIN_TOKEN sync_token 2>/dev/null || true
-}
-trap cleanup EXIT
 gitlab_config="$work_dir/gitlab-curl.conf"
 github_config="$work_dir/github-curl.conf"
 printf 'silent\nshow-error\nheader = "PRIVATE-TOKEN: %s"\n' "$GITLAB_ADMIN_TOKEN" > "$gitlab_config"
@@ -209,12 +214,23 @@ if [[ "$ROTATE_SYNC_TOKEN" == "true" || -z "$managed_token_id" ||
 
   put_github_secret GITLAB_SYNC_USERNAME "$sync_username"
   put_github_secret GITLAB_SYNC_TOKEN "$sync_token"
-  put_github_secret REPOSITORY_SYNC_ADMIN_TOKEN "$GITHUB_ADMIN_TOKEN"
   unset sync_token
   info "Installed encrypted GitLab sync credentials in GitHub Actions"
 else
   info "The managed GitLab token and GitHub Actions secrets are current"
 fi
+
+# Refresh the GitHub PAT on every run, even when the GitLab token is current.
+# The webhook and the workflow must both use the newly supplied credential.
+github_key_id="$(jq -er '.key_id' "$work_dir/github-public-key.json")"
+github_public_key="$(jq -er '.key' "$work_dir/github-public-key.json")"
+encrypted_admin_token="$(encrypt_github_secret "$github_public_key" "$GITHUB_ADMIN_TOKEN")"
+jq -n --arg encrypted_value "$encrypted_admin_token" --arg key_id "$github_key_id" \
+  '{encrypted_value:$encrypted_value,key_id:$key_id}' > "$work_dir/github-admin-secret.json"
+github_api PUT "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/secrets/REPOSITORY_SYNC_ADMIN_TOKEN" \
+  --header 'Content-Type: application/json' \
+  --data-binary "@$work_dir/github-admin-secret.json" >/dev/null
+unset encrypted_admin_token
 
 webhook_url="$GITHUB_API_URL/repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/dispatches"
 webhook_template='{"event_type":"gitlab_push","client_payload":{"ref":"{{ref}}","after":"{{after}}","project":"{{project.path_with_namespace}}"}}'
@@ -261,21 +277,56 @@ fi
 
 if [[ "$INITIALIZE_REPOSITORY_SYNC" == "true" ]]; then
   default_branch="$(jq -er '.default_branch' "$work_dir/github-repository.json")"
+  workflow_path="repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/workflows/sync-gitlab.yml"
+  previous_run_id="$(github_api GET "$workflow_path/runs?event=workflow_dispatch&per_page=100" | \
+    jq '[.workflow_runs[].id] | max // 0')"
   jq -n --arg ref "$default_branch" '{ref:$ref}' > "$work_dir/workflow-dispatch.json"
   info "Starting the first GitHub-to-GitLab reconciliation for $GITHUB_OWNER/$GITHUB_REPOSITORY"
   github_api POST "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/workflows/sync-gitlab.yml/dispatches" \
     --header 'Content-Type: application/json' \
     --data-binary "@$work_dir/workflow-dispatch.json" >/dev/null
 
-  for attempt in $(seq 1 30); do
-    gitlab_api GET "projects/$project_id" > "$work_dir/project-state.json"
-    if [[ "$(jq -r '.default_branch // empty' "$work_dir/project-state.json")" == "$default_branch" ]]; then
-      info "The GitLab repository is initialized on branch $default_branch"
-      break
+  # A nonempty default branch alone does not prove synchronization succeeded.
+  # Wait for the new dispatch to finish its branch/tag equality verification.
+  run_id=""
+  dispatch_attempts=1
+  for attempt in $(seq 1 90); do
+    if [[ -z "$run_id" ]]; then
+      run_id="$(github_api GET "$workflow_path/runs?event=workflow_dispatch&per_page=100" | \
+        jq -r --argjson previous "$previous_run_id" --arg branch "$default_branch" \
+          '[.workflow_runs[] | select(.id > $previous and .head_branch == $branch)] | sort_by(.id) | .[0].id // empty')"
     fi
-    (( attempt < 30 )) || fail "GitHub Actions did not initialize the GitLab repository within five minutes; inspect the Sync GitHub and GitLab workflow."
+    if [[ -n "$run_id" ]]; then
+      github_api GET "repos/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/runs/$run_id" > "$work_dir/sync-run.json"
+      if [[ "$(jq -r '.status' "$work_dir/sync-run.json")" == completed ]]; then
+        if [[ "$(jq -r '.conclusion' "$work_dir/sync-run.json")" == cancelled && "$dispatch_attempts" -lt 3 ]]; then
+          # GitHub concurrency replaces pending runs when sync pushes emit more
+          # events. Retry a displaced dispatch without allowing concurrent merges.
+          dispatch_attempts=$((dispatch_attempts + 1))
+          info "Sync dispatch was cancelled; retrying ($dispatch_attempts/3)..."
+          previous_run_id="$(github_api GET "$workflow_path/runs?event=workflow_dispatch&per_page=100" | \
+            jq '[.workflow_runs[].id] | max // 0')"
+          github_api POST "$workflow_path/dispatches" \
+            --header 'Content-Type: application/json' \
+            --data-binary "@$work_dir/workflow-dispatch.json" >/dev/null
+          run_id=""
+          sleep 10
+          continue
+        fi
+        [[ "$(jq -r '.conclusion' "$work_dir/sync-run.json")" == success ]] || \
+          fail "Repository synchronization failed: https://github.com/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/runs/$run_id"
+        info "GitHub Actions verified matching branches and tags (run $run_id)"
+        break
+      fi
+    fi
+    (( attempt < 90 )) || fail "Repository synchronization did not complete within fifteen minutes; inspect https://github.com/$GITHUB_OWNER/$GITHUB_REPOSITORY/actions/workflows/sync-gitlab.yml"
+    (( attempt % 6 != 1 )) || info "Waiting for GitHub Actions to finish repository synchronization..."
     sleep 10
   done
+  # The reconciler visits branches alphabetically; the first push to an empty
+  # project can otherwise make a feature branch GitLab's default branch.
+  gitlab_api PUT "projects/$project_id" --form-string "default_branch=$default_branch" >/dev/null
+  info "GitLab default branch is $default_branch"
 fi
 
 info "$GITHUB_OWNER/$GITHUB_REPOSITORY and $GITLAB_PROJECT_PATH repository sync is configured"

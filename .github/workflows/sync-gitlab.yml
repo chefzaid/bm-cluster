@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      GITHUB_TOKEN: ${{ github.token }}
       GITHUB_ADMIN_TOKEN: ${{ secrets.REPOSITORY_SYNC_ADMIN_TOKEN }}
       GITLAB_API_URL: ${{ vars.GITLAB_API_URL }}
       GITLAB_HOST: ${{ vars.GITLAB_HOST }}
@@ -75,7 +74,8 @@ jobs:
             *github.com*)
               case "$1" in
                 *Username*) printf '%s\n' 'x-access-token' ;;
-                *) printf '%s\n' "$GITHUB_TOKEN" ;;
+                # The PAT can sync workflow commits as well as ordinary files.
+                *) printf '%s\n' "$GITHUB_ADMIN_TOKEN" ;;
               esac
               ;;
             *"$GITLAB_HOST"*)

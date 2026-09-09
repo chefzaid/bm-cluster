@@ -51,23 +51,23 @@
       {{ lookup('ansible.builtin.ini', 'DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
 
     foundation_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'FOUNDATION_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'FOUNDATION_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     datastore_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'DATASTORE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'DATASTORE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     platform_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'PLATFORM_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'PLATFORM_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     post_deploy_create_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'POST_DEPLOY_CREATE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'POST_DEPLOY_CREATE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     post_argocd_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'POST_ARGOCD_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'POST_ARGOCD_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     external_secret_names: >-
-      {{ lookup('ansible.builtin.ini', 'EXTERNAL_SECRET_NAMES type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'EXTERNAL_SECRET_NAMES type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     datastore_wait_apps: >-
-      {{ lookup('ansible.builtin.ini', 'DATASTORE_WAIT_APPS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'DATASTORE_WAIT_APPS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     platform_wait_apps: >-
-      {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_APPS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_APPS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     platform_wait_daemonsets: >-
-      {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_DAEMONSETS type=properties file=' ~ platform_config_file) | split(',') }}
+      {{ lookup('ansible.builtin.ini', 'PLATFORM_WAIT_DAEMONSETS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     default_node_transport: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_K3S_NODE_TRANSPORT type=properties file=' ~ platform_config_file) }}
     default_tailscale_tailnet: >-
@@ -79,12 +79,12 @@
     default_cloudflare_node_dns_label: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_CLOUDFLARE_NODE_DNS_LABEL type=properties file=' ~ platform_config_file) }}
 
-    server_exposure_mode: "{{ server_exposure | default('internet') | lower }}"
+    server_exposure_mode: "{{ server_exposure | default(lookup('ansible.builtin.env', 'SERVER_EXPOSURE'), true) | default('internet', true) | lower }}"
     platform_domain: "{{ lookup('ansible.builtin.env', 'PLATFORM_DOMAIN') | lower }}"
     internal_dns_zone: >-
       {{ lookup('ansible.builtin.env', 'INTERNAL_DNS_ZONE') | default('internal.' ~ platform_domain, true) | lower }}
     control_plane_node_name: >-
-      {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_NODE_NAME') | default(inventory_hostname, true) | lower }}
+      {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_NODE_NAME') | default(lookup('ansible.builtin.pipe', 'hostname -s'), true) | lower }}
     cloudflare_node_dns_label: >-
       {{ lookup('ansible.builtin.env', 'CLOUDFLARE_NODE_DNS_LABEL') |
          default(default_cloudflare_node_dns_label, true) | lower }}
@@ -94,8 +94,10 @@
       {{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_TEAM_NAME') |
          default('bm-cluster-' ~ (platform_domain | replace('.', '-')), true) | lower }}
     gitops_repository_url: >-
-      {{ lookup('ansible.builtin.env', 'GITOPS_REPOSITORY_URL') |
-         default(lookup('ansible.builtin.pipe', 'git -C ' ~ repository_root ~ ' remote get-url github'), true) }}
+      {{ lookup('ansible.builtin.env', 'GITOPS_REPOSITORY_URL') or
+         lookup('ansible.builtin.pipe', 'git -C ' ~ (repository_root | quote) ~ ' remote get-url github 2>/dev/null || git -C ' ~ (repository_root | quote) ~ ' remote get-url origin') |
+         regex_replace('^git@github.com:', 'https://github.com/') |
+         regex_replace('^ssh://git@github.com/', 'https://github.com/') }}
     gitlab_group_path: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_PATH') | default('swirlit', true) }}"
     gitlab_project_name: "{{ lookup('ansible.builtin.env', 'GITLAB_PROJECT_NAME') | default('bm-cluster', true) }}"
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('ansible.builtin.env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
@@ -131,7 +133,7 @@
     cloudflare_enabled: "{{ configure_cloudflare | default(false) | bool }}"
     vault_stack_enabled: "{{ install_vault_stack | default(true) | bool }}"
     data_stores_enabled: "{{ deploy_data_stores | default(true) | bool }}"
-    platform_services_enabled: "{{ deploy_platform_services | default(true) | bool }}"
+    platform_services_enabled: "{{ (deploy_platform_services | default(true) | bool) or odoo_enabled }}"
     apps_enabled: "{{ install_apps | default(true) | bool }}"
     odoo_enabled: "{{ apps_enabled and (install_odoo | default(true) | bool) }}"
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
@@ -148,8 +150,10 @@
     github_admin_token: "{{ lookup('ansible.builtin.env', 'GITHUB_ADMIN_TOKEN') }}"
     repository_sync_enabled: >-
       {{ lookup('ansible.builtin.env', 'CONFIGURE_REPOSITORY_SYNC') | default('false', true) | bool }}
-    github_owner: "{{ lookup('ansible.builtin.env', 'GITHUB_OWNER') }}"
-    github_repository: "{{ lookup('ansible.builtin.env', 'GITHUB_REPOSITORY') | default(gitlab_project_name, true) }}"
+    github_username: >-
+      {{ lookup('ansible.builtin.env', 'GITHUB_USERNAME') | default(lookup('ansible.builtin.env', 'GITHUB_OWNER'), true) }}
+    github_repositories: "{{ lookup('ansible.builtin.env', 'GITHUB_REPOSITORIES') }}"
+    deploy_repositories: "{{ lookup('ansible.builtin.env', 'DEPLOY_REPOSITORIES') }}"
     keycloak_sso_bootstrap_username: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_USERNAME') }}"
     keycloak_sso_bootstrap_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_SSO_BOOTSTRAP_PASSWORD') }}"
     rotate_local_admin_passwords_enabled: >-
@@ -164,6 +168,14 @@
     cloudflare_access_enabled: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ENABLE_ACCESS') | default('true', true) | bool }}"
 
   pre_tasks:
+    - name: Require normal execution for platform reconciliation
+      ansible.builtin.assert:
+        that: not ansible_check_mode
+        fail_msg: >-
+          This playbook relies on command results and cannot predict changes in
+          check mode. Use --syntax-check or scripts/validate-repository.sh --live
+          for validation without changing the cluster.
+
     - name: Validate the shared platform contract
       ansible.builtin.assert:
         that:
@@ -178,6 +190,26 @@
           - cloudflare_access_team_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - not argocd_enabled or gitops_repository_url is match('^https?://.*\\.git$')
         fail_msg: "The platform contract or server_exposure value is invalid."
+
+    - name: Verify local control-plane prerequisites before changing the host
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for executable in kubectl helm jq openssl git python3 sudo; do
+          command -v "$executable" >/dev/null
+        done
+        sudo -n true
+        systemctl is-active --quiet k3s
+        kubectl cluster-info >/dev/null
+        kubectl get node "$BOOTSTRAP_NODE" -o json | jq -e '
+          .metadata.labels as $labels |
+          ($labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) and
+          ($labels["svccontroller.k3s.cattle.io/enablelb"] != "false")
+        ' >/dev/null
+      args:
+        executable: /bin/bash
+      environment:
+        BOOTSTRAP_NODE: "{{ control_plane_node_name }}"
+      changed_when: false
 
     - name: Create a private rendered-configuration directory
       ansible.builtin.tempfile:
@@ -235,11 +267,13 @@
       ansible.builtin.assert:
         that:
           - github_admin_token | length > 0
-          - github_owner | length > 0
-          - github_repository | length > 0
+          - github_username | length > 0
+          - github_repositories | length > 0
+          - deploy_repositories | length > 0
         fail_msg: >-
-          Repository synchronization requires GITHUB_ADMIN_TOKEN, GITHUB_OWNER,
-          and GITHUB_REPOSITORY. GitLab administrator access is acquired locally
+          Repository replication requires GITHUB_ADMIN_TOKEN, GITHUB_USERNAME,
+          GITHUB_REPOSITORIES and DEPLOY_REPOSITORIES (all, none, or names).
+          GitLab administrator access is acquired locally
           through gitlab-rails when GITLAB_ADMIN_TOKEN is not supplied.
       no_log: true
       when: repository_sync_enabled
@@ -421,14 +455,16 @@
       register: foundation_apply
       changed_when: "'created' in foundation_apply.stdout or 'configured' in foundation_apply.stdout"
 
-    - name: Keep public load balancers on ingress-enabled control-plane nodes
-      ansible.builtin.command: >-
-        kubectl label nodes
-        -l 'node-role.kubernetes.io/control-plane,svccontroller.k3s.cattle.io/enablelb!=false'
-        svccontroller.k3s.cattle.io/enablelb=true
-        node.bm-cluster.io/role=control-plane
-        node.bm-cluster.io/exposure={{ server_exposure_mode }}
-        --overwrite
+    - name: Keep public load balancers on the bootstrap control plane
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - label
+          - "node/{{ control_plane_node_name }}"
+          - svccontroller.k3s.cattle.io/enablelb=true
+          - node.bm-cluster.io/role=control-plane
+          - "node.bm-cluster.io/exposure={{ server_exposure_mode }}"
+          - --overwrite
       register: node_labels
       changed_when: "'not labeled' not in node_labels.stdout"
 
@@ -475,6 +511,18 @@
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/host-security-config.yaml
       register: host_security_config_apply
       changed_when: "'created' in host_security_config_apply.stdout or 'configured' in host_security_config_apply.stdout"
+
+    - name: Ensure local TLS certificates when Cloudflare is disabled
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/configure-local-tls.sh"
+          - --apps-enabled
+          - "{{ apps_enabled | ternary('true', 'false') }}"
+      environment:
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+      register: local_tls
+      changed_when: "'Created TLS secret' in local_tls.stdout"
+      when: not cloudflare_enabled and (ingress_effective or vault_stack_effective or platform_services_enabled or odoo_enabled)
 
     - name: Configure Longhorn host prerequisites
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-longhorn-host.sh"
@@ -739,6 +787,7 @@
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-cloudflare.sh"
       environment:
         CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
+        CLOUDFLARE_ENABLE_ACCESS: "{{ cloudflare_access_enabled | ternary('true', 'false') }}"
         CLOUDFLARE_ACCESS_ALLOWED_EMAILS: "{{ cloudflare_access_emails }}"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
         INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
@@ -749,19 +798,17 @@
         - cloudflare_enabled
         - platform_services_enabled
 
-    - name: Configure the GitLab project, Kubernetes runner, and optional repository sync
+    - name: Configure the GitLab project and Kubernetes runner
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-gitlab-ci.sh"
       environment:
         PLATFORM_DOMAIN: "{{ platform_domain }}"
         GITLAB_PUBLIC_URL: "https://gitlab.{{ platform_domain }}"
         GITLAB_ADMIN_TOKEN: "{{ gitlab_admin_token }}"
-        GITHUB_ADMIN_TOKEN: "{{ github_admin_token }}"
-        GITHUB_OWNER: "{{ github_owner }}"
-        GITHUB_REPOSITORY: "{{ github_repository }}"
         GITLAB_GROUP_PATH: "{{ gitlab_group_path }}"
         GITLAB_PROJECT_PATH: "{{ gitlab_group_path }}/{{ gitlab_project_name }}"
         GITLAB_PROJECT_NAME: "{{ gitlab_project_name }}"
-        CONFIGURE_REPOSITORY_SYNC: "{{ repository_sync_enabled | ternary('true', 'false') }}"
+        CONFIGURE_REPOSITORY_SYNC: "false"
+        GITLAB_ADMIN_TOKEN_NONINTERACTIVE: "true"
       no_log: true
       when: platform_services_enabled
 
@@ -813,6 +860,23 @@
       register: argocd_applications_apply
       changed_when: "'created' in argocd_applications_apply.stdout or 'configured' in argocd_applications_apply.stdout"
       when: argocd_enabled
+
+    - name: Import repositories, configure two-way sync, and deploy selected applications
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/replicate-repo.sh"
+          - --yes
+      environment:
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        GITLAB_PUBLIC_URL: "https://gitlab.{{ platform_domain }}"
+        GITLAB_GROUP_PATH: "{{ gitlab_group_path }}"
+        GITLAB_ADMIN_TOKEN: "{{ gitlab_admin_token }}"
+        GITHUB_ADMIN_TOKEN: "{{ github_admin_token }}"
+        GITHUB_USERNAME: "{{ github_username }}"
+        GITHUB_REPOSITORIES: "{{ github_repositories }}"
+        DEPLOY_REPOSITORIES: "{{ deploy_repositories }}"
+      no_log: true
+      when: repository_sync_enabled
 
     - name: Read final infrastructure pod status
       ansible.builtin.command: kubectl get pods -n {{ infra_namespace }} --no-headers
