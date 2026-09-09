@@ -59,6 +59,7 @@ def render(root, enabled):
             content = private_image.sub(lambda match: catalog["upstreams"][match[1]], content)
         content = content.replace("__SECURITY_IMAGE_PROFILE__", profile)
         content = content.replace("__SECURITY_SCANNER_REGISTRY__", scanner_registry)
+        content = content.replace("__SECURITY_PULL_SECRETS__", '["platform-registry-auth"]' if enabled else '[]')
         path.write_text(content)
     values = root / "k8s/values.yaml"
     content = values.read_text().replace(

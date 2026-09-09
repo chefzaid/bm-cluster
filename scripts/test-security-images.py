@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import tomllib
 from unittest.mock import patch
 
 import yaml
@@ -91,6 +92,12 @@ class SecurityImagesTest(unittest.TestCase):
                 self.assertEqual(initializer['image'], image)
                 self.assertEqual(image.startswith('registry.example.test/'), enabled)
                 self.assertEqual(bool(ingress['imagePullSecrets']), enabled)
+                runner_docs = list(yaml.safe_load_all((root / 'k8s/platform/gitlab-runner.yaml').read_text()))
+                runner_config = next(d for d in runner_docs if d and d['kind'] == 'ConfigMap' and d['metadata']['name'] == 'gitlab-runner-config')
+                executor = tomllib.loads(runner_config['data']['config.template.toml'])['runners'][0]['kubernetes']
+                self.assertEqual(executor['helper_image'].startswith('registry.example.test/'), enabled)
+                self.assertIn('@sha256:', executor['helper_image'])
+                self.assertEqual(executor['image_pull_secrets'], ['platform-registry-auth'] if enabled else [])
                 self.assertTrue(controller['containerSecurityContext']['readOnlyRootFilesystem'])
                 self.assertEqual(controller['containerPort'], {'http': 8080, 'https': 8444})
                 self.assertEqual(controller['containerSecurityContext']['capabilities']['add'],
@@ -136,6 +143,10 @@ class SecurityImagesTest(unittest.TestCase):
                 self.assertEqual(cache_pod['containers'][0]['command'], ['/bin/sh', '-ec', 'exec sleep infinity'])
                 refs = images(documents)
                 self.assertEqual(any('registry.example.test/' in ref for ref in refs), enabled)
+                runner_config = resources['ConfigMap/gitlab-runner-config']
+                executor = tomllib.loads(runner_config['data']['config.template.toml'])['runners'][0]['kubernetes']
+                self.assertEqual(executor['helper_image'].startswith('registry.example.test/'), enabled)
+                self.assertEqual(executor['image_pull_secrets'], ['platform-registry-auth'] if enabled else [])
                 for document in documents:
                     if document and document.get('kind') in ('Deployment', 'StatefulSet') and document['metadata']['name'] in ('trivy-operator', 'trivy-server'):
                         pod = document['spec']['template']['spec']

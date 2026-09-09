@@ -72,6 +72,28 @@ volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
 The remaining GitLab matches are vendor examples/test fixtures and stay visible.
 No production credentials were copied into these images.
 
+### GitLab Runner and job helpers
+
+The 19.3.1 Runner rebuild uses the supported Alpine distribution, Go 1.26.7
+and patched dependencies. Its image decreases from 258 findings to two Unknown
+module advisories. The corresponding job helper has one Unknown advisory;
+both images report zero exposed secrets. Manager and helper versions remain
+19.3.1 so their job protocol stays aligned.
+
+Docker Machine remains available. Its retired `github.com/docker/docker`
+dependency is replaced with the maintained Moby client/API modules, following
+the [upstream module split](https://github.com/moby/moby#go-modules). Tests cover
+version negotiation, container creation/start and completion or failure of an
+image pull. Runner common, helper, Kubernetes executor and network tests pass.
+
+The manager uses UID/GID 10001 with its existing read-only root and disposable
+home directory. Both public and patched manager images were tested with these
+permissions. A patched helper uploaded and downloaded a ZIP artifact through a
+local HTTP fixture and verified its contents. The runner template pins the helper
+explicitly, uses registry credentials only in patched mode and schedules these
+Linux/amd64 images on matching nodes. Preserve SIGQUIT draining when updating
+an existing manager; do not terminate an active job to accelerate deployment.
+
 ### Controller rebuilds and storage verification
 
 The September 9 controller batch uses the same upstream application releases,

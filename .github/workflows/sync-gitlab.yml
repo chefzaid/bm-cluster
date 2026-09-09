@@ -109,9 +109,9 @@ jobs:
 
           mapfile -t branches < <(
             {
-              git for-each-ref --format='%(refname:strip=3)' refs/remotes/github
-              git for-each-ref --format='%(refname:strip=3)' refs/remotes/gitlab
-            } | sort -u
+              git for-each-ref --format='%(if)%(symref)%(then)%(else)%(refname:strip=3)%(end)' refs/remotes/github
+              git for-each-ref --format='%(if)%(symref)%(then)%(else)%(refname:strip=3)%(end)' refs/remotes/gitlab
+            } | sed '/^$/d' | sort -u
           )
           for branch in "${branches[@]}"; do
             github_ref="refs/remotes/github/$branch"
@@ -172,15 +172,15 @@ jobs:
           fetch_repositories
           github_refs="$(
             {
-              git for-each-ref --format='heads/%(refname:strip=3) %(objectname)' refs/remotes/github
+              git for-each-ref --format='%(if)%(symref)%(then)%(else)heads/%(refname:strip=3) %(objectname)%(end)' refs/remotes/github
               git for-each-ref --format='tags/%(refname:strip=2) %(objectname)' refs/github-tags
-            } | sort
+            } | sed '/^$/d' | sort
           )"
           gitlab_refs="$(
             {
-              git for-each-ref --format='heads/%(refname:strip=3) %(objectname)' refs/remotes/gitlab
+              git for-each-ref --format='%(if)%(symref)%(then)%(else)heads/%(refname:strip=3) %(objectname)%(end)' refs/remotes/gitlab
               git for-each-ref --format='tags/%(refname:strip=2) %(objectname)' refs/gitlab-tags
-            } | sort
+            } | sed '/^$/d' | sort
           )"
           [[ "$github_refs" == "$gitlab_refs" ]] || {
             echo "GitHub and GitLab refs differ after reconciliation" >&2

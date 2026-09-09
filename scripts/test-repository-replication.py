@@ -8,6 +8,8 @@ import importlib.util
 import io
 import json
 import os
+import shlex
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -268,6 +270,22 @@ class SyncWorkflowTests(unittest.TestCase):
             curl = binaries / "curl"
             curl.write_text('#!/bin/sh\nprintf \'{"expires_at":"2099-01-01"}\\n\'\n')
             curl.chmod(0o700)
+            # New Git versions create remote HEAD aliases on fetch. Reproduce
+            # that behavior on older test hosts too: aliases must never become
+            # real branches or participate in the final ref comparison.
+            git_wrapper = binaries / "git"
+            git_wrapper.write_text(f'''#!/bin/sh
+real_git={shlex.quote(shutil.which("git"))}
+"$real_git" "$@" || exit "$?"
+if [ "$1" = fetch ]; then
+  for remote in github gitlab; do
+    if "$real_git" show-ref --verify --quiet "refs/remotes/$remote/main"; then
+      "$real_git" symbolic-ref "refs/remotes/$remote/HEAD" "refs/remotes/$remote/main" || exit "$?"
+    fi
+  done
+fi
+''')
+            git_wrapper.chmod(0o700)
             event = root / "event.json"
             event.write_text("{}")
             workflow = yaml.load((ROOT / replication.WORKFLOW).read_text(), Loader=yaml.BaseLoader)
@@ -302,6 +320,7 @@ class SyncWorkflowTests(unittest.TestCase):
             git("push", str(gitlab), "HEAD:main", "v1")
             reconcile(2)
             self.assertEqual(git("show-ref", cwd=github), git("show-ref", cwd=gitlab))
+            self.assertNotIn("refs/heads/HEAD", git("show-ref", cwd=github))
             git("fetch", str(github), "main")
             git("checkout", "FETCH_HEAD")
             base = git("rev-parse", "HEAD")

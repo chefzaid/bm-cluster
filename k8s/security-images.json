@@ -29,7 +29,9 @@
     "longhorn-liveness-probe": "docker.io/longhornio/livenessprobe@sha256:d0cb76b565ba9d36da0dc2b38e2b6a49a0ae4fe067b03086110682f32c600318",
     "csi-node-driver-registrar": "docker.io/longhornio/csi-node-driver-registrar@sha256:29f7cfd519008fe8f8dff5e79db43f70d65c43a89c08f1bafbb199ca90df79f0",
     "livenessprobe": "docker.io/longhornio/livenessprobe@sha256:d0cb76b565ba9d36da0dc2b38e2b6a49a0ae4fe067b03086110682f32c600318",
-    "ingress-nginx": "registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1"
+    "ingress-nginx": "registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1",
+    "gitlab-runner": "docker.io/gitlab/gitlab-runner:alpine-v19.3.1@sha256:af0325804248aee217e055e753add77ccaaba6c8f5e2143b01108fd401165ef3",
+    "gitlab-runner-helper": "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.3.1@sha256:ce41f9ba0465950d1c7e290e38e33ea9064385b4015ba4fa4b12b318a6242682"
   },
   "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e"
 }

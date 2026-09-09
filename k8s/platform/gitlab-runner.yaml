@@ -208,6 +208,8 @@ data:
         namespace = "gitlab-runners"
         service_account = "gitlab-ci-job"
         image = "docker.io/alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
+        helper_image = "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner-helper:19.3.1-20260909.1@sha256:8ececef7dd3d5ae0844069370c4d703f8a3f3b7272929d67f5e85e7e3a584d8d"
+        image_pull_secrets = __SECURITY_PULL_SECRETS__
         pull_policy = ["if-not-present"]
         privileged = false
         poll_timeout = 600
@@ -229,6 +231,10 @@ data:
         service_cpu_limit = "1"
         service_memory_limit = "1Gi"
         service_ephemeral_storage_limit = "1Gi"
+
+        [runners.kubernetes.node_selector]
+          "kubernetes.io/arch" = "amd64"
+          "kubernetes.io/os" = "linux"
 
         [runners.kubernetes.pod_labels]
           "app" = "gitlab-ci-job"
@@ -260,27 +266,29 @@ spec:
       labels:
         app: gitlab-runner
       annotations:
-        gitlab.__PUBLIC_DOMAIN__/config-version: "5"
+        gitlab.__PUBLIC_DOMAIN__/config-version: "6"
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
         prometheus.io/port: "9252"
     spec:
       serviceAccountName: gitlab-runner-manager
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: true
       # The longest application jobs run for two hours. Give SIGQUIT draining
       # enough time to report their result before a runner-manager rollout.
       terminationGracePeriodSeconds: 7500
       securityContext:
         runAsNonRoot: true
-        runAsUser: 100
-        runAsGroup: 100
-        fsGroup: 100
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: gitlab-runner
-          image: docker.io/gitlab/gitlab-runner@sha256:74209bd51542dc0cb8aa584f103b34c857ff240c3a275559af307c1cb1efbe4f
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner:19.3.1-20260909.1@sha256:c9b6fb6ffda1895d447411db1db8d64f68299bbee9d903c687b2da472fa326f0
           command: ["/bin/sh", "-ceu"]
           args:
             - |

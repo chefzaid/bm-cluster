@@ -1,0 +1,530 @@
+diff --git a/go.mod b/go.mod
+index 68245a2..483e913 100644
+--- a/go.mod
++++ b/go.mod
+@@ -12,18 +12,19 @@ require (
+ 	github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87
+ 	github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a
+ 	github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b
+-	github.com/docker/docker v28.5.2+incompatible
+ 	github.com/exoscale/egoscale v0.9.23
+ 	github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6
++	github.com/moby/moby/api v1.55.0
++	github.com/moby/moby/client v0.5.1
+ 	github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747
+ 	github.com/skarademir/naturalsort v0.0.0-20150715044055-69a5d87bef62
+ 	github.com/stretchr/testify v1.11.1
+ 	github.com/vmware/govcloudair v0.0.2
+ 	github.com/vmware/govmomi v0.6.2
+-	golang.org/x/crypto v0.50.0
+-	golang.org/x/net v0.53.0
++	golang.org/x/crypto v0.56.0
++	golang.org/x/net v0.58.0
+ 	golang.org/x/oauth2 v0.36.0
+-	golang.org/x/sys v0.43.0
++	golang.org/x/sys v0.47.0
+ 	google.golang.org/api v0.279.0
+ )
+ 
+@@ -33,33 +34,29 @@ require (
+ 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+ 	github.com/containerd/errdefs v1.0.0 // indirect
+ 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
+-	github.com/containerd/log v0.1.0 // indirect
+ 	github.com/distribution/reference v0.6.0 // indirect
+ 	github.com/felixge/httpsnoop v1.0.4 // indirect
+ 	github.com/go-logr/logr v1.4.3 // indirect
+ 	github.com/go-logr/stdr v1.2.2 // indirect
+ 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
+ 	github.com/moby/docker-image-spec v1.3.1 // indirect
+-	github.com/moby/sys/atomicwriter v0.1.0 // indirect
+ 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
+ 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect
+-	go.opentelemetry.io/otel v1.43.0 // indirect
+-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.28.0 // indirect
+-	go.opentelemetry.io/otel/metric v1.43.0 // indirect
+-	go.opentelemetry.io/otel/trace v1.43.0 // indirect
+-	golang.org/x/sync v0.20.0 // indirect
++	go.opentelemetry.io/otel v1.44.0 // indirect
++	go.opentelemetry.io/otel/metric v1.44.0 // indirect
++	go.opentelemetry.io/otel/trace v1.44.0 // indirect
+ )
+ 
+ require (
+ 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+-	github.com/Microsoft/go-winio v0.6.1 // indirect
++	github.com/Microsoft/go-winio v0.6.2 // indirect
+ 	github.com/bitly/go-simplejson v0.5.1 // indirect
+ 	github.com/bugsnag/osext v0.0.0-20130617224835-0dd3f918b21b // indirect
+ 	github.com/bugsnag/panicwrap v0.0.0-20160118154447-aceac81c6e2f // indirect
+ 	github.com/davecgh/go-spew v1.1.1 // indirect
+ 	github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
+-	github.com/docker/go-connections v0.4.0
+-	github.com/docker/go-units v0.2.1-0.20151230175859-0bbddae09c5a // indirect
++	github.com/docker/go-connections v0.7.0 // indirect
++	github.com/docker/go-units v0.5.0 // indirect
+ 	github.com/google/go-querystring v0.0.0-20140804062624-30f7a39f4a21 // indirect
+ 	github.com/google/s2a-go v0.1.9 // indirect
+ 	github.com/google/uuid v1.6.0 // indirect
+@@ -69,22 +66,16 @@ require (
+ 	github.com/jmespath/go-jmespath v0.4.0 // indirect
+ 	github.com/juju/loggo v1.0.0 // indirect
+ 	github.com/mitchellh/mapstructure v0.0.0-20140721150620-740c764bc614 // indirect
+-	github.com/moby/term v0.5.0 // indirect
+-	github.com/morikuni/aec v1.0.0 // indirect
+ 	github.com/opencontainers/go-digest v1.0.0 // indirect
+-	github.com/opencontainers/image-spec v1.0.2
+-	github.com/pkg/errors v0.9.1 // indirect
++	github.com/opencontainers/image-spec v1.1.1
+ 	github.com/pmezard/go-difflib v1.0.0 // indirect
+ 	github.com/stretchr/objx v0.5.2 // indirect
+ 	github.com/tent/http-link-go v0.0.0-20130702225549-ac974c61c2f9 // indirect
+-	golang.org/x/mod v0.34.0 // indirect
+-	golang.org/x/term v0.42.0
+-	golang.org/x/text v0.36.0 // indirect
+-	golang.org/x/tools v0.43.0 // indirect
+-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260427160629-7cedc36a6bc4 // indirect
+-	google.golang.org/grpc v1.80.0 // indirect
++	golang.org/x/term v0.45.0
++	golang.org/x/text v0.41.0 // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
++	google.golang.org/grpc v1.83.1 // indirect
+ 	google.golang.org/protobuf v1.36.11 // indirect
+ 	gopkg.in/yaml.v3 v3.0.1 // indirect
+-	gotest.tools/v3 v3.5.1 // indirect
+ 	launchpad.net/gocheck v0.0.0-20140225173054-000000000087 // indirect
+ )
+diff --git a/go.sum b/go.sum
+index 58f635f..d6ea895 100644
+--- a/go.sum
++++ b/go.sum
+@@ -6,12 +6,10 @@ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdB
+ cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
+ github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible h1:M8THeD875iVS/7RFM2hJP50be6viZONGsKe7461gg4s=
+ github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible/go.mod h1:9XXNKU+eRnpl9moKnB4QOLf1HestfXbmab5FXxiDBjc=
+-github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 h1:UQHMgLO+TxOElx5B5HZ4hJQsoJ/PvUvKRhJHDQXO8P8=
+-github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
+ github.com/Azure/go-autorest v7.2.1+incompatible h1:YMMdV7KEV+1J2pNThxX1D4bvINK94ncazpXTVWJiKDQ=
+ github.com/Azure/go-autorest v7.2.1+incompatible/go.mod h1:r+4oMnoxhatjLLJ6zxSWATqVooLgysK6ZNox3g/xq24=
+-github.com/Microsoft/go-winio v0.6.1 h1:9/kr64B9VUZrLm5YYwbGtUJnMgqWVOdUAXu6Migciow=
+-github.com/Microsoft/go-winio v0.6.1/go.mod h1:LRdKpFKfdobln8UmuiYcKPot9D2v6svN5+sAH+4kjUM=
++github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
++github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
+ github.com/aws/aws-sdk-go v1.55.7 h1:UJrkFq7es5CShfBwlWAC8DA077vp8PyVbQd3lqLiztE=
+ github.com/aws/aws-sdk-go v1.55.7/go.mod h1:eRwEWoyTWFMVYVQzKMNHWP5/RV4xIUGMQfXQHfHkpNU=
+ github.com/bitly/go-simplejson v0.5.1 h1:xgwPbetQScXt1gh9BmoJ6j9JMr3TElvuIyjR8pgdoow=
+@@ -24,8 +22,6 @@ github.com/bugsnag/panicwrap v0.0.0-20160118154447-aceac81c6e2f h1:7+HZb3PwI0cCU
+ github.com/bugsnag/panicwrap v0.0.0-20160118154447-aceac81c6e2f/go.mod h1:D/8v3kj0zr8ZAKg1AQ6crr+5VwKN5eIywRkfhyM/+dE=
+ github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87 h1:KgUTm0hcIm7BH180WvO5yE06ErHwQelNaYuXIeDuv/k=
+ github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87/go.mod h1:90ReRw6GdpyfrHakVjL/QHaoyV4aDUVVkXQJJJ3NXXM=
+-github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
+-github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
+ github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
+ github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
+ github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a h1:ZuOJS/SG7PmIzRo9f6IjnIHj6NifT4qhMG+2LKlGbNc=
+@@ -34,8 +30,6 @@ github.com/containerd/errdefs v1.0.0 h1:tg5yIfIlQIrxYtu9ajqY42W3lpS19XqdxRQeEwYG
+ github.com/containerd/errdefs v1.0.0/go.mod h1:+YBYIdtsnF4Iw6nWZhJcqGSg/dwvV7tyJ/kCkyJ2k+M=
+ github.com/containerd/errdefs/pkg v0.3.0 h1:9IKJ06FvyNlexW690DXuQNx2KA2cUJXx151Xdx3ZPPE=
+ github.com/containerd/errdefs/pkg v0.3.0/go.mod h1:NJw6s9HwNuRhnjJhM7pylWwMyAkmCQvQ4GpJHEqRLVk=
+-github.com/containerd/log v0.1.0 h1:TCJt7ioM2cr/tfR8GPbGf9/VRAX8D2B4PjzCpfX540I=
+-github.com/containerd/log v0.1.0/go.mod h1:VRRf09a7mHDIRezVKTRCrOq78v577GXq3bSa3EhrzVo=
+ github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+ github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+@@ -43,12 +37,10 @@ github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b h1:aXxD+fwKx8O
+ github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b/go.mod h1:h6faOIcZ8lWIwNQ+DN7b3CgX4Kwby5T+nbpNqkUIozU=
+ github.com/distribution/reference v0.6.0 h1:0IXCQ5g4/QMHHkarYzh5l+u8T3t73zM5QvfrDyIgxBk=
+ github.com/distribution/reference v0.6.0/go.mod h1:BbU0aIcezP1/5jX/8MP0YiH4SdvB5Y4f/wlDRiLyi3E=
+-github.com/docker/docker v28.5.2+incompatible h1:DBX0Y0zAjZbSrm1uzOkdr1onVghKaftjlSWt4AFexzM=
+-github.com/docker/docker v28.5.2+incompatible/go.mod h1:eEKB0N0r5NX/I1kEveEz05bcu8tLC/8azJZsviup8Sk=
+-github.com/docker/go-connections v0.4.0 h1:El9xVISelRB7BuFusrZozjnkIM5YnzCViNKohAFqRJQ=
+-github.com/docker/go-connections v0.4.0/go.mod h1:Gbd7IOopHjR8Iph03tsViu4nIes5XhDvyHbTtUxmeec=
+-github.com/docker/go-units v0.2.1-0.20151230175859-0bbddae09c5a h1:42qf1j6VWt3GUQzr0Hy8EL3DhNzLBiuWw5wQjNBlFyo=
+-github.com/docker/go-units v0.2.1-0.20151230175859-0bbddae09c5a/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
++github.com/docker/go-connections v0.7.0 h1:6SsRfJddP22WMrCkj19x9WKjEDTB+ahsdiGYf0mN39c=
++github.com/docker/go-connections v0.7.0/go.mod h1:no1qkHdjq7kLMGUXYAduOhYPSJxxvgWBh7ogVvptn3Q=
++github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4=
++github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
+ github.com/exoscale/egoscale v0.9.23 h1:HQdI+7lSo3DPgYk2GsUceQaPummkvMPHYuWPJd93BWI=
+ github.com/exoscale/egoscale v0.9.23/go.mod h1:Ee3U4ZjSDpbbEc9VkQ/jttUU8USE8Nv7L3YzVi03Y1U=
+ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
+@@ -76,8 +68,6 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.15 h1:xolVQTEXusUcAA5Ugt
+ github.com/googleapis/enterprise-certificate-proxy v0.3.15/go.mod h1:vqVt9yG9480NtzREnTlmGSBmFrA+bzb0yl0TxoBQXOg=
+ github.com/googleapis/gax-go/v2 v2.22.0 h1:PjIWBpgGIVKGoCXuiCoP64altEJCj3/Ei+kSU5vlZD4=
+ github.com/googleapis/gax-go/v2 v2.22.0/go.mod h1:irWBbALSr0Sk3qlqb9SyJ1h68WjgeFuiOzI4Rqw5+aY=
+-github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0 h1:bkypFPDjIYGfCYD5mRBvpqxfYX1YCS1PXdKYWi8FsN0=
+-github.com/grpc-ecosystem/grpc-gateway/v2 v2.20.0/go.mod h1:P+Lt/0by1T8bfcF3z737NnSbmxQAppXMRziHUxPOC8k=
+ github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6 h1:XboatR7lasl05yel5hNXF7kQBw2oFUGdMztcgisfhNU=
+ github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6/go.mod h1:RmeVYf9XrPRbRc3XIx0gLYA8qOFvNoPOfaEZduRlEp4=
+ github.com/jinzhu/copier v0.0.0-20180308034124-7e38e58719c3 h1:sHsPfNMAG70QAvKbddQ0uScZCHQoZsT5NykGRCeeeIs=
+@@ -100,28 +90,20 @@ github.com/mitchellh/mapstructure v0.0.0-20140721150620-740c764bc614 h1:Zwb7SwzR
+ github.com/mitchellh/mapstructure v0.0.0-20140721150620-740c764bc614/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
+ github.com/moby/docker-image-spec v1.3.1 h1:jMKff3w6PgbfSa69GfNg+zN/XLhfXJGnEx3Nl2EsFP0=
+ github.com/moby/docker-image-spec v1.3.1/go.mod h1:eKmb5VW8vQEh/BAr2yvVNvuiJuY6UIocYsFu/DxxRpo=
+-github.com/moby/sys/atomicwriter v0.1.0 h1:kw5D/EqkBwsBFi0ss9v1VG3wIkVhzGvLklJ+w3A14Sw=
+-github.com/moby/sys/atomicwriter v0.1.0/go.mod h1:Ul8oqv2ZMNHOceF643P6FKPXeCmYtlQMvpizfsSoaWs=
+-github.com/moby/sys/sequential v0.6.0 h1:qrx7XFUd/5DxtqcoH1h438hF5TmOvzC/lspjy7zgvCU=
+-github.com/moby/sys/sequential v0.6.0/go.mod h1:uyv8EUTrca5PnDsdMGXhZe6CCe8U/UiTWd+lL+7b/Ko=
+-github.com/moby/term v0.5.0 h1:xt8Q1nalod/v7BqbG21f8mQPqH+xAaC9C3N3wfWbVP0=
+-github.com/moby/term v0.5.0/go.mod h1:8FzsFHVUBGZdbDsJw/ot+X+d5HLUbvklYLJ9uGfcI3Y=
+-github.com/morikuni/aec v1.0.0 h1:nP9CBfwrvYnBRgY6qfDQkygYDmYwOilePFkwzv4dU8A=
+-github.com/morikuni/aec v1.0.0/go.mod h1:BbKIizmSmc5MMPqRYbxO4ZU0S0+P200+tUnFx7PXmsc=
++github.com/moby/moby/api v1.55.0 h1:2/sexvQyqIWS8pRSCFddBfpW2qE7vR7FCL+vN8pxwMc=
++github.com/moby/moby/api v1.55.0/go.mod h1:+RQ6wluLwtYaTd1WnPLykIDPekkuyD/ROWQClE83pzs=
++github.com/moby/moby/client v0.5.1 h1:tYNaJno4c0HXz12y5BiqEDy0rVTYkWzI26lGvnTMiJw=
++github.com/moby/moby/client v0.5.1/go.mod h1:odLstlZ6uSnfvAgVxMpvgmb8SUdd+siH2T0GBuxVAlM=
+ github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
+ github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
+-github.com/opencontainers/image-spec v1.0.2 h1:9yCKha/T5XdGtO0q9Q9a6T5NUCsTn/DrBg0D7ufOcFM=
+-github.com/opencontainers/image-spec v1.0.2/go.mod h1:BtxoFyWECRxE4U/7sNtV5W15zMzWCbyJoFRP3s7yZA0=
+-github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
+-github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
++github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=
++github.com/opencontainers/image-spec v1.1.1/go.mod h1:qpqAh3Dmcf36wStyyWU+kCeDgrGnAve2nCC8+7h8Q0M=
+ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+ github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+ github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747 h1:TCaHAWtKrxNsqHpEw9v63RsnvLnqDHcydxWmQaqnDn4=
+ github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747/go.mod h1:4bJ1FwuaBZ6dt1VcDX5/O662mwR8GWqS4l68H6hkoYQ=
+ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
+ github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
+-github.com/sirupsen/logrus v1.9.3 h1:dueUQJ1C2q9oE3F7wvmSGAaVtTmUizReu6fjN8uqzbQ=
+-github.com/sirupsen/logrus v1.9.3/go.mod h1:naHLuLoDiP4jHNo9R0sCBMtWGeIprob74mVsIT4qYEQ=
+ github.com/skarademir/naturalsort v0.0.0-20150715044055-69a5d87bef62 h1:9XhURSzGwAsEe0h4F8JC66Fq9K45t2mfiNq9MwUBfRY=
+ github.com/skarademir/naturalsort v0.0.0-20150715044055-69a5d87bef62/go.mod h1:oIdVclZaltY1Nf7OQUkg1/2jImBJ+ZfKZuDIRSwk3p0=
+ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
+@@ -139,54 +121,42 @@ go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ
+ go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 h1:OyrsyzuttWTSur2qN/Lm0m2a8yqyIjUVBZcxFPuXq2o=
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0/go.mod h1:C2NGBr+kAB4bk3xtMXfZ94gqFDtg/GkI7e9zqGh5Beg=
+-go.opentelemetry.io/otel v1.43.0 h1:mYIM03dnh5zfN7HautFE4ieIig9amkNANT+xcVxAj9I=
+-go.opentelemetry.io/otel v1.43.0/go.mod h1:JuG+u74mvjvcm8vj8pI5XiHy1zDeoCS2LB1spIq7Ay0=
+-go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.28.0 h1:3Q/xZUyC1BBkualc9ROb4G8qkH90LXEIICcs5zv1OYY=
+-go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.28.0/go.mod h1:s75jGIWA9OfCMzF0xr+ZgfrB5FEbbV7UuYo32ahUiFI=
+-go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.28.0 h1:j9+03ymgYhPKmeXGk5Zu+cIZOlVzd9Zv7QIiyItjFBU=
+-go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.28.0/go.mod h1:Y5+XiUG4Emn1hTfciPzGPJaSI+RpDts6BnCIir0SLqk=
+-go.opentelemetry.io/otel/metric v1.43.0 h1:d7638QeInOnuwOONPp4JAOGfbCEpYb+K6DVWvdxGzgM=
+-go.opentelemetry.io/otel/metric v1.43.0/go.mod h1:RDnPtIxvqlgO8GRW18W6Z/4P462ldprJtfxHxyKd2PY=
+-go.opentelemetry.io/otel/sdk v1.43.0 h1:pi5mE86i5rTeLXqoF/hhiBtUNcrAGHLKQdhg4h4V9Dg=
+-go.opentelemetry.io/otel/sdk v1.43.0/go.mod h1:P+IkVU3iWukmiit/Yf9AWvpyRDlUeBaRg6Y+C58QHzg=
+-go.opentelemetry.io/otel/sdk/metric v1.43.0 h1:S88dyqXjJkuBNLeMcVPRFXpRw2fuwdvfCGLEo89fDkw=
+-go.opentelemetry.io/otel/sdk/metric v1.43.0/go.mod h1:C/RJtwSEJ5hzTiUz5pXF1kILHStzb9zFlIEe85bhj6A=
+-go.opentelemetry.io/otel/trace v1.43.0 h1:BkNrHpup+4k4w+ZZ86CZoHHEkohws8AY+WTX09nk+3A=
+-go.opentelemetry.io/otel/trace v1.43.0/go.mod h1:/QJhyVBUUswCphDVxq+8mld+AvhXZLhe+8WVFxiFff0=
+-go.opentelemetry.io/proto/otlp v1.3.1 h1:TrMUixzpM0yuc/znrFTP9MMRh8trP93mkCiDVeXrui0=
+-go.opentelemetry.io/proto/otlp v1.3.1/go.mod h1:0X1WI4de4ZsLrrJNLAQbFeLCm3T7yBkR0XqQ7niQU+8=
+-golang.org/x/crypto v0.50.0 h1:zO47/JPrL6vsNkINmLoo/PH1gcxpls50DNogFvB5ZGI=
+-golang.org/x/crypto v0.50.0/go.mod h1:3muZ7vA7PBCE6xgPX7nkzzjiUq87kRItoJQM1Yo8S+Q=
+-golang.org/x/mod v0.34.0 h1:xIHgNUUnW6sYkcM5Jleh05DvLOtwc6RitGHbDk4akRI=
+-golang.org/x/mod v0.34.0/go.mod h1:ykgH52iCZe79kzLLMhyCUzhMci+nQj+0XkbXpNYtVjY=
+-golang.org/x/net v0.53.0 h1:d+qAbo5L0orcWAr0a9JweQpjXF19LMXJE8Ey7hwOdUA=
+-golang.org/x/net v0.53.0/go.mod h1:JvMuJH7rrdiCfbeHoo3fCQU24Lf5JJwT9W3sJFulfgs=
++go.opentelemetry.io/otel v1.44.0 h1:JjwHmHpA4iZ3wBxluu2fbbE7j4kqlE8jXyAyPXH7HqU=
++go.opentelemetry.io/otel v1.44.0/go.mod h1:BMgjTHL9WPRlRjL2oZCBTL4whCGtXch2H4BhOPIAyYc=
++go.opentelemetry.io/otel/metric v1.44.0 h1:1w0gILTcHdr3YI+ixLyjemwrVnsMURbTZFrSYCdDdmc=
++go.opentelemetry.io/otel/metric v1.44.0/go.mod h1:8O7hanEPBNgEMmybD3s2VBKcgWOCsA6tzHBPODAiquo=
++go.opentelemetry.io/otel/sdk v1.44.0 h1:nHYwb9lK+fJPU/dnT6s7W7Z8itMWyqrnVfbheVYrZ58=
++go.opentelemetry.io/otel/sdk v1.44.0/go.mod h1:Osuydd3Se74nqjAKxid74N5eC+jfEqfTegHRnq58oK0=
++go.opentelemetry.io/otel/sdk/metric v1.44.0 h1:3LlKgI+VjbVsjNRFZJZAJ30WjXC5VkNRks6si09iEfI=
++go.opentelemetry.io/otel/sdk/metric v1.44.0/go.mod h1:5B5pMARnXxKhltooO4xUuCBorl65a4EpnTalObqOigA=
++go.opentelemetry.io/otel/trace v1.44.0 h1:jxF5CsGYCe74MCRx2X4g7WsY/VBKRqqpNvXlX/6gtIk=
++go.opentelemetry.io/otel/trace v1.44.0/go.mod h1:oLl1jrMQAVo6v3GAggN+1VH9VIz9iUSvW53sW1Q8PIE=
++golang.org/x/crypto v0.56.0 h1:GUh5Ii4J5jtcseSMiRqr1jXCNHoxjeV9Fmekc2oLy6Y=
++golang.org/x/crypto v0.56.0/go.mod h1:OMW5y6CY9l38uPLmxU6l6pwcXp1obtLo3e6gT7gQR2I=
++golang.org/x/net v0.58.0 h1:ynWG7rqYi4ccpTEuPZ2QGWHktVEM9DMCj9yzDE0Q7To=
++golang.org/x/net v0.58.0/go.mod h1:YwCddHnFlT7eLQqVprV19OnhLGtc5xOKgE0RyqgfWAU=
+ golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=
+ golang.org/x/oauth2 v0.36.0/go.mod h1:YDBUJMTkDnJS+A4BP4eZBjCqtokkg1hODuPjwiGPO7Q=
+-golang.org/x/sync v0.20.0 h1:e0PTpb7pjO8GAtTs2dQ6jYa5BWYlMuX047Dco/pItO4=
+-golang.org/x/sync v0.20.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
+-golang.org/x/sys v0.43.0 h1:Rlag2XtaFTxp19wS8MXlJwTvoh8ArU6ezoyFsMyCTNI=
+-golang.org/x/sys v0.43.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+-golang.org/x/term v0.42.0 h1:UiKe+zDFmJobeJ5ggPwOshJIVt6/Ft0rcfrXZDLWAWY=
+-golang.org/x/term v0.42.0/go.mod h1:Dq/D+snpsbazcBG5+F9Q1n2rXV8Ma+71xEjTRufARgY=
+-golang.org/x/text v0.36.0 h1:JfKh3XmcRPqZPKevfXVpI1wXPTqbkE5f7JA92a55Yxg=
+-golang.org/x/text v0.36.0/go.mod h1:NIdBknypM8iqVmPiuco0Dh6P5Jcdk8lJL0CUebqK164=
+-golang.org/x/time v0.15.0 h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=
+-golang.org/x/time v0.15.0/go.mod h1:Y4YMaQmXwGQZoFaVFk4YpCt4FLQMYKZe9oeV/f4MSno=
+-golang.org/x/tools v0.43.0 h1:12BdW9CeB3Z+J/I/wj34VMl8X+fEXBxVR90JeMX5E7s=
+-golang.org/x/tools v0.43.0/go.mod h1:uHkMso649BX2cZK6+RpuIPXS3ho2hZo4FVwfoy1vIk0=
++golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
++golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
++golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
++golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
++golang.org/x/term v0.45.0 h1:NwWyBmoJCbfTHpxrWoZ9C6/VxOf7ic219I8xZZFdrf0=
++golang.org/x/term v0.45.0/go.mod h1:9aqxs0blBcrm/n0L9QW0aRVD+ktan8ssZromtqJC43w=
++golang.org/x/text v0.41.0 h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=
++golang.org/x/text v0.41.0/go.mod h1:jvf1O8ajNzZqhSrQBPbutR/EB83Cc0CFrezNQIwbb5M=
+ gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
+ gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=
+ google.golang.org/api v0.279.0 h1:hsx2M2OaRcaKtVYK6vXEUnQvdjnend7ZYES+lYaot74=
+ google.golang.org/api v0.279.0/go.mod h1:B9TqLBwJqVjp1mtt7WeoQwWRwvu/400y5lETOql+giQ=
+ google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 h1:XzmzkmB14QhVhgnawEVsOn6OFsnpyxNPRY9QV01dNB0=
+ google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7/go.mod h1:L43LFes82YgSonw6iTXTxXUX1OlULt4AQtkik4ULL/I=
+-google.golang.org/genproto/googleapis/api v0.0.0-20260319201613-d00831a3d3e7 h1:41r6JMbpzBMen0R/4TZeeAmGXSJC7DftGINUodzTkPI=
+-google.golang.org/genproto/googleapis/api v0.0.0-20260319201613-d00831a3d3e7/go.mod h1:EIQZ5bFCfRQDV4MhRle7+OgjNtZ6P1PiZBgAKuxXu/Y=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20260427160629-7cedc36a6bc4 h1:tEkOQcXgF6dH1G+MVKZrfpYvozGrzb91k6ha7jireSM=
+-google.golang.org/genproto/googleapis/rpc v0.0.0-20260427160629-7cedc36a6bc4/go.mod h1:4Hqkh8ycfw05ld/3BWL7rJOSfebL2Q+DVDeRgYgxUU8=
+-google.golang.org/grpc v1.80.0 h1:Xr6m2WmWZLETvUNvIUmeD5OAagMw3FiKmMlTdViWsHM=
+-google.golang.org/grpc v1.80.0/go.mod h1:ho/dLnxwi3EDJA4Zghp7k2Ec1+c2jqup0bFkw07bwF4=
++google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa h1:Kjn0N0tCrDgiAFW+lGO4JZ3ck44CehvJQMAwj9QF0G8=
++google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:q4lMZS6kskjT5HvCPrnnypcDPVJqT/f4nfxmkE7gryY=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa h1:mZHHdPZl0dbGHCflZgAq/Q468DWVFcU2whhB2KAo8fk=
++google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa/go.mod h1:4Hqkh8ycfw05ld/3BWL7rJOSfebL2Q+DVDeRgYgxUU8=
++google.golang.org/grpc v1.83.1 h1:HIO0+BEtBP6soyqvqC8sNUjZ7bTs+0hFQuFF+RAy++Y=
++google.golang.org/grpc v1.83.1/go.mod h1:kDyl6SKsiHKt0uylY5gtn5cEjkrIOhQOGDgIc4JGwzQ=
+ google.golang.org/protobuf v1.36.11 h1:fV6ZwhNocDyBLK0dj+fg8ektcVegBBuEolpbTQyBNVE=
+ google.golang.org/protobuf v1.36.11/go.mod h1:HTf+CrKn2C3g5S8VImy6tdcUvCska2kB7j23XfzDpco=
+ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+@@ -197,7 +167,9 @@ gopkg.in/yaml.v2 v2.2.8 h1:obN1ZagJSUGI0Ek/LBmuj4SNLPfIny3KsKFopxRdj10=
+ gopkg.in/yaml.v2 v2.2.8/go.mod h1:hI93XBmqTisBFMUTm0b8Fm+jr3Dg1NNxqwp+5A1VGuI=
+ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+ gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
+-gotest.tools/v3 v3.5.1 h1:EENdUnS3pdur5nybKYIh2Vfgc8IUNBjxDPSjtiJcOzU=
+-gotest.tools/v3 v3.5.1/go.mod h1:isy3WKz7GK6uNw/sbHzfKBLvlvXwUyV06n6brMxxopU=
++gotest.tools/v3 v3.5.2 h1:7koQfIKdy+I8UTetycgUqXWSDwpgv193Ka+qRsmBY8Q=
++gotest.tools/v3 v3.5.2/go.mod h1:LtdLGcnqToBH83WByAAi/wiwSFCArdFIUV/xxN4pcjA=
+ launchpad.net/gocheck v0.0.0-20140225173054-000000000087 h1:Izowp2XBH6Ya6rv+hqbceQyw/gSGoXfH/UPoTGduL54=
+ launchpad.net/gocheck v0.0.0-20140225173054-000000000087/go.mod h1:hj7XX3B/0A+80Vse0e+BUHsHMTEhd0O4cpUHr/e/BUM=
++pgregory.net/rapid v1.2.0 h1:keKAYRcjm+e1F0oAuU5F5+YPAWcyxNNRK2wud503Gnk=
++pgregory.net/rapid v1.2.0/go.mod h1:PY5XlDGj0+V1FCq0o192FdRhpKHGTRIWBgqjDBTrq04=
+diff --git a/libmachine/mcndockerclient/docker_client.go b/libmachine/mcndockerclient/docker_client.go
+index f5646dd..851dda5 100644
+--- a/libmachine/mcndockerclient/docker_client.go
++++ b/libmachine/mcndockerclient/docker_client.go
+@@ -5,11 +5,10 @@ import (
+ 	"fmt"
+ 	"net/http"
+ 
+-	"github.com/docker/docker/api/types/container"
+-	"github.com/docker/docker/api/types/image"
+-	"github.com/docker/docker/api/types/network"
+-	"github.com/docker/docker/client"
+ 	"github.com/docker/machine/libmachine/cert"
++	"github.com/moby/moby/api/types/container"
++	"github.com/moby/moby/api/types/network"
++	"github.com/moby/moby/client"
+ 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+ )
+ 
+@@ -30,7 +29,7 @@ func DockerClient(dockerHost DockerHost) (*client.Client, error) {
+ 		CheckRedirect: client.CheckRedirect,
+ 	}
+ 
+-	return client.NewClientWithOpts(
++	return client.New(
+ 		client.WithHTTPClient(httpClient),
+ 		client.WithHost(url),
+ 		client.WithAPIVersionNegotiation(),
+@@ -44,16 +43,23 @@ func CreateContainer(dockerHost DockerHost, config *container.Config, hostConfig
+ 		return err
+ 	}
+ 
+-	if _, err = docker.ImagePull(context.Background(), config.Image, image.PullOptions{}); err != nil {
++	defer docker.Close()
++	pull, err := docker.ImagePull(context.Background(), config.Image, client.ImagePullOptions{})
++	if err != nil {
++		return fmt.Errorf("Unable to pull image: %s", err)
++	}
++
++	defer pull.Close()
++	if err = pull.Wait(context.Background()); err != nil {
+ 		return fmt.Errorf("Unable to pull image: %s", err)
+ 	}
+ 
+-	containerCreateResp, err := docker.ContainerCreate(context.Background(), config, hostConfig, &network.NetworkingConfig{}, &v1.Platform{}, name)
++	containerCreateResp, err := docker.ContainerCreate(context.Background(), client.ContainerCreateOptions{Config: config, HostConfig: hostConfig, NetworkingConfig: &network.NetworkingConfig{}, Platform: &v1.Platform{}, Name: name})
+ 	if err != nil {
+ 		return fmt.Errorf("Error while creating container: %s", err)
+ 	}
+ 
+-	if err = docker.ContainerStart(context.Background(), containerCreateResp.ID, container.StartOptions{}); err != nil {
++	if _, err = docker.ContainerStart(context.Background(), containerCreateResp.ID, client.ContainerStartOptions{}); err != nil {
+ 		return fmt.Errorf("Error while starting container: %s", err)
+ 	}
+ 
+diff --git a/libmachine/mcndockerclient/docker_client_test.go b/libmachine/mcndockerclient/docker_client_test.go
+new file mode 100644
+index 0000000..ebbdb9e
+--- /dev/null
++++ b/libmachine/mcndockerclient/docker_client_test.go
+@@ -0,0 +1,95 @@
++package mcndockerclient
++
++import (
++	"crypto/tls"
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/docker/machine/libmachine/auth"
++	"github.com/docker/machine/libmachine/cert"
++	"github.com/moby/moby/api/types/container"
++	"github.com/stretchr/testify/require"
++)
++
++type testCertGenerator struct {
++	cert.Generator
++	config *tls.Config
++}
++
++func (g *testCertGenerator) ReadTLSConfig(_ string, _ *auth.Options) (*tls.Config, error) {
++	return g.config, nil
++}
++
++func testHost(t *testing.T, handler http.HandlerFunc) *RemoteDocker {
++	t.Helper()
++	server := httptest.NewTLSServer(handler)
++	t.Cleanup(server.Close)
++	cert.SetCertGenerator(&testCertGenerator{Generator: cert.NewX509CertGenerator(), config: server.Client().Transport.(*http.Transport).TLSClientConfig})
++	t.Cleanup(func() { cert.SetCertGenerator(cert.NewX509CertGenerator()) })
++	return &RemoteDocker{HostURL: server.URL, AuthOption: &auth.Options{}}
++}
++
++func TestCreateContainerWithMobyClient(t *testing.T) {
++	for _, pullFails := range []bool{false, true} {
++		t.Run(fmt.Sprint(pullFails), func(t *testing.T) {
++			var actions []string
++			host := testHost(t, func(w http.ResponseWriter, r *http.Request) {
++				w.Header().Set("Content-Type", "application/json")
++				switch {
++				case r.URL.Path == "/_ping":
++					w.Header().Set("API-Version", "1.55")
++					w.WriteHeader(http.StatusOK)
++				case strings.HasSuffix(r.URL.Path, "/images/create"):
++					actions = append(actions, "pull")
++					require.Equal(t, "POST", r.Method)
++					if pullFails {
++						fmt.Fprintln(w, `{"errorDetail":{"message":"test pull denied"},"error":"test pull denied"}`)
++					} else {
++						fmt.Fprintln(w, `{"status":"download complete"}`)
++					}
++				case strings.HasSuffix(r.URL.Path, "/containers/create"):
++					actions = append(actions, "create")
++					require.Equal(t, "smoke", r.URL.Query().Get("name"))
++					var request container.CreateRequest
++					require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
++					require.Equal(t, "busybox:latest", request.Image)
++					w.WriteHeader(http.StatusCreated)
++					fmt.Fprintln(w, `{"Id":"test-container"}`)
++				case strings.HasSuffix(r.URL.Path, "/containers/test-container/start"):
++					actions = append(actions, "start")
++					w.WriteHeader(http.StatusNoContent)
++				default:
++					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
++					w.WriteHeader(http.StatusNotFound)
++				}
++			})
++			err := CreateContainer(host, &container.Config{Image: "busybox:latest"}, &container.HostConfig{}, "smoke")
++			if pullFails {
++				require.ErrorContains(t, err, "test pull denied")
++				require.Equal(t, []string{"pull"}, actions)
++			} else {
++				require.NoError(t, err)
++				require.Equal(t, []string{"pull", "create", "start"}, actions)
++			}
++		})
++	}
++}
++
++func TestServerVersionWithMobyClient(t *testing.T) {
++	host := testHost(t, func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Type", "application/json")
++		if r.URL.Path == "/_ping" {
++			w.Header().Set("API-Version", "1.55")
++			return
++		}
++		require.True(t, strings.HasSuffix(r.URL.Path, "/version"))
++		fmt.Fprintln(w, `{"Version":"29.5.2","ApiVersion":"1.55"}`)
++	})
++	version, err := (&defaultDockerVersioner{}).DockerVersion(host)
++	require.NoError(t, err)
++	require.Equal(t, "29.5.2", version)
++}
+diff --git a/libmachine/mcndockerclient/docker_versioner.go b/libmachine/mcndockerclient/docker_versioner.go
+index 5344dd5..e02c5e3 100644
+--- a/libmachine/mcndockerclient/docker_versioner.go
++++ b/libmachine/mcndockerclient/docker_versioner.go
+@@ -3,6 +3,7 @@ package mcndockerclient
+ import (
+ 	"context"
+ 	"fmt"
++	mobyclient "github.com/moby/moby/client"
+ )
+ 
+ var CurrentDockerVersioner DockerVersioner = &defaultDockerVersioner{}
+@@ -23,7 +24,8 @@ func (dv *defaultDockerVersioner) DockerVersion(host DockerHost) (string, error)
+ 		return "", fmt.Errorf("Unable to query docker version: %s", err)
+ 	}
+ 
+-	version, err := client.ServerVersion(context.Background())
++	defer client.Close()
++	version, err := client.ServerVersion(context.Background(), mobyclient.ServerVersionOptions{})
+ 	if err != nil {
+ 		return "", fmt.Errorf("Unable to query docker version: %s", err)
+ 	}
+diff --git a/libmachine/provision/configure_swarm.go b/libmachine/provision/configure_swarm.go
+index cfb5923..bf17f2d 100644
+--- a/libmachine/provision/configure_swarm.go
++++ b/libmachine/provision/configure_swarm.go
+@@ -2,17 +2,18 @@ package provision
+ 
+ import (
+ 	"fmt"
++	"net/netip"
+ 	"net/url"
+ 	"strconv"
+ 	"strings"
+ 
+-	"github.com/docker/docker/api/types/container"
+-	"github.com/docker/go-connections/nat"
+ 	"github.com/docker/machine/libmachine/auth"
+ 	"github.com/docker/machine/libmachine/engine"
+ 	"github.com/docker/machine/libmachine/log"
+ 	"github.com/docker/machine/libmachine/mcndockerclient"
+ 	"github.com/docker/machine/libmachine/swarm"
++	"github.com/moby/moby/api/types/container"
++	"github.com/moby/moby/api/types/network"
+ )
+ 
+ func configureSwarm(p Provisioner, swarmOptions swarm.Options, authOptions auth.Options) error {
+@@ -49,6 +50,10 @@ func configureSwarm(p Provisioner, swarmOptions swarm.Options, authOptions auth.
+ 
+ 	parts = strings.Split(u.Host, ":")
+ 	port := parts[1]
++	swarmPort, err := network.ParsePort(port + "/tcp")
++	if err != nil {
++		return fmt.Errorf("invalid swarm port: %w", err)
++	}
+ 
+ 	dockerDir := p.GetDockerOptionsDir()
+ 	dockerHost := &mcndockerclient.RemoteDocker{
+@@ -86,10 +91,10 @@ func configureSwarm(p Provisioner, swarmOptions swarm.Options, authOptions auth.
+ 				MaximumRetryCount: 0,
+ 			},
+ 			Binds: []string{hostBind},
+-			PortBindings: nat.PortMap{
+-				nat.Port(fmt.Sprintf("%s/tcp", port)): {
++			PortBindings: network.PortMap{
++				swarmPort: {
+ 					{
+-						HostIP:   "0.0.0.0",
++						HostIP:   netip.IPv4Unspecified(),
+ 						HostPort: port,
+ 					},
+ 				},
+@@ -99,9 +104,9 @@ func configureSwarm(p Provisioner, swarmOptions swarm.Options, authOptions auth.
+ 		swarmMasterConfig := &container.Config{
+ 			Image: swarmOptions.Image,
+ 			Env:   swarmOptions.Env,
+-			ExposedPorts: nat.PortSet{
+-				"2375/tcp":                            {},
+-				nat.Port(fmt.Sprintf("%s/tcp", port)): {},
++			ExposedPorts: network.PortSet{
++				network.MustParsePort("2375/tcp"): {},
++				swarmPort:                         {},
+ 			},
+ 			Cmd: cmdMaster,
+ 		}

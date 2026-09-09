@@ -624,6 +624,44 @@
         },
         "secrets": 0
       }
+    },
+    {
+      "component": "gitlab-runner",
+      "before": {
+        "image": "docker.io/gitlab/gitlab-runner@sha256:74209bd51542dc0cb8aa584f103b34c857ff240c3a275559af307c1cb1efbe4f",
+        "vulnerabilities": {
+          "CRITICAL": 2,
+          "HIGH": 40,
+          "MEDIUM": 182,
+          "LOW": 27,
+          "UNKNOWN": 7
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner:19.3.1-20260909.1@sha256:c9b6fb6ffda1895d447411db1db8d64f68299bbee9d903c687b2da472fa326f0",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 2
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "gitlab-runner-helper",
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner-helper:19.3.1-20260909.1@sha256:8ececef7dd3d5ae0844069370c4d703f8a3f3b7272929d67f5e85e7e3a584d8d",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
     }
   ],
   "applicationRuntimeImages": [
