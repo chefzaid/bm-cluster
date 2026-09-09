@@ -36,9 +36,9 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Trivy | 0 / 3 / 10 / 12 / 13 | 0 / 0 / 0 / 0 / 1 |
 | Trivy Operator | 0 / 3 / 6 / 12 / 3 | 0 / 0 / 0 / 0 / 1 |
 | OAuth2 Proxy | 0 / 1 / 0 / 0 / 3 | 0 / 0 / 0 / 0 / 1 |
-| MongoDB | 9 / 263 / 184 / 33 / 33 | 8 / 66 / 16 / 16 / 24 |
+| MongoDB | 9 / 263 / 184 / 33 / 33 | 0 / 0 / 0 / 0 / 8 |
 | PostgreSQL | 16 / 92 / 185 / 155 / 14 | 15 / 71 / 164 / 153 / 8 |
-| DBGate | 5 / 62 / 99 / 117 / 5 | 4 / 52 / 92 / 116 / 0 |
+| DBGate | 5 / 62 / 99 / 117 / 5 | 0 / 0 / 0 / 0 / 0 |
 | Grafana | 3 / 159 / 32 / 13 / 36 | 3 / 157 / 26 / 1 / 16 |
 | Dashboard sidecar | 0 / 8 / 10 / 12 / 0 | 0 / 0 / 0 / 0 / 0 |
 | Vault | 1 / 12 / 6 / 12 / 3 | 1 / 10 / 0 / 0 / 3 |
@@ -47,7 +47,7 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Kibana | 0 / 9 / 135 / 86 / 0 | 0 / 5 / 15 / 4 / 0 |
 | Logstash | 0 / 15 / 85 / 65 / 0 | 0 / 7 / 15 / 1 / 0 |
 
-Across these thirteen images, findings decrease from 2,998 to 1,792. This is an
+Across these thirteen images, findings decrease from 2,998 to 1,406. This is an
 image comparison, not a sum of Kubernetes reports or a statement that all
 remaining findings are exploitable.
 
@@ -71,6 +71,42 @@ GitLab generates installation-specific SSH keys on its persistent configuration
 volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
 The remaining GitLab matches are vendor examples/test fixtures and stay visible.
 No production credentials were copied into these images.
+
+### Controller rebuilds and storage verification
+
+The September 9 controller batch uses the same upstream application releases,
+Go 1.26.7 and compatible dependency patches. Counts include every severity:
+
+| Component | Previous findings | Rebuilt findings |
+| --- | ---: | ---: |
+| Ingress NGINX 1.15.1 | 284 | 0 |
+| CSI provisioner 5.3.0 | 66 | 0 |
+| CSI attacher 4.12.0 | 41 | 1 Unknown |
+| CSI snapshotter 8.6.0 | 28 | 1 Unknown |
+| CSI resizer 2.2.1 | 23 | 1 Unknown |
+| CSI node registrar 2.17.0 | 23 | 0 |
+| CSI liveness probe 2.19.0 | 23 | 0 |
+| Metrics Server 0.9.0 | 18 | 1 Unknown |
+| Local Path Provisioner 0.0.37 | 8 | 0 |
+| Kube State Metrics 2.20.0 | 7 | 1 Unknown |
+
+All ten candidates report zero exposed secrets. Source tests, restricted CLI
+startup and registry digest verification precede deployment. Ingress was tested
+with a separate controller class and Service selector: HTTPS served the backend
+and HTTP redirected to HTTPS. After the CSI rollout, a disposable Longhorn
+volume passed provision, write, unmount, remount, readback and deletion. The
+registrar successfully registered with kubelet without privileged mode.
+
+Only the registrar and liveness sidecars lose privileged mode, gain a read-only
+root, RuntimeDefault seccomp, dropped capabilities and resource budgets. They
+retain root to access the existing root-owned Unix sockets. The main CSI driver,
+its host mounts and mount propagation remain intact. This follows the registrar's
+[documented socket permissions](https://github.com/kubernetes-csi/node-driver-registrar/blob/v2.17.0/README.md).
+
+Build recipes pin each source commit and record its actual release tag in Go
+build metadata. Ingress uses the upstream `controller-v1.15.1` release; a local
+`v1.15.1` tag at that same commit lets Go record its version accurately. This is
+not a vulnerability exception or an application version upgrade.
 
 ### September 9 follow-up
 
@@ -214,13 +250,17 @@ then reconciles existing controllers sequentially and waits for readiness.
 It fails if admission or a rollout fails. New/recreated controllers receive
 the same policy automatically.
 
-The CoreDNS image override is installed separately with platform resources,
+The system image overrides are installed separately with platform resources,
 after External Secrets. Vault supplies `platform-registry-auth` in `kube-system`
 and `longhorn-system` as well as the existing platform namespaces. The helper
-waits for the DNS pull credential before reconciling CoreDNS and verifies that
-the dry run selected the expected digest. Bootstrap mode uses the pinned public
-CoreDNS image; patched mode uses the private rebuild. K3s's managed addon
-reconciliation therefore retains the selected image and security settings.
+waits for pull credentials and verifies every selected container digest in a
+server-side dry run. This covers CoreDNS, Metrics Server, Local Path Provisioner,
+the four CSI controllers, both CSI sidecars, Longhorn UI and ingress NGINX.
+Kube State Metrics is pinned directly in the monitoring manifest. Bootstrap mode
+uses public pins; patched mode uses private rebuilds. Narrow admission policies
+preserve these selections when K3s, Longhorn or Helm recreates a controller.
+Both the installer and Ansible reconcile Deployments and the CSI DaemonSet
+through the same helper; no separate live-only image overrides are required.
 Keep this image cached on each node for recovery when the registry is down.
 
 GitLab's cache DaemonSet keeps its exact image in use on eligible Linux/amd64

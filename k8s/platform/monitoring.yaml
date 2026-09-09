@@ -172,6 +172,8 @@ spec:
         app: kube-state-metrics
     spec:
       serviceAccountName: kube-state-metrics
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
@@ -181,7 +183,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kube-state-metrics
-          image: registry.k8s.io/kube-state-metrics/kube-state-metrics@sha256:01171220c7c059afc85034ffe687bfe7249e41c0cc46fbe9a5128503ceee3016
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/kube-state-metrics:2.20.0-20260909.1@sha256:c5b4c00a71931899b7f65bab1d474fd5fdcb041d03ef320d4020a6eae528ee83
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

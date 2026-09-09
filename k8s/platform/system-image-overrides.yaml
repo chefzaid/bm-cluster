@@ -109,3 +109,454 @@ metadata:
     argocd.argoproj.io/sync-wave: "-3"
 spec:
   policyName: bm-longhorn-ui-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-metrics-server-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: metrics-server-only
+      expression: object.metadata.namespace == 'kube-system' && object.metadata.name == 'metrics-server'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'metrics-server',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/metrics-server:0.9.0-20260909.1@sha256:c15f3ecfd7ea8bd082e9d6aecd295c61f7f06789b55a6fb23fe80e48c93b9dfd'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-metrics-server-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-metrics-server-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-local-path-provisioner-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: local-path-provisioner-only
+      expression: object.metadata.namespace == 'kube-system' && object.metadata.name == 'local-path-provisioner'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'local-path-provisioner',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/local-path-provisioner:0.0.37-20260909.1@sha256:0c88516adce015ff6213f0b6042635d03b91f41ab313755a44bf6c2dd6a627a4'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-local-path-provisioner-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-local-path-provisioner-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-csi-attacher-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: csi-attacher-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'csi-attacher'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'csi-attacher',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-attacher:4.12.0-20260909.1@sha256:107811edf5ff945253ebd4a09859a4d0206f3b17c5885225ce2872469bf85fd9'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-csi-attacher-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-csi-attacher-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-csi-provisioner-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: csi-provisioner-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'csi-provisioner'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'csi-provisioner',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-provisioner:5.3.0-20260909.1@sha256:09ab294e450a5bb0f0d5952950e3eddb55847b9f4fe67474aba595e2b5db0af7'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-csi-provisioner-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-csi-provisioner-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-csi-resizer-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: csi-resizer-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'csi-resizer'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'csi-resizer',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-resizer:2.2.1-20260909.1@sha256:d7fcf7064264011e9d94975165fb197123d42b97c365829e23a3179620fba4a5'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-csi-resizer-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-csi-resizer-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-csi-snapshotter-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: csi-snapshotter-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'csi-snapshotter'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'csi-snapshotter',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-snapshotter:8.6.0-20260909.1@sha256:44bdb8b0a767ee726aadd7a15ef91ae8351c802a9734000950a529f0e3f80ead'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-csi-snapshotter-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-csi-snapshotter-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-csi-plugin-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [daemonsets]
+  matchConditions:
+    - name: longhorn-csi-plugin-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'longhorn-csi-plugin'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'node-driver-registrar',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-node-driver-registrar:2.17.0-20260909.1@sha256:d0baab0add244d7ff012cf615ad7c2694a69830ba82024b500b6e0d4056213b8'
+                  }, Object.spec.template.spec.containers{
+                    name: 'longhorn-liveness-probe',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/livenessprobe:2.19.0-20260909.1@sha256:81e2af06de8134e3e63f8b71a59c9cd2d697d72c67f69df71c7e7a52c620e68b'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-csi-plugin-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-longhorn-csi-plugin-security-image
+---
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-ingress-nginx-controller-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: ingress-nginx-controller-only
+      expression: object.metadata.namespace == 'infra' && object.metadata.name == 'ingress-nginx-controller'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'controller',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.1@sha256:52606b8bbad3e41b6b9209c3bcc4d8c0a000fe799e029de427a7e98791ef5df0'
+                  }]
+                }
+              }
+            }
+          }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-ingress-nginx-controller-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-ingress-nginx-controller-security-image

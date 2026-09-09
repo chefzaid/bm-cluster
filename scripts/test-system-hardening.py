@@ -102,6 +102,56 @@ class SystemHardeningTest(unittest.TestCase):
                 self.assertFalse(context['allowPrivilegeEscalation'])
                 self.assertTrue(actual['resources']['limits']['memory'])
 
+    def test_csi_sidecars_keep_sockets_and_do_not_change_privileged_driver(self):
+        before, after = self.preview('longhorn-system', 'longhorn-csi-plugin', 'daemonset')
+        self.assertEqual(before['securityContext'], after['securityContext'])
+        self.assertEqual(before['volumes'], after['volumes'])
+        originals = {c['name']: c for c in before['containers']}
+        for container in after['containers']:
+            original = originals[container['name']]
+            if container['name'] == 'longhorn-csi-plugin':
+                self.assertEqual(container, original)
+                continue
+            context = container['securityContext']
+            self.assertFalse(context['privileged'])
+            self.assertFalse(context['allowPrivilegeEscalation'])
+            self.assertTrue(context['readOnlyRootFilesystem'])
+            self.assertEqual(context['runAsUser'], 0)
+            self.assertEqual(context['capabilities']['drop'], ['ALL'])
+            self.assertEqual(context['seccompProfile']['type'], 'RuntimeDefault')
+            for field in ('args', 'env', 'volumeMounts'):
+                self.assertEqual(container.get(field), original.get(field))
+
+    def test_image_overrides_restore_all_pins_after_controller_recreation(self):
+        targets = [('kube-system', name, 'deployment') for name in
+                   ('coredns', 'metrics-server', 'local-path-provisioner')]
+        targets += [('longhorn-system', name, 'deployment') for name in
+                    ('longhorn-ui', 'csi-attacher', 'csi-provisioner', 'csi-resizer', 'csi-snapshotter')]
+        targets += [('longhorn-system', 'longhorn-csi-plugin', 'daemonset'),
+                    ('infra', 'ingress-nginx-controller', 'deployment')]
+        for namespace, name, kind in targets:
+            with self.subTest(name=name):
+                result = subprocess.run(['kubectl', 'get', 'mutatingadmissionpolicy',
+                    f'bm-{name}-security-image', '--ignore-not-found', '-o', 'json'],
+                    capture_output=True, text=True, check=True)
+                if not result.stdout.strip():
+                    continue  # Foundation-only installation, before platform policies.
+                policy = json.loads(result.stdout)
+                expected = dict(re.findall(r"name: '([^']+)',\s*image: '([^']+)'",
+                    policy['spec']['mutations'][0]['applyConfiguration']['expression']))
+                self.assertTrue(expected)
+                source = kubectl('get', kind, name, '-n', namespace, '-o', 'json')
+                spec = copy.deepcopy(source['spec']['template']['spec'])
+                spec['imagePullSecrets'] = [{'name': 'unrelated-dry-run-credential'}]
+                for container in spec['containers']:
+                    if container['name'] in expected:
+                        container['image'] = 'docker.io/library/busybox:unpulled-dry-run'
+                _, actual = self.preview(namespace, name, kind, spec)
+                images = {c['name']: c['image'] for c in actual['containers']}
+                for container, image in expected.items():
+                    self.assertEqual(images[container], image)
+                self.assertIn({'name': 'unrelated-dry-run-credential'}, actual['imagePullSecrets'])
+
     def test_reapplying_policies_is_idempotent(self):
         for namespace, name in (("longhorn-system", "csi-attacher"), ("kube-system", "metrics-server")):
             before, after = self.preview(namespace, name)

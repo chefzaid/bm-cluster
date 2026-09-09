@@ -1,5 +1,5 @@
 {
-  "date": "2026-09-08",
+  "date": "2026-09-09",
   "scanner": "Trivy 0.74.0",
   "platform": "linux/amd64",
   "counting": "Package occurrences per image; all severities, including UNKNOWN; no suppressions. Candidate scans, deployment verified separately.",
@@ -93,13 +93,13 @@
         "secrets": 0
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/mongodb:7.0.40-20260908.1@sha256:9aedeece952620e585dffaec3f5d936c7bb9dd0e48cc279c70c038c6d8722456",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/mongodb:7.0.40-20260909.1@sha256:9573f6c233fd6ab8aa0de331186819415d7fd884ea89ca7c3b88e052930940f8",
         "vulnerabilities": {
-          "CRITICAL": 8,
-          "HIGH": 66,
-          "MEDIUM": 16,
-          "LOW": 16,
-          "UNKNOWN": 24
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 8
         },
         "secrets": 0
       }
@@ -143,12 +143,12 @@
         "secrets": 0
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dbgate:7.2.6-20260908.5@sha256:33d7b58f860e92e691797f561c66cd1348e28c7d8579c16e81b2af8100e2bbde",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dbgate:7.2.6-20260909.1@sha256:da9f268f47aa4f9e76807f25425cc749f6aac651a0052adc4a537b00cfd45aba",
         "vulnerabilities": {
-          "CRITICAL": 4,
-          "HIGH": 52,
-          "MEDIUM": 92,
-          "LOW": 116,
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
           "UNKNOWN": 0
         },
         "secrets": 0
@@ -324,6 +324,302 @@
           "HIGH": 7,
           "MEDIUM": 15,
           "LOW": 1,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "csi-attacher",
+      "before": {
+        "image": "docker.io/longhornio/csi-attacher@sha256:a814aa4784197116983ea13e376fc691e000a390de9d0b9fca2bc4a2fb7c4a1f",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 27,
+          "MEDIUM": 10,
+          "LOW": 0,
+          "UNKNOWN": 3
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-attacher:4.12.0-20260909.1@sha256:107811edf5ff945253ebd4a09859a4d0206f3b17c5885225ce2872469bf85fd9",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "csi-provisioner",
+      "before": {
+        "image": "docker.io/longhornio/csi-provisioner@sha256:1bbb7b11d8087130e722e3249f364d0ab49ee3545e847c2f299e87b7e1ce5c4f",
+        "vulnerabilities": {
+          "CRITICAL": 2,
+          "HIGH": 30,
+          "MEDIUM": 31,
+          "LOW": 2,
+          "UNKNOWN": 1
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-provisioner:5.3.0-20260909.1@sha256:09ab294e450a5bb0f0d5952950e3eddb55847b9f4fe67474aba595e2b5db0af7",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "csi-resizer",
+      "before": {
+        "image": "docker.io/longhornio/csi-resizer@sha256:63d0aef25114d4a682b25afa6d9623a3cfcc19aca910269124408476bbe2c6fd",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 16,
+          "MEDIUM": 3,
+          "LOW": 0,
+          "UNKNOWN": 3
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-resizer:2.2.1-20260909.1@sha256:d7fcf7064264011e9d94975165fb197123d42b97c365829e23a3179620fba4a5",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "csi-snapshotter",
+      "before": {
+        "image": "docker.io/longhornio/csi-snapshotter@sha256:2bca9ac55170efa61dc50e5cc8d9550373db2e3e5161d82d3fdaac5c25150360",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 18,
+          "MEDIUM": 6,
+          "LOW": 0,
+          "UNKNOWN": 3
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-snapshotter:8.6.0-20260909.1@sha256:44bdb8b0a767ee726aadd7a15ef91ae8351c802a9734000950a529f0e3f80ead",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "csi-node-driver-registrar",
+      "before": {
+        "image": "docker.io/longhornio/csi-node-driver-registrar@sha256:29f7cfd519008fe8f8dff5e79db43f70d65c43a89c08f1bafbb199ca90df79f0",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 18,
+          "MEDIUM": 5,
+          "LOW": 0,
+          "UNKNOWN": 0
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-node-driver-registrar:2.17.0-20260909.1@sha256:d0baab0add244d7ff012cf615ad7c2694a69830ba82024b500b6e0d4056213b8",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "livenessprobe",
+      "before": {
+        "image": "docker.io/longhornio/livenessprobe@sha256:d0cb76b565ba9d36da0dc2b38e2b6a49a0ae4fe067b03086110682f32c600318",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 18,
+          "MEDIUM": 5,
+          "LOW": 0,
+          "UNKNOWN": 0
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/livenessprobe:2.19.0-20260909.1@sha256:81e2af06de8134e3e63f8b71a59c9cd2d697d72c67f69df71c7e7a52c620e68b",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "kube-state-metrics",
+      "before": {
+        "image": "registry.k8s.io/kube-state-metrics/kube-state-metrics@sha256:01171220c7c059afc85034ffe687bfe7249e41c0cc46fbe9a5128503ceee3016",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 2,
+          "MEDIUM": 1,
+          "LOW": 0,
+          "UNKNOWN": 3
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/kube-state-metrics:2.20.0-20260909.1@sha256:c5b4c00a71931899b7f65bab1d474fd5fdcb041d03ef320d4020a6eae528ee83",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "metrics-server",
+      "before": {
+        "image": "docker.io/rancher/mirrored-metrics-server@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0",
+        "vulnerabilities": {
+          "CRITICAL": 1,
+          "HIGH": 12,
+          "MEDIUM": 2,
+          "LOW": 0,
+          "UNKNOWN": 3
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/metrics-server:0.9.0-20260909.1@sha256:c15f3ecfd7ea8bd082e9d6aecd295c61f7f06789b55a6fb23fe80e48c93b9dfd",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "local-path-provisioner",
+      "before": {
+        "image": "docker.io/rancher/local-path-provisioner@sha256:e757967a5ec338f6a9b371c5a9688bedaa8c3578ea3dd4db329ea0084be0a86f",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 8,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/local-path-provisioner:0.0.37-20260909.1@sha256:0c88516adce015ff6213f0b6042635d03b91f41ab313755a44bf6c2dd6a627a4",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "ingress-nginx",
+      "before": {
+        "image": "registry.k8s.io/ingress-nginx/controller@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1",
+        "vulnerabilities": {
+          "CRITICAL": 3,
+          "HIGH": 109,
+          "MEDIUM": 99,
+          "LOW": 52,
+          "UNKNOWN": 21
+        }
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.1@sha256:52606b8bbad3e41b6b9209c3bcc4d8c0a000fe799e029de427a7e98791ef5df0",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "alertmanager",
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/alertmanager:0.34.0-20260909.1@sha256:d0504d167a9332351ea6e3a06da6f708478eec91a754c6cd57bbe864c18d2e8c",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 2
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "node-exporter",
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node-exporter:1.12.1-20260909.1@sha256:6d0cf54044cef67aacd72e3be714b95562a1309552b95315dd39d48b69bce385",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "coredns",
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/coredns:1.14.7-20260909.1@sha256:732c2af911d1fd54dcba79c08a498f2e89e3343d862ff1c75119e89ce6469a27",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      }
+    },
+    {
+      "component": "longhorn-ui",
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/longhorn-ui:1.12.1-20260909.1@sha256:668baf58aa165952036182d306f69c18f68d639a821bc107faf2fd519289535b",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
           "UNKNOWN": 0
         },
         "secrets": 0

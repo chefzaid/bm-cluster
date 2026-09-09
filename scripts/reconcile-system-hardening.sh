@@ -1,54 +1,63 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Admission also protects future replacements. Touch existing controllers once
-# so newly installed/updated policies take effect without waiting for a restart.
+# Admission protects future replacements. Reconcile existing controllers too;
+# validate the entire selected image set before changing a stored template.
 for target in \
-  kube-system/local-path-provisioner \
-  kube-system/metrics-server \
-  kube-system/coredns \
-  longhorn-system/csi-attacher \
-  longhorn-system/csi-provisioner \
-  longhorn-system/csi-resizer \
-  longhorn-system/csi-snapshotter \
-  longhorn-system/longhorn-driver-deployer \
-  longhorn-system/longhorn-ui; do
-  namespace="${target%%/*}"
-  deployment="${target#*/}"
-  existing="$(kubectl get deployment "$deployment" -n "$namespace" --ignore-not-found -o name)"
+  deployment/kube-system/local-path-provisioner \
+  deployment/kube-system/metrics-server \
+  deployment/kube-system/coredns \
+  deployment/longhorn-system/csi-attacher \
+  deployment/longhorn-system/csi-provisioner \
+  deployment/longhorn-system/csi-resizer \
+  deployment/longhorn-system/csi-snapshotter \
+  deployment/longhorn-system/longhorn-driver-deployer \
+  deployment/longhorn-system/longhorn-ui \
+  daemonset/longhorn-system/longhorn-csi-plugin \
+  deployment/infra/ingress-nginx-controller; do
+  IFS=/ read -r kind namespace name <<< "$target"
+  existing="$(kubectl get "$kind" "$name" -n "$namespace" --ignore-not-found -o name)"
   [[ -n "$existing" ]] || continue
-  image_policy="$(kubectl get mutatingadmissionpolicy "bm-$deployment-security-image" --ignore-not-found \
-    -o 'jsonpath={.spec.mutations[0].applyConfiguration.expression}')"
-  expected_image="$(sed -n "s/.*image: '\([^']*\)'.*/\1/p" <<< "$image_policy")"
-  patch='{"metadata":{"annotations":{"security.bm-cluster.io/template-hardening":"v1"}}}'
-  # Policy informer caches update asynchronously after kubectl apply.
+  policy="$(kubectl get mutatingadmissionpolicy "bm-$name-security-image" --ignore-not-found -o json)"
+  expected='{}'
+  if [[ -n "$policy" ]]; then
+    expected="$(jq -c '[.spec.mutations[] | .applyConfiguration.expression // empty |
+      scan("name: '\''([^'\'']+)'\'',\\s*image: '\''([^'\'']+)'\''") |
+      {key: .[0], value: .[1]}] | from_entries' <<< "$policy")"
+    if [[ "$expected" == '{}' ]]; then
+      echo "Cannot read images from bm-$name-security-image; refusing an unverified rollout" >&2
+      exit 1
+    fi
+  fi
+  patch='{"metadata":{"annotations":{"security.bm-cluster.io/template-hardening":"v2"}}}'
   ready=false
+  # Policy informer caches update asynchronously after kubectl apply.
   for (( attempt=0; attempt<30; attempt++ )); do
-    preview="$(kubectl patch deployment "$deployment" -n "$namespace" --type=merge \
-      -p "$patch" --dry-run=server \
-      -o 'jsonpath={.spec.template.spec.securityContext.seccompProfile.type}/{.spec.template.spec.containers[0].securityContext.capabilities.drop}')"
-    if [[ "$preview" == 'RuntimeDefault/["ALL"]' ]]; then
-      if [[ -n "$expected_image" ]]; then
-        preview_image="$(kubectl patch deployment "$deployment" -n "$namespace" --type=merge \
-          -p "$patch" --dry-run=server -o "jsonpath={.spec.template.spec.containers[?(@.name==\"$deployment\")].image}")"
-        if [[ "$preview_image" != "$expected_image" ]]; then
-          sleep 1
-          continue
-        fi
-      fi
+    preview="$(kubectl patch "$kind" "$name" -n "$namespace" --type=merge \
+      -p "$patch" --dry-run=server -o json)"
+    if jq -e --argjson expected "$expected" --arg kind "$kind" '
+      .spec.template.spec as $pod |
+      ([$pod.containers[] | {key: .name, value: .image}] | from_entries) as $actual |
+      all($expected | to_entries[]; $actual[.key] == .value) and
+      all($pod.containers[] | select($kind != "daemonset" or
+        .name == "node-driver-registrar" or .name == "longhorn-liveness-probe");
+        ((.securityContext.seccompProfile.type // $pod.securityContext.seccompProfile.type) == "RuntimeDefault") and
+        ((.securityContext.capabilities.drop // []) | index("ALL") != null) and
+        (.securityContext.allowPrivilegeEscalation == false))
+      ' <<< "$preview" >/dev/null; then
       ready=true
       break
     fi
     sleep 1
   done
   if [[ "$ready" != true ]]; then
-    echo "Hardening admission did not mutate $target; refusing an unverified rollout" >&2
+    echo "Admission did not apply the expected images and hardening to $target" >&2
     exit 1
   fi
-  if [[ "$expected_image" == *"/security/$deployment:"* ]]; then
+  if jq -e 'any(.[]; contains("/swirlit/bm-cluster/security/"))' <<< "$expected" >/dev/null; then
     kubectl wait --for=condition=Ready externalsecret/platform-registry-auth \
       -n "$namespace" --timeout=120s
   fi
-  kubectl patch deployment "$deployment" -n "$namespace" --type=merge -p "$patch"
-  kubectl rollout status "deployment/$deployment" -n "$namespace" --timeout=180s
+  kubectl patch "$kind" "$name" -n "$namespace" --type=merge -p "$patch"
+  kubectl rollout status "$kind/$name" -n "$namespace" --timeout=180s
 done

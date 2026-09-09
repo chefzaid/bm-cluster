@@ -1,6 +1,6 @@
 # These controllers generate their own Deployments. Apply security settings to
 # the stored templates, so replacement Pods and Trivy's controller reports agree.
-# Do not match privileged Longhorn engines, instance managers or CSI node plugins.
+# Never change the privileged Longhorn engine, instance-manager or CSI driver containers.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
 metadata:
@@ -336,3 +336,78 @@ metadata:
     argocd.argoproj.io/sync-wave: "-9"
 spec:
   policyName: bm-longhorn-driver-deployer-hardening
+---
+# Only the two socket clients are hardened; the driver retains host mount privileges.
+# Root is required by the existing root-owned CSI and registration sockets.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-csi-sidecar-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [daemonsets]
+  matchConditions:
+    - name: csi-node-sidecars-only
+      expression: >-
+        object.metadata.namespace == 'longhorn-system' &&
+        object.metadata.name == 'longhorn-csi-plugin'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: object.spec.template.spec.containers.filter(c, c.name in ['node-driver-registrar', 'longhorn-liveness-probe']).map(c,
+                    Object.spec.template.spec.containers{
+                      name: c.name,
+                      securityContext: Object.spec.template.spec.containers.securityContext{
+                        privileged: false, runAsUser: 0, runAsGroup: 0,
+                        seccompProfile: Object.spec.template.spec.containers.securityContext.seccompProfile{type: 'RuntimeDefault'},
+                        allowPrivilegeEscalation: false,
+                        readOnlyRootFilesystem: true
+                      },
+                      resources: Object.spec.template.spec.containers.resources{
+                        requests: {
+                          'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '25m',
+                          'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '64Mi'
+                        },
+                        limits: {
+                          'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                          'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '256Mi'
+                        }
+                      }
+                    }
+                  )
+                }
+              }
+            }
+          }
+    # Capabilities are atomic in the Kubernetes schema; use JSON Patch for them.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          object.spec.template.spec.containers.transformList(i, c, c.name in ['node-driver-registrar', 'longhorn-liveness-probe'],
+            JSONPatch{
+              op: 'add', path: '/spec/template/spec/containers/' + string(i) + '/securityContext/capabilities',
+              value: {'drop': ['ALL']}
+            }
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-csi-sidecar-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-longhorn-csi-sidecar-hardening
