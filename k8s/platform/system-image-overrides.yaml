@@ -26,7 +26,6 @@ spec:
             spec: Object.spec{
               template: Object.spec.template{
                 spec: Object.spec.template.spec{
-                  imagePullSecrets: '__SECURITY_IMAGE_PROFILE__' == 'patched' ? [Object.spec.template.spec.imagePullSecrets{name: 'platform-registry-auth'}] : [],
                   containers: [Object.spec.template.spec.containers{
                     name: 'coredns',
                     image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/coredns:1.14.7-20260909.1@sha256:732c2af911d1fd54dcba79c08a498f2e89e3343d862ff1c75119e89ce6469a27'
@@ -35,6 +34,16 @@ spec:
               }
             }
           }
+    # LocalObjectReference entries are atomic; preserve unrelated pull secrets
+    # and write the list with JSON Patch rather than ApplyConfiguration.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{
+            op: 'add', path: '/spec/template/spec/imagePullSecrets',
+            value: (has(object.spec.template.spec.imagePullSecrets) ? object.spec.template.spec.imagePullSecrets.filter(s, s.name != 'platform-registry-auth') : []) +
+              ('__SECURITY_IMAGE_PROFILE__' == 'patched' ? [{'name': 'platform-registry-auth'}] : [])
+          }]
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicyBinding

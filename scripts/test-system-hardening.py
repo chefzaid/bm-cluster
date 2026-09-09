@@ -2,6 +2,7 @@
 """Exercise admission against server-side dry runs; never change workloads."""
 import copy
 import json
+import re
 import subprocess
 import unittest
 
@@ -77,6 +78,23 @@ class SystemHardeningTest(unittest.TestCase):
         for namespace, name in (("longhorn-system", "csi-attacher"), ("kube-system", "metrics-server")):
             before, after = self.preview(namespace, name)
             self.assertEqual(before, after)
+
+    def test_coredns_override_preserves_other_pull_credentials(self):
+        result = subprocess.run([
+            'kubectl', 'get', 'mutatingadmissionpolicy', 'bm-coredns-security-image',
+            '--ignore-not-found', '-o', 'json',
+        ], capture_output=True, text=True, check=True)
+        if not result.stdout.strip():
+            self.skipTest('Platform image override is not installed during bootstrap')
+        policy = json.loads(result.stdout)
+        expected = re.search(r"image: '([^']+)'", policy['spec']['mutations'][0]['applyConfiguration']['expression']).group(1)
+        source = kubectl('get', 'deployment', 'coredns', '-n', 'kube-system', '-o', 'json')
+        spec = copy.deepcopy(source['spec']['template']['spec'])
+        spec['imagePullSecrets'] = [{'name': 'unrelated-dry-run-credential'}]
+        _, actual = self.preview('kube-system', 'coredns', spec=spec)
+        self.assertEqual(actual['containers'][0]['image'], expected)
+        self.assertIn({'name': 'unrelated-dry-run-credential'}, actual['imagePullSecrets'])
+        self.assertEqual({'name': 'platform-registry-auth'} in actual['imagePullSecrets'], '/security/coredns:' in expected)
 
 
 if __name__ == "__main__":
