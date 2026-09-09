@@ -221,6 +221,7 @@
       ansible.builtin.set_fact:
         k8s_dir: "{{ rendered_configuration.path }}/k8s"
         argocd_values_file: "{{ rendered_configuration.path }}/config/argocd-values.yaml"
+        ingress_values_file: "{{ rendered_configuration.path }}/config/ingress-nginx-values.yaml"
         vault_values_file_effective: >-
           {{ (rendered_configuration.path ~ '/config/vault-values.yaml')
              if vault_values_file == (repository_root ~ '/config/vault-values.yaml')
@@ -615,7 +616,7 @@
         helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
         --namespace {{ infra_namespace }}
         --version {{ ingress_nginx_chart_version }}
-        --values {{ repository_root }}/config/ingress-nginx-values.yaml
+        --values {{ ingress_values_file }}
         --set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true
         --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'

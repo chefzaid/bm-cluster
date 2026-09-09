@@ -76,6 +76,24 @@ def render(root, enabled):
         [{"name": "platform-registry-auth"}] if enabled else []
     )
     vault_path.write_text(yaml.safe_dump(vault, sort_keys=False))
+    ingress_path = root / "config/ingress-nginx-values.yaml"
+    ingress = yaml.safe_load(ingress_path.read_text())
+    controller = ingress["controller"]
+    initializer = next(c for c in controller["extraInitContainers"] if c["name"] == "prepare-nginx-dirs")
+    image = initializer["image"] if enabled else catalog["upstreams"]["ingress-nginx"]
+    initializer["image"] = image
+    repository, version = image_parts(image)
+    tag, _, digest = version.partition("@")
+    # Null out the chart's registry/image defaults when using a full repository.
+    controller["image"] = {"registry": None, "image": None, "repository": repository,
+                           "tag": tag, "digest": digest}
+    ingress["imagePullSecrets"] = [{"name": "platform-registry-auth"}] if enabled else []
+    # The public image has file capabilities on NGINX/dumb-init. The rebuild
+    # removes them; both profiles use the same non-root, read-only directories.
+    controller["containerSecurityContext"]["capabilities"] = {
+        "drop": ["ALL"], "add": [] if enabled else ["NET_BIND_SERVICE"],
+    }
+    ingress_path.write_text(yaml.safe_dump(ingress, sort_keys=False))
     print(f"[INFO] Security image profile: {profile}", file=sys.stderr)
 
 

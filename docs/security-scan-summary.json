@@ -558,7 +558,7 @@
         }
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.1@sha256:52606b8bbad3e41b6b9209c3bcc4d8c0a000fe799e029de427a7e98791ef5df0",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3",
         "vulnerabilities": {
           "CRITICAL": 0,
           "HIGH": 0,

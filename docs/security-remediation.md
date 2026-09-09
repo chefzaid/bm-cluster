@@ -103,6 +103,22 @@ retain root to access the existing root-owned Unix sockets. The main CSI driver,
 its host mounts and mount propagation remain intact. This follows the registrar's
 [documented socket permissions](https://github.com/kubernetes-csi/node-driver-registrar/blob/v2.17.0/README.md).
 
+Ingress also uses UID/GID 10001, a read-only root filesystem, RuntimeDefault
+seccomp and no capabilities in the patched profile. A restricted init container
+copies the shipped NGINX configuration and directory structure into writable
+volumes. Its image follows the controller digest, including Argo profile changes.
+The rebuilt image removes inherited file capabilities from NGINX and `dumb-init`.
+The public bootstrap image requires `NET_BIND_SERVICE` for those executables;
+bootstrap rendering retains that capability. Both profiles passed an isolated
+HTTPS/redirect test with the same directories and UID.
+
+The shared renderer now produces `config/ingress-nginx-values.yaml` for both
+`install-control-plane.sh` and `ansible/deploy.yml`. Container listeners use
+8080/8444; the public LoadBalancer Service retains 80/443 and the admission
+webhook retains 8443. Apply the rendered values in an ingress Helm upgrade when
+reconciling an existing cluster; the platform image policy keeps both controller
+and initializer pins consistent afterward.
+
 Build recipes pin each source commit and record its actual release tag in Go
 build metadata. Ingress uses the upstream `controller-v1.15.1` release; a local
 `v1.15.1` tag at that same commit lets Go record its version accurately. This is

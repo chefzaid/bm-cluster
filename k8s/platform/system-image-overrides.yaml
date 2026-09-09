@@ -535,12 +535,24 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'controller',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.1@sha256:52606b8bbad3e41b6b9209c3bcc4d8c0a000fe799e029de427a7e98791ef5df0'
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
                   }]
                 }
               }
             }
           }
+    # Helm owns the optional init container. Keep its copy source on the same
+    # profile and digest when the Argo profile changes independently of Helm.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          has(object.spec.template.spec.initContainers) ?
+            object.spec.template.spec.initContainers.transformList(i, c, c.name == 'prepare-nginx-dirs',
+              JSONPatch{
+                op: 'replace', path: '/spec/template/spec/initContainers/' + string(i) + '/image',
+                value: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
+              }
+            ) : []
     # LocalObjectReference entries are atomic; preserve unrelated pull secrets
     # and write the list with JSON Patch rather than ApplyConfiguration.
     - patchType: JSONPatch

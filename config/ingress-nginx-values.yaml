@@ -1,8 +1,11 @@
+# The shared renderer selects matching controller/init images and pull credentials.
+# Service ports stay 80/443; only container listeners move above port 1024.
 controller:
   podSecurityContext:
     runAsNonRoot: true
-    runAsUser: 101
-    runAsGroup: 82
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
     seccompProfile:
       type: RuntimeDefault
   resources:
@@ -29,3 +32,80 @@ controller:
         limits:
           cpu: 100m
           memory: 64Mi
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+      - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  containerPort:
+    http: 8080
+    https: 8444
+  extraArgs:
+    http-port: '8080'
+    https-port: '8444'
+  extraVolumes:
+  - name: nginx-config
+    emptyDir: {}
+  - name: ingress-runtime
+    emptyDir: {}
+  - name: nginx-lib
+    emptyDir: {}
+  - name: nginx-log
+    emptyDir: {}
+  - name: nginx-tmp
+    emptyDir: {}
+  extraVolumeMounts:
+  - name: nginx-config
+    mountPath: /etc/nginx
+  - name: ingress-runtime
+    mountPath: /etc/ingress-controller
+  - name: nginx-lib
+    mountPath: /var/lib/nginx
+  - name: nginx-log
+    mountPath: /var/log/nginx
+  - name: nginx-tmp
+    mountPath: /tmp
+  extraInitContainers:
+  - name: prepare-nginx-dirs
+    image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3
+    command:
+    - /bin/sh
+    - -ec
+    - |
+      cp -R /etc/nginx/. /config/
+      cp -R /etc/ingress-controller/. /ingress/
+      cp -R /var/lib/nginx/. /nginx-lib/
+      cp -R /tmp/. /nginx-tmp/
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+    volumeMounts:
+    - name: nginx-config
+      mountPath: /config
+    - name: ingress-runtime
+      mountPath: /ingress
+    - name: nginx-lib
+      mountPath: /nginx-lib
+    - name: nginx-tmp
+      mountPath: /nginx-tmp

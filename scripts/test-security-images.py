@@ -83,6 +83,18 @@ class SecurityImagesTest(unittest.TestCase):
                 vault = yaml.safe_load((root / 'config/vault-values.yaml').read_text())
                 self.assertEqual(vault['server']['image']['repository'].startswith('registry.'), enabled)
                 self.assertEqual(bool(vault['global']['imagePullSecrets']), enabled)
+                ingress = yaml.safe_load((root / 'config/ingress-nginx-values.yaml').read_text())
+                controller = ingress['controller']
+                selected = controller['image']
+                image = selected['repository'] + ':' + selected['tag'] + '@' + selected['digest']
+                initializer = next(c for c in controller['extraInitContainers'] if c['name'] == 'prepare-nginx-dirs')
+                self.assertEqual(initializer['image'], image)
+                self.assertEqual(image.startswith('registry.example.test/'), enabled)
+                self.assertEqual(bool(ingress['imagePullSecrets']), enabled)
+                self.assertTrue(controller['containerSecurityContext']['readOnlyRootFilesystem'])
+                self.assertEqual(controller['containerPort'], {'http': 8080, 'https': 8444})
+                self.assertEqual(controller['containerSecurityContext']['capabilities']['add'],
+                                 [] if enabled else ['NET_BIND_SERVICE'])
                 app = yaml.safe_load((root / 'k8s/addons/bm-cluster-application.yaml').read_text())
                 profile = 'patched' if enabled else 'bootstrap'
                 self.assertEqual(app['spec']['source']['helm']['valueFiles'], [f'profiles/security-images-{profile}.values'])

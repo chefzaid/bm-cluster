@@ -51,6 +51,7 @@ K8S_DIR="$K8S_TEMPLATE_DIR"
 ARGOCD_VALUES_FILE="$SCRIPT_DIR/config/argocd-values.yaml"
 RENDER_CONFIG_SCRIPT="$SCRIPT_DIR/scripts/render-cluster-config.sh"
 VAULT_VALUES_FILE="$SCRIPT_DIR/config/vault-values.yaml"
+INGRESS_VALUES_FILE="$SCRIPT_DIR/config/ingress-nginx-values.yaml"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
@@ -346,6 +347,7 @@ prepare_rendered_configuration() {
     K8S_DIR="$RENDERED_CONFIG_DIR/k8s"
     ARGOCD_VALUES_FILE="$RENDERED_CONFIG_DIR/config/argocd-values.yaml"
     VAULT_VALUES_FILE="$RENDERED_CONFIG_DIR/config/vault-values.yaml"
+    INGRESS_VALUES_FILE="$RENDERED_CONFIG_DIR/config/ingress-nginx-values.yaml"
 }
 
 validate_local_admin_password() {
@@ -1118,7 +1120,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
             --namespace infra \
             --version "$INGRESS_NGINX_CHART_VERSION" \
-            --values "$SCRIPT_DIR/config/ingress-nginx-values.yaml" \
+            --values "$INGRESS_VALUES_FILE" \
             --set controller.service.type=LoadBalancer \
             --set controller.service.enableHttp=true \
             --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \

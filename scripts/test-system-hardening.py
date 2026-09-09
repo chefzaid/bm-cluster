@@ -146,10 +146,16 @@ class SystemHardeningTest(unittest.TestCase):
                 for container in spec['containers']:
                     if container['name'] in expected:
                         container['image'] = 'docker.io/library/busybox:unpulled-dry-run'
+                for container in spec.get('initContainers', []):
+                    if name == 'ingress-nginx-controller' and container['name'] == 'prepare-nginx-dirs':
+                        container['image'] = 'docker.io/library/busybox:unpulled-dry-run'
                 _, actual = self.preview(namespace, name, kind, spec)
                 images = {c['name']: c['image'] for c in actual['containers']}
                 for container, image in expected.items():
                     self.assertEqual(images[container], image)
+                for container in actual.get('initContainers', []):
+                    if name == 'ingress-nginx-controller' and container['name'] == 'prepare-nginx-dirs':
+                        self.assertEqual(container['image'], expected['controller'])
                 self.assertIn({'name': 'unrelated-dry-run-credential'}, actual['imagePullSecrets'])
 
     def test_reapplying_policies_is_idempotent(self):

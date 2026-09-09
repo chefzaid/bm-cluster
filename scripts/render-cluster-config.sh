@@ -53,6 +53,7 @@ install -d -m 0700 "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config"
 cp -a "$REPOSITORY_ROOT/k8s/." "$OUTPUT_DIR/k8s/"
 install -m 0600 "$REPOSITORY_ROOT/config/argocd-values.yaml" "$OUTPUT_DIR/config/argocd-values.yaml"
 install -m 0600 "$REPOSITORY_ROOT/config/vault-values.yaml" "$OUTPUT_DIR/config/vault-values.yaml"
+install -m 0600 "$REPOSITORY_ROOT/config/ingress-nginx-values.yaml" "$OUTPUT_DIR/config/ingress-nginx-values.yaml"
 python3 "$SCRIPT_DIR/render-security-images.py" --root "$OUTPUT_DIR" \
   --domain "$PLATFORM_DOMAIN" --enabled "${SECURITY_IMAGES_ENABLED:-auto}"
 

@@ -13,7 +13,13 @@ RUN go test -p 2 ./internal/ingress/annotations/... ./internal/ingress/controlle
     && go build -p 2 -trimpath -ldflags="-s -w -X k8s.io/ingress-nginx/version.RELEASE=v1.15.1 -X k8s.io/ingress-nginx/version.COMMIT=0a5901f3c64f11e92e487799b8da3f00cca37515 -X k8s.io/ingress-nginx/version.REPO=https://github.com/kubernetes/ingress-nginx" -o /out/wait-shutdown ./cmd/waitshutdown
 FROM registry.k8s.io/ingress-nginx/controller@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1
 USER root
-RUN apk upgrade --no-cache
+# Recreate NGINX and dumb-init without upstream file capabilities; unprivileged ports
+# allow the controller to run with an empty capability bounding set.
+RUN apk upgrade --no-cache \
+    && for binary in /usr/bin/dumb-init /usr/local/nginx/sbin/nginx; do \
+         cp "$binary" /tmp/bm-executable && chmod 0755 /tmp/bm-executable \
+         && mv /tmp/bm-executable "$binary" || exit 1; \
+       done
 COPY --from=build /out/nginx-ingress-controller /nginx-ingress-controller
 COPY --from=build /out/dbg /dbg
 COPY --from=build /out/wait-shutdown /wait-shutdown
