@@ -38,6 +38,23 @@ def images(documents):
 
 
 class SecurityImagesTest(unittest.TestCase):
+    def assert_private_image_credentials(self, documents):
+        def visit(value):
+            if isinstance(value, dict):
+                containers = value.get('containers', []) + value.get('initContainers', [])
+                private = [c['image'] for c in containers if isinstance(c, dict)
+                           and c.get('image', '').startswith('registry.example.test/')]
+                if private:
+                    secrets = {s['name'] for s in value.get('imagePullSecrets', [])}
+                    self.assertIn('platform-registry-auth', secrets,
+                                  f'Private images lack registry credentials: {private}')
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        visit(documents)
+
     def test_existing_cluster_preserves_profile(self):
         for profile, expected in [(None, True), ('patched', True), ('bootstrap', False)]:
             helm = {'parameters': [{'name': 'publicDomain', 'value': 'example.test'}]}
@@ -80,6 +97,7 @@ class SecurityImagesTest(unittest.TestCase):
                     if 'templates' not in path.parts:
                         documents.extend(yaml.safe_load_all(path.read_text()))
                 refs = images(documents)
+                self.assert_private_image_credentials(documents)
                 self.assertTrue(refs)
                 private = [ref for ref in refs if 'registry.example.test/' in ref]
                 self.assertEqual(bool(private), enabled)
@@ -133,6 +151,7 @@ class SecurityImagesTest(unittest.TestCase):
                 ], capture_output=True, text=True, check=True)
                 self.assertNotIn('__SECURITY_', result.stdout)
                 documents = list(yaml.safe_load_all(result.stdout))
+                self.assert_private_image_credentials(documents)
                 resources = {document.get('kind', '') + '/' + document.get('metadata', {}).get('name', ''): document for document in documents if document}
                 self.assert_sonar_permissions(resources['Deployment/sonarqube'], enabled)
                 cache = resources['DaemonSet/gitlab-image-cache']
