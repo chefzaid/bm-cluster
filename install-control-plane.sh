@@ -1063,6 +1063,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         kubectl apply -f "$K8S_DIR/$manifest"
     done
     kubectl apply -f "$K8S_DIR/base/security-baseline.yaml"
+    "$SCRIPT_DIR/scripts/reconcile-system-hardening.sh"
 
     step "Publishing host security policy record..."
     kubectl apply -f "$K8S_DIR/base/host-security-config.yaml"
@@ -1214,6 +1215,7 @@ EOF
         for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"
         done
+        "$SCRIPT_DIR/scripts/reconcile-system-hardening.sh"
         kubectl delete role/bm-cluster-gitops-read rolebinding/bm-cluster-gitops-read \
             -n infra --ignore-not-found >/dev/null
 

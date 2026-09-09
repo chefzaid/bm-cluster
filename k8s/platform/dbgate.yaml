@@ -56,7 +56,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: dbgate
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dbgate:7.2.6-20260908.5@sha256:33d7b58f860e92e691797f561c66cd1348e28c7d8579c16e81b2af8100e2bbde
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dbgate:7.2.6-20260909.1@sha256:da9f268f47aa4f9e76807f25425cc749f6aac651a0052adc4a537b00cfd45aba
           ports:
             - containerPort: 3000
           env:

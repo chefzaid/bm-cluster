@@ -57,3 +57,64 @@ spec:
       remoteRef:
         key: infra/gitlab
         property: registry_pull_token
+
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: platform-registry-auth
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: platform-registry-auth
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {"auths":{"registry.__PUBLIC_DOMAIN__":{"username":"{{ .username }}","password":"{{ .token }}","auth":"{{ printf "%s:%s" .username .token | b64enc }}"}}}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: infra/gitlab
+        property: registry_pull_username
+    - secretKey: token
+      remoteRef:
+        key: infra/gitlab
+        property: registry_pull_token
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: platform-registry-auth
+  namespace: longhorn-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  refreshInterval: 15m
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: platform-registry-auth
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: >-
+          {"auths":{"registry.__PUBLIC_DOMAIN__":{"username":"{{ .username }}","password":"{{ .token }}","auth":"{{ printf "%s:%s" .username .token | b64enc }}"}}}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: infra/gitlab
+        property: registry_pull_username
+    - secretKey: token
+      remoteRef:
+        key: infra/gitlab
+        property: registry_pull_token

@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -25,6 +26,8 @@ def images(documents):
                 found.append(value['image'])
             for child in value.values():
                 visit(child)
+            if isinstance(value.get('expression'), str):
+                found.extend(re.findall(r'''\bimage:\s*['"]([^'"]+)['"]''', value['expression']))
         elif isinstance(value, list):
             for child in value:
                 visit(child)

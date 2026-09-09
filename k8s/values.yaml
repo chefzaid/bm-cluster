@@ -26,6 +26,8 @@ trivy-operator:
       apps: devapp-registry-auth,indezy-registry-auth,thoughty-registry-auth,website-registry-auth,platform-registry-auth
       infra: platform-registry-auth
       gitlab-runners: platform-registry-auth
+      kube-system: platform-registry-auth
+      longhorn-system: platform-registry-auth
     metricsFindingsEnabled: true
     metricsVulnIdEnabled: true
     metricsExposedSecretInfo: true

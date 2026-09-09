@@ -449,11 +449,14 @@
         PLATFORM_DOMAIN: "{{ platform_domain }}"
         K3S_REGISTRY_HOST: "registry.{{ platform_domain }}"
 
-    - name: Configure cluster-only internal service aliases
+    - name: Configure cluster-only internal service aliases and system admission policies
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
       loop: "{{ foundation_manifests }}"
       register: foundation_apply
       changed_when: "'created' in foundation_apply.stdout or 'configured' in foundation_apply.stdout"
+
+    - name: Reconcile security settings on existing system controllers
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-system-hardening.sh"
 
     - name: Keep public load balancers on the bootstrap control plane
       ansible.builtin.command:
@@ -729,6 +732,10 @@
       loop: "{{ platform_manifests }}"
       register: platform_apply
       changed_when: "'created' in platform_apply.stdout or 'configured' in platform_apply.stdout"
+      when: platform_services_enabled
+
+    - name: Reconcile system security image overrides after registry credentials
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-system-hardening.sh"
       when: platform_services_enabled
 
     - name: Reconcile superseded RBAC, jobs, and unmounted legacy storage

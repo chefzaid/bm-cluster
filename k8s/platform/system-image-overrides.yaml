@@ -1,0 +1,46 @@
+# Install after ESO and registry credentials, unlike the bootstrap hardening
+# policies. The renderer substitutes a public image for fresh installations.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-coredns-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: coredns-only
+      expression: object.metadata.namespace == 'kube-system' && object.metadata.name == 'coredns'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  imagePullSecrets: '__SECURITY_IMAGE_PROFILE__' == 'patched' ? [Object.spec.template.spec.imagePullSecrets{name: 'platform-registry-auth'}] : [],
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'coredns',
+                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/coredns:1.14.7-20260909.1@sha256:732c2af911d1fd54dcba79c08a498f2e89e3343d862ff1c75119e89ce6469a27'
+                  }]
+                }
+              }
+            }
+          }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-coredns-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  policyName: bm-coredns-security-image

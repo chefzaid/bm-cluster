@@ -13,7 +13,10 @@
     "dashboard-sidecar": "ghcr.io/kiwigrid/k8s-sidecar:2.11.2@sha256:2912be006f62f9ea080194cf6d3afcd90daead8d101d0ba686a137a849f6a4f6",
     "vault": "docker.io/hashicorp/vault:2.0.4@sha256:5be49781ecf78bfe775c5309c6a4d9f4e9e040b6c885c99eb2b12fb69855e1a2",
     "gitlab": "docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f",
-    "oauth2-proxy": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded"
+    "oauth2-proxy": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
+    "alertmanager": "quay.io/prometheus/alertmanager@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d",
+    "node-exporter": "quay.io/prometheus/node-exporter@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798",
+    "coredns": "docker.io/coredns/coredns:1.14.7@sha256:7efd3c635b03efd68c4e8398fc45f0d993d0e9ab016f72c1cefb0fd6d01aa286"
   },
   "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e"
 }

@@ -580,14 +580,42 @@ else
 fi
 
 info "Checking Kubernetes workload policy"
-image_failed=false
-while read -r location image; do
-    if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
-        printf 'Unpinned workload image at %s: %s\n' "$location" "$image" >&2
-        image_failed=true
-    fi
-done < <(awk '$1 == "image:" {print FILENAME ":" FNR, $2}' "${kubernetes_manifests[@]}")
-if [[ "$image_failed" == "true" ]]; then
+if ! python3 - "${kubernetes_manifests[@]}" <<'PY'
+import re
+import sys
+import yaml
+
+failed = False
+
+def check(image, location):
+    global failed
+    if not re.search(r'@sha256:[0-9a-f]{64}$', image):
+        print(f'Unpinned workload image at {location}: {image}', file=sys.stderr)
+        failed = True
+
+def visit(value, location):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == 'image' and isinstance(child, str):
+                check(child, location)
+            elif key == 'expression' and isinstance(child, str):
+                # Static image assignments inside CEL are strings within YAML.
+                # Dynamic normalization (e.g. adding docker.io) preserves the
+                # input digest and is exercised by admission dry-run tests.
+                for image in re.findall(r'''\bimage:\s*['"]([^'"]+)['"]''', child):
+                    check(image, location)
+            visit(child, location)
+    elif isinstance(value, list):
+        for child in value:
+            visit(child, location)
+
+for filename in sys.argv[1:]:
+    with open(filename, encoding='utf-8') as stream:
+        for document in yaml.safe_load_all(stream):
+            visit(document, filename)
+sys.exit(int(failed))
+PY
+then
     fail "every manifest image is immutable by digest"
 else
     pass "every manifest image is immutable by digest"
@@ -739,6 +767,13 @@ if [[ "$LIVE_VALIDATION" == "true" ]]; then
             fail "all manifests pass Kubernetes server-side dry-run"
         else
             pass "all manifests pass Kubernetes server-side dry-run"
+        fi
+        if kubectl get mutatingadmissionpolicy bm-k3s-stateless-controller-hardening >/dev/null 2>&1; then
+            if python3 "$SCRIPT_DIR/test-system-hardening.py"; then
+                pass "system admission preserves storage access and hardens controller templates"
+            else
+                fail "system admission preserves storage access and hardens controller templates"
+            fi
         fi
     fi
 fi

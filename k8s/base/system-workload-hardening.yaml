@@ -1,0 +1,160 @@
+# These controllers generate their own Deployments. Apply security settings to
+# the stored templates, so replacement Pods and Trivy's controller reports agree.
+# Do not match privileged Longhorn engines, instance managers or CSI node plugins.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-csi-controller-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: tested-csi-controllers
+      expression: >-
+        object.metadata.namespace == 'longhorn-system' &&
+        object.metadata.name in ['csi-attacher', 'csi-provisioner', 'csi-resizer', 'csi-snapshotter']
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  securityContext: Object.spec.template.spec.securityContext{
+                    seccompProfile: Object.spec.template.spec.securityContext.seccompProfile{type: 'RuntimeDefault'}
+                  },
+                  containers: object.spec.template.spec.containers.map(c,
+                    Object.spec.template.spec.containers{
+                      name: c.name,
+                      securityContext: Object.spec.template.spec.containers.securityContext{
+                        allowPrivilegeEscalation: false,
+                        readOnlyRootFilesystem: true
+                      },
+                      resources: Object.spec.template.spec.containers.resources{
+                        requests: {
+                          'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '25m',
+                          'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '64Mi'
+                        },
+                        limits: {
+                          'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                          'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '256Mi'
+                        }
+                      }
+                    }
+                  )
+                }
+              }
+            }
+          }
+    # Capabilities are atomic in the Kubernetes schema; use JSON Patch for them.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          object.spec.template.spec.containers.transformList(i, c,
+            JSONPatch{
+              op: 'add', path: '/spec/template/spec/containers/' + string(i) + '/securityContext/capabilities',
+              value: {'drop': ['ALL']}
+            }
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-csi-controller-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-longhorn-csi-controller-hardening
+---
+# K3s reconciles these manifests on restart. Admission preserves the hardening
+# without editing files managed by K3s or moving system services to another namespace.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-k3s-stateless-controller-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: tested-stateless-system-controllers
+      expression: >-
+        object.metadata.namespace == 'kube-system' &&
+        object.metadata.name in ['coredns', 'metrics-server', 'local-path-provisioner']
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  securityContext: Object.spec.template.spec.securityContext{
+                    runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, fsGroup: 65534,
+                    seccompProfile: Object.spec.template.spec.securityContext.seccompProfile{type: 'RuntimeDefault'}
+                  },
+                  volumes: [Object.spec.template.spec.volumes{
+                    name: 'bm-security-tmp', emptyDir: Object.spec.template.spec.volumes.emptyDir{}
+                  }],
+                  containers: object.spec.template.spec.containers.map(c,
+                    Object.spec.template.spec.containers{
+                      name: c.name,
+                      image: c.image.startsWith('rancher/') ? 'docker.io/' + c.image : c.image,
+                      securityContext: Object.spec.template.spec.containers.securityContext{
+                        runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534,
+                        allowPrivilegeEscalation: false, readOnlyRootFilesystem: true
+                      },
+                      volumeMounts: [Object.spec.template.spec.containers.volumeMounts{
+                        name: 'bm-security-tmp', mountPath: '/tmp'
+                      }],
+                      resources: Object.spec.template.spec.containers.resources{
+                        requests: {
+                          'cpu': has(c.resources) && has(c.resources.requests) && 'cpu' in c.resources.requests ? c.resources.requests['cpu'] : '50m',
+                          'memory': has(c.resources) && has(c.resources.requests) && 'memory' in c.resources.requests ? c.resources.requests['memory'] : '64Mi'
+                        },
+                        limits: {
+                          'cpu': has(c.resources) && has(c.resources.limits) && 'cpu' in c.resources.limits ? c.resources.limits['cpu'] : '500m',
+                          'memory': has(c.resources) && has(c.resources.limits) && 'memory' in c.resources.limits ? c.resources.limits['memory'] : '256Mi'
+                        }
+                      }
+                    }
+                  )
+                }
+              }
+            }
+          }
+    # Capabilities are atomic in the Kubernetes schema; use JSON Patch for them.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          object.spec.template.spec.containers.transformList(i, c,
+            JSONPatch{
+              op: 'add', path: '/spec/template/spec/containers/' + string(i) + '/securityContext/capabilities',
+              value: {'drop': ['ALL'], 'add': object.metadata.name == 'coredns' ? ['NET_BIND_SERVICE'] : []}
+            }
+          )
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-k3s-stateless-controller-hardening
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-k3s-stateless-controller-hardening

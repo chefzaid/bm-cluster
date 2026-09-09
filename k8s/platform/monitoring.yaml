@@ -246,6 +246,8 @@ spec:
       labels:
         app: node-exporter
     spec:
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: false
       hostNetwork: true
       hostPID: true
@@ -259,7 +261,7 @@ spec:
         - operator: Exists
       containers:
         - name: node-exporter
-          image: quay.io/prometheus/node-exporter@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node-exporter:1.12.1-20260909.1@sha256:6d0cf54044cef67aacd72e3be714b95562a1309552b95315dd39d48b69bce385
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -571,6 +573,8 @@ spec:
       labels:
         app: alertmanager
     spec:
+      imagePullSecrets:
+        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -580,7 +584,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: alertmanager
-          image: quay.io/prometheus/alertmanager@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/alertmanager:0.34.0-20260909.1@sha256:d0504d167a9332351ea6e3a06da6f708478eec91a754c6cd57bbe864c18d2e8c
           args:
             - --config.file=/etc/alertmanager/alertmanager.yml
             - --storage.path=/alertmanager
