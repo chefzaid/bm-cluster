@@ -22,10 +22,10 @@ if [[ -n "${KANIKO_EXECUTOR:-}" ]]; then
     --destination "$image" --cache=false --cleanup \
     --insecure-registry "$REGISTRY_PUSH_HOST" --digest-file "$output/digest.txt"
 else
-  # Omnibus includes Prometheus's large provider SDKs; its serialized Go build
-  # needs 3 GiB. Keep other image builds at their existing limit.
+  # Prometheus's large provider SDKs (also bundled in Omnibus) need 3 GiB for
+  # the serialized Go build. Keep other image builds at their existing limit.
   build_memory=2g
-  [[ "$component" != gitlab ]] || build_memory=3g
+  case "$component" in gitlab|prometheus) build_memory=3g ;; esac
   DOCKER_BUILDKIT=0 docker build --pull --no-cache --memory="$build_memory" --memory-swap="$build_memory" --cpu-quota=100000 \
     -f "$root/images/security/$component.Dockerfile" -t "$image" "$root/images/security"
 fi

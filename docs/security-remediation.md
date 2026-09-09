@@ -208,6 +208,38 @@ to report zero. In particular, Trivy can confuse VS Code extension manifests
 with npm packages, as described in the
 [upstream report](https://github.com/aquasecurity/trivy/discussions/6112).
 
+### Prometheus runtime
+
+The standalone Prometheus image retains **3.14.0**, its official UI and its
+storage format. Rebuilding Prometheus and promtool with Go 1.26.7 and compatible
+dependency updates reduces 14 findings (2 Critical, 4 High, 2 Medium and
+6 Unknown) to **two Unknown module advisories**, with zero exposed secrets.
+The remaining reports identify the unpatched parent `x/crypto` module advisory.
+
+`images/security/prometheus.Dockerfile` pins the source commit, upstream image,
+Go builder and official UI archive checksum. Updates include gRPC 1.83.2,
+`x/crypto`, `x/net`, `x/text` and the Moby client. The build verifies 47 source
+packages covering configuration, models, discovery, web APIs and scraping.
+Run source tests inside the build container: the Triton no-server fixture
+assumes localhost port 443 is unused, which is false on the cluster host.
+
+The integration test uses UID/GID 65534, dropped capabilities and a read-only
+root, matching the deployment. It writes samples with the previous image,
+starts the candidate with that same disposable volume, verifies historical
+queries, scraping, PromQL, UI assets and configuration reload, then checks
+the saved samples again after restart:
+
+```bash
+scripts/build-security-image.sh prometheus prometheus-security:review
+python3 scripts/test-prometheus-image.py prometheus-security:review \
+  --previous-image <current-image-digest> \
+  --logs /path/to/private/prometheus-test-logs
+```
+
+The test binds only to loopback and removes its containers and volume on exit.
+After rollout, verify readiness, active scrape targets, query results and the
+new digest's vulnerability, secret and configuration reports.
+
 ### GitLab Runner and job helpers
 
 The 19.3.1 Runner rebuild uses the supported Alpine distribution, Go 1.26.7

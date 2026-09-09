@@ -687,6 +687,31 @@
         },
         "secrets": 0
       }
+    },
+    {
+      "component": "prometheus",
+      "before": {
+        "image": "docker.io/prom/prometheus@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9",
+        "vulnerabilities": {
+          "CRITICAL": 2,
+          "HIGH": 4,
+          "MEDIUM": 2,
+          "LOW": 0,
+          "UNKNOWN": 6
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/prometheus:3.14.0-20260909.1@sha256:a20ea87cbe25893d8eeeb1962ee51135177b5282fe16e0ef02e91efd53b719ad",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 2
+        },
+        "secrets": 0
+      }
     }
   ],
   "applicationRuntimeImages": [

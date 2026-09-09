@@ -32,7 +32,8 @@
     "ingress-nginx": "registry.k8s.io/ingress-nginx/controller:v1.15.1@sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1",
     "gitlab-runner": "docker.io/gitlab/gitlab-runner:alpine-v19.3.1@sha256:af0325804248aee217e055e753add77ccaaba6c8f5e2143b01108fd401165ef3",
     "gitlab-runner-helper": "registry.gitlab.com/gitlab-org/gitlab-runner/gitlab-runner-helper:x86_64-v19.3.1@sha256:ce41f9ba0465950d1c7e290e38e33ea9064385b4015ba4fa4b12b318a6242682",
-    "sonarqube": "docker.io/library/sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70"
+    "sonarqube": "docker.io/library/sonarqube@sha256:68b6c1924482d0483514b229019718293e421fff1e994d23eb56f3226d11ab70",
+    "prometheus": "docker.io/prom/prometheus@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9"
   },
   "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e"
 }
