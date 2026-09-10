@@ -156,8 +156,14 @@ invalid configuration is reported per repository; the imported source remains
 synchronized. See [repository replication](docs/repository-replication.md) for
 the complete flow, supported files, permissions, prerequisites, and automation.
 
-GitLab stores private OCI images at `registry.<your-domain>`. Application
-pipelines retain downloadable build, test, coverage, browser, and quality
+GitLab stores private OCI images at `registry.<your-domain>`. Its 40 GiB
+`gitlab-data` volume holds repositories, the registry, packages and CI artifacts.
+Both installation paths and Argo CD use the same PVC manifest. Existing
+Longhorn installations expand the PVC online; the host must have sufficient
+free space to pass Longhorn's capacity checks. Keep registry and artifact
+retention enabled because expansion does not reclaim old data.
+
+Application pipelines retain downloadable build, test, coverage, browser, and quality
 artifacts for seven days and publish
 immutable release outputs through each project's Generic Package Registry:
 DevApp publishes two JARs and its SPA archive, Thoughty publishes server and web

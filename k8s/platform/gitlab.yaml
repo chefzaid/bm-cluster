@@ -127,7 +127,8 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 20Gi
+      # Repositories, packages, CI artifacts and image uploads share this volume.
+      storage: 40Gi
 
 ---
 apiVersion: apps/v1
