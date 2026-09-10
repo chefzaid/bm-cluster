@@ -11,16 +11,25 @@ environment.
 ## Topology
 
 ```mermaid
-flowchart LR
-    Client[Browser or API client] --> CF[Cloudflare DNS and edge TLS]
-    subgraph Cluster[K3s cluster]
-        Ingress[NGINX ingress on the first control plane]
-        Services[Services in infra, apps, and corp]
-        Data[Internal databases, caches, and messaging]
-        Storage[Longhorn persistent volumes]
-        Ingress --> Services
-        Services --> Data
-        Services --> Storage
+flowchart TB
+    accTitle: Cluster architecture and application ownership
+    accDescr: Public traffic enters through Cloudflare and the first control plane. Application and platform services use internal data services and persistent storage.
+    Client["Browser or API client"] --> CF["Cloudflare<br/>DNS, edge TLS, and Access for admin UIs"]
+    subgraph Cluster["K3s cluster"]
+        Ingress["NGINX ingress<br/>First control plane"]
+        Apps["apps<br/>DevApp, Thoughty, Indezy, Website"]
+        Corp["corp<br/>Odoo"]
+        Platform["infra<br/>Delivery, identity, and observability services"]
+        Data["infra: internal data services<br/>PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch"]
+        Storage["Longhorn<br/>Persistent volumes"]
+        Ingress --> Apps
+        Ingress --> Corp
+        Ingress --> Platform
+        Apps --> Data
+        Corp --> Data
+        Platform --> Data
+        Corp -->|filestore| Storage
+        Platform -->|persistent service data| Storage
         Data --> Storage
     end
     CF --> Ingress
@@ -45,6 +54,10 @@ Vault supplies credentials through External Secrets. Argo CD reconciles desired
 state from GitLab. PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch, and
 Prometheus remain internal services. [Networking](docs/networking.md) explains
 private transport, service DNS, and public exposure.
+
+See the [node topology](docs/networking.md#node-topology) and
+[application and platform CI/CD flows](docs/delivery.md#pipelines-and-outputs)
+for the deployment view.
 
 ## Services and URLs
 

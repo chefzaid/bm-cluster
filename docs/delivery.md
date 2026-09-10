@@ -38,23 +38,62 @@ for permissions, deployment checks and unattended inputs.
 
 ## Pipelines and outputs
 
-The infrastructure pipeline validates the repository. On the default branch it
-also checks that Argo CD has reconciled the same commit, verifies delivery
-services and performs a Registry push/read check. Argo CD tracks Git independently;
-these CI checks report reconciliation health rather than gate its initial sync.
+### Application delivery
 
-Application pipelines own their required build/release path and optional quality
-checks. DevApp, Thoughty and Indezy publish versioned binaries and frontend
-archives with `SHA256SUMS` in **Deploy > Package Registry**. Their test, coverage,
-browser and quality artifacts are downloadable from CI jobs. Website builds and
-publishes its runtime image through its own verify/image/release pipeline.
-Exact jobs, failure policies and artifact lifetimes belong in each app's
-`.gitlab-ci.yml` and deployment/code-quality documentation.
+```mermaid
+flowchart TB
+    accTitle: Application CI and GitOps delivery
+    accDescr: App CI publishes outputs and commits image selection to Git; app-owned Argo Applications reconcile workloads and CI verifies rollout.
+    GitHub["GitHub repository (optional)"] <-->|"Sync workflow and webhooks"| GitLab["App repository in GitLab"]
+    GitLab --> Runner["Kubernetes runner jobs<br/>gitlab-runners namespace"]
+    Runner --> Build["Required build and package checks<br/>Website tests included"]
+    Build -.-> Reports["App tests / coverage and Sonar<br/>optional E2E / security reports"]
+    Build --> Publish["Publish release<br/>according to app CI rules"]
+    Publish --> Images["Container Registry<br/>runtime images"]
+    Publish --> Packages["Package Registry<br/>binaries, frontend archives, SHA256SUMS<br/>DevApp / Thoughty / Indezy"]
+    Publish --> Commit["Commit Kustomization; push main<br/>apply and refresh Application"]
+    GitLab -->|"Tracks app-owned desired state"| Argo["App-owned Argo CD Application<br/>infra namespace"]
+    Commit --> Argo
+    Argo -->|"Automatic sync"| Apps["Application workloads<br/>apps namespace"]
+    Images -->|"Kubelet pulls images"| Apps
+    Apps -.-> Verify["CI waits for the exact Git revision<br/>Synced / Healthy and smoke checks"]
+    Argo -.-> Verify
+```
 
-Default-branch Sonar analysis, manual scan-only pipelines, and namespace discovery
-complement one another. [Sonar discovery](sonar-discovery.md) defines the contract
-for provisioning projects, requesting first/fresh analyses and covering backend
-and frontend sources without publishing or deploying during a scan.
+DevApp, Thoughty and Indezy keep tests/coverage, Sonar and security reports
+non-blocking. E2E is manual; security is manual in standard mode and automatic in
+full mode. Their release is manual except for a web-launched full-mode pipeline.
+Website requires its verification job, including tests and security checks,
+before automatic default-branch image publication and release; Sonar is non-blocking.
+
+The app-owned `infra/scripts/ci-release.sh` and image-selection helper commit
+version tags for DevApp/Thoughty/Indezy, and an image digest for Website. Argo CD
+reads those Git changes; CI reapplies the app's Application and verifies rollout.
+Exact jobs, downloadable artifacts and failure policies belong in each app's
+`.gitlab-ci.yml`. Default-branch Sonar runs automatically; manual and
+discovery-triggered [scan-only pipelines](sonar-discovery.md) stop after the
+build, tests/coverage and analysis, with no publication or deployment.
+
+### Infrastructure reconciliation and verification
+
+```mermaid
+flowchart TB
+    accTitle: Independent infrastructure reconciliation and CI verification
+    accDescr: Argo CD automatically reconciles main while CI validates the repository, observes synchronization and checks delivery services and Registry access.
+    Git["bm-cluster main"] -->|"Tracks k8s chart"| Argo["bm-cluster Argo CD Application"]
+    Argo -->|"Automatic sync, prune and self-heal"| Platform["Platform resources<br/>Odoo when enabled"]
+    Git --> Validate["CI: validate repository"]
+    Validate --> GitOps["CI: verify same commit<br/>Synced and Healthy"]
+    Validate --> Registry["CI: Registry push/read check"]
+    GitOps --> Delivery["CI: delivery-service checks"]
+    Argo -.->|"Read status"| GitOps
+    Platform -.->|"Read health and metrics"| Delivery
+```
+
+The [infrastructure pipeline](../.gitlab-ci.yml) runs on the shared Kubernetes
+runner. Default-branch verification observes reconciliation; Argo CD starts its
+sync independently of CI validation. Installer/Ansible still own the Argo CD Helm
+release itself, as described in [Argo CD operations](#argo-cd-operations).
 
 ## Registry and dependencies
 

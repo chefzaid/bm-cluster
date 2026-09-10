@@ -4,6 +4,31 @@ The first control plane owns public ingress. Additional control planes and
 workers communicate over one private node transport. Adding servers provides
 datastore redundancy; public DNS continues to target the first host.
 
+## Node topology
+
+```mermaid
+flowchart TB
+    accTitle: Public entry point and private node topology
+    accDescr: Only the first control plane receives public web traffic. Additional control planes and workers join through vRack or Tailscale.
+    Edge["Cloudflare<br/>Public HTTP and HTTPS"] --> First
+    subgraph Private["Private node network: vRack or Tailscale"]
+        First["First control plane<br/>K3s API and public ingress entry"]
+        Servers["Additional control planes, when configured<br/>K3s API and embedded etcd"]
+        Workers["Workers, when configured<br/>Workloads and Longhorn storage"]
+        First <-->|etcd replication in HA| Servers
+        First <-->|K3s and storage traffic| Workers
+        Servers <-->|K3s node traffic| Workers
+        First -.->|private SSH enrollment| Servers
+        First -.->|private SSH enrollment| Workers
+    end
+```
+
+Solid links show runtime traffic; dotted links show enrollment. Single-server
+installations omit the additional nodes and run workloads and storage on the
+control plane. With workers, scheduling and Longhorn placement follow the
+[node enrollment policy](node-enrollment.md#scheduling-and-storage). Public
+ingress still depends on the first host when more control planes are added.
+
 ## Private node network
 
 | Transport | Use when | Prepare |
