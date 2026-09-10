@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Provision the namespace discovery credential without changing project visibility.
 set -euo pipefail
+set +x
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 info() { printf '[INFO] %s\n' "$*" >&2; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 # shellcheck source=lib/gitlab-admin-token.sh
 source "$script_dir/lib/gitlab-admin-token.sh"
+# shellcheck source=lib/vault-access.sh
+source "$script_dir/lib/vault-access.sh"
+VAULT_POD="$(vault_runtime_pod infra)"
+export VAULT_POD
 GITLAB_BOOTSTRAP_TOKEN_NAME=bm-cluster-sonar-discovery-bootstrap
 trap gitlab_revoke_ephemeral_admin_token EXIT
 gitlab_acquire_admin_token
@@ -28,7 +33,7 @@ def api(method, path, data=None, token=None):
         raise RuntimeError(f'{method} {path}: HTTP {error.code}') from None
 vault_token = subprocess.check_output(['sudo','cat',os.environ.get('VAULT_TOKEN_FILE','/var/lib/bm-cluster/vault-bootstrap-token')]).decode().strip()
 def vault(script, values=()):
-    return kubectl('-n','infra','exec','-i','vault-0','--','sh','-ceu',
+    return kubectl('-n','infra','exec','-i',os.environ['VAULT_POD'],'--','sh','-ceu',
         'IFS= read -r VAULT_TOKEN; export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200; ' + script,
         input=('\n'.join([vault_token,*values])+'\n').encode()).decode().strip()
 old = vault('vault kv get -field=sonar_discovery_api_token secret/infra/gitlab 2>/dev/null || true')

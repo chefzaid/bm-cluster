@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOPOLOGY_SCRIPT="$SCRIPT_DIR/reconcile-cluster-topology.sh"
-unset CLUSTER_NODE_COUNT CONTROL_PLANE_COUNT CONTROL_PLANE_SCHEDULABLE
+unset CLUSTER_NODE_COUNT CONTROL_PLANE_COUNT CONTROL_PLANE_SCHEDULABLE HIGH_AVAILABILITY_ENABLED
 
 command -v jq >/dev/null 2>&1 || { printf 'jq is required\n' >&2; exit 1; }
 
@@ -12,17 +12,27 @@ kubectl() {
     case "$*" in
         cluster-info|'get namespace infra') return 0 ;;
         'get nodes -o json') printf '%s\n' "$MOCK_NODES_JSON" ;;
+        '-n infra get configmap bm-cluster-topology --ignore-not-found '*)
+            printf '%s' "${MOCK_STORED_HA_MODE:-}"
+            return "${MOCK_STORED_HA_EXIT:-0}"
+            ;;
         '-n infra get configmap bm-cluster-topology '*) printf '%s' "${MOCK_STORED_MODE:-}" ;;
         '-n longhorn-system get settings.longhorn.io default-replica-count')
             [[ "${MOCK_LONGHORN:-false}" == true ]]
             ;;
         '-n longhorn-system get settings.longhorn.io default-replica-count -o '*) printf '1' ;;
         '-n longhorn-system get configmap '*) return 1 ;;
-        '-n longhorn-system get volumes.longhorn.io -o json') printf '{"items":[]}' ;;
+        '-n longhorn-system get volumes.longhorn.io -o json')
+            printf '%s\n' "${MOCK_VOLUMES_JSON:-{\"items\":[]}}"
+            ;;
         'get storageclass longhorn '*) return 1 ;;
         'taint nodes '*)
             printf 'MOCK %s\n' "$*" >&3
             return "${MOCK_TAINT_EXIT:-0}"
+            ;;
+        '-n longhorn-system patch volumes.longhorn.io '*)
+            printf 'MOCK %s\n' "$*" >&3
+            return "${MOCK_VOLUME_PATCH_EXIT:-0}"
             ;;
         'label nodes '*|'-n longhorn-system patch '*|'-n infra create configmap '*)
             printf 'MOCK %s\n' "$*" >&3
@@ -32,6 +42,9 @@ kubectl() {
     esac
 }
 export -f kubectl
+
+helm() { printf 'MOCK helm %s\n' "$*" >&3; }
+export -f helm
 
 nodes() {
     local cp_count="$1" workers="$2" ready_cps="${3:-$1}" ready_workers="${4:-$2}" taints="${5:-none}"
@@ -55,7 +68,9 @@ nodes() {
                  status: {conditions: [{type: "Ready", status: (if . < $readyWorkers then "True" else "False" end)}]},
                  spec: {}}])}')"
     export MOCK_NODES_JSON
-    unset MOCK_STORED_MODE MOCK_LONGHORN MOCK_TAINT_EXIT
+    unset MOCK_STORED_MODE MOCK_LONGHORN MOCK_TAINT_EXIT MOCK_VOLUMES_JSON MOCK_VOLUME_PATCH_EXIT
+    unset MOCK_STORED_HA_MODE MOCK_STORED_HA_EXIT
+    unset HIGH_AVAILABILITY_ENABLED
 }
 
 run_success() {
@@ -79,6 +94,13 @@ run_failure() {
 assert_output() {
     [[ "$TEST_OUTPUT" == *"$1"* ]] || {
         printf 'Expected output to contain %s:\n%s\n' "$1" "$TEST_OUTPUT" >&2
+        exit 1
+    }
+}
+
+assert_no_output() {
+    [[ "$TEST_OUTPUT" != *"$1"* ]] || {
+        printf 'Unexpected output containing %s:\n%s\n' "$1" "$TEST_OUTPUT" >&2
         exit 1
     }
 }
@@ -131,6 +153,7 @@ run_success --control-plane-schedulable true
 assert_output '"allowScheduling":false,"evictionRequested":false'
 assert_output '--from-literal=workerCount=2'
 assert_output '--from-literal=readyWorkerCount=0'
+assert_output '--from-literal=longhornReplicaCount=2'
 
 nodes 3 2 3 2 mixed
 run_failure --control-plane-schedulable preserve
@@ -156,4 +179,126 @@ if TEST_OUTPUT="$(bash "$TOPOLOGY_SCRIPT" --control-plane-schedulable true 3>&1 
 fi
 [[ "$TEST_OUTPUT" != *'create configmap'* ]] || { printf 'Failed taint change was persisted\n' >&2; exit 1; }
 
-printf 'Topology CLI tests passed (1/3/5 control planes, quorum inputs, role/readiness mismatches, scheduling and storage).\n'
+# A transient worker failure does not lower the desired storage redundancy.
+nodes 3 3 3 2
+export MOCK_LONGHORN=true
+run_success --control-plane-schedulable false --update-longhorn-helm
+assert_output '--set defaultSettings.defaultReplicaCount=3'
+assert_output '--set persistence.defaultClassReplicaCount=3'
+assert_output '--from-literal=longhornReplicaCount=3'
+run_success --print-longhorn-replicas
+[[ "$TEST_OUTPUT" == 3 ]] || { printf 'Replica preview changed during a worker outage\n' >&2; exit 1; }
+
+# HA validates registered capacity before any cluster mutation, including preview.
+nodes 1 3
+export HIGH_AVAILABILITY_ENABLED=true
+run_failure --control-plane-schedulable true
+assert_output 'HA requires at least three registered control-plane nodes'
+run_failure --control-plane-schedulable true --print-longhorn-replicas
+
+nodes 3 2
+export HIGH_AVAILABILITY_ENABLED=true
+run_failure --control-plane-schedulable false
+assert_output 'HA requires at least three registered storage-eligible nodes'
+run_failure --control-plane-schedulable false --print-longhorn-replicas
+
+nodes 3 0
+export HIGH_AVAILABILITY_ENABLED=invalid
+run_failure --control-plane-schedulable true
+assert_output 'HIGH_AVAILABILITY_ENABLED must be true or false'
+
+# Three schedulable control planes provide three independent HA storage peers.
+nodes 3 0
+export HIGH_AVAILABILITY_ENABLED=true MOCK_LONGHORN=true
+run_success --control-plane-schedulable true --update-longhorn-helm
+assert_output '--set defaultSettings.defaultReplicaCount=3'
+assert_output '--set defaultSettings.replicaSoftAntiAffinity=false'
+assert_output 'patch settings.longhorn.io replica-soft-anti-affinity --type=merge -p {"value":"false"}'
+assert_output '--from-literal=longhornReplicaCount=3'
+assert_output '--from-literal=highAvailabilityEnabled=true'
+for node in cp-0 cp-1 cp-2; do
+    assert_output "patch nodes.longhorn.io $node --type=merge -p {\"spec\":{\"allowScheduling\":true,\"evictionRequested\":false}}"
+done
+run_success --control-plane-schedulable preserve --print-longhorn-replicas
+[[ "$TEST_OUTPUT" == 3 ]] || { printf 'HA replica preview is not three\n' >&2; exit 1; }
+
+# Adding a worker in HA does not evict storage from schedulable control planes.
+nodes 3 1 2 0
+export HIGH_AVAILABILITY_ENABLED=true MOCK_LONGHORN=true
+run_success --control-plane-schedulable true
+assert_output '--from-literal=longhornReplicaCount=3'
+assert_output '"allowScheduling":true,"evictionRequested":false'
+
+# Dedicated HA workers retain three replicas even while one worker is down.
+nodes 3 3 3 2 all
+export HIGH_AVAILABILITY_ENABLED=true MOCK_LONGHORN=true
+run_success --control-plane-schedulable preserve
+assert_output '--from-literal=longhornReplicaCount=3'
+assert_output '"allowScheduling":false,"evictionRequested":true'
+
+# Existing volumes only grow. Higher counts and deleting volumes remain untouched.
+export MOCK_VOLUMES_JSON='{"items":[
+    {"metadata":{"name":"grow"},"spec":{"numberOfReplicas":1}},
+    {"metadata":{"name":"equal"},"spec":{"numberOfReplicas":3}},
+    {"metadata":{"name":"larger"},"spec":{"numberOfReplicas":4}},
+    {"metadata":{"name":"deleting","deletionTimestamp":"2026-01-01T00:00:00Z"},"spec":{"numberOfReplicas":1}}
+]}'
+run_success --control-plane-schedulable false
+assert_output 'patch volumes.longhorn.io grow --type=json -p [{"op":"test","path":"/spec/numberOfReplicas","value":1},{"op":"replace","path":"/spec/numberOfReplicas","value":3}]'
+for volume in equal larger deleting; do
+    assert_no_output "patch volumes.longhorn.io $volume "
+done
+assert_no_output '"size"'
+
+# A volume override must not permit three nominal replicas on one host.
+export MOCK_VOLUMES_JSON='{"items":[
+    {"metadata":{"name":"colocated"},"spec":{"numberOfReplicas":4,"replicaSoftAntiAffinity":"enabled"}},
+    {"metadata":{"name":"inherited"},"spec":{"numberOfReplicas":3,"replicaSoftAntiAffinity":"ignored"}},
+    {"metadata":{"name":"deleting","deletionTimestamp":"2026-01-01T00:00:00Z"},"spec":{"numberOfReplicas":3,"replicaSoftAntiAffinity":"enabled"}}
+]}'
+run_success --control-plane-schedulable false
+assert_output 'patch volumes.longhorn.io colocated --type=json -p [{"op":"test","path":"/spec/replicaSoftAntiAffinity","value":"enabled"},{"op":"replace","path":"/spec/replicaSoftAntiAffinity","value":"disabled"}]'
+assert_no_output '/spec/numberOfReplicas'
+assert_no_output 'patch volumes.longhorn.io inherited '
+assert_no_output 'patch volumes.longhorn.io deleting '
+
+# An actual concurrent replica change fails its atomic test instead of overwriting.
+export MOCK_VOLUME_PATCH_EXIT=1
+if TEST_OUTPUT="$(bash "$TOPOLOGY_SCRIPT" --control-plane-schedulable false 3>&1 2>&1)"; then
+    printf 'Concurrent replica changes must fail reconciliation\n' >&2
+    exit 1
+fi
+assert_no_output 'create configmap bm-cluster-topology'
+
+# Explicit node removal can lower the default, but cannot shrink existing volumes.
+nodes 1 1
+export MOCK_LONGHORN=true
+export MOCK_VOLUMES_JSON='{"items":[{"metadata":{"name":"preserve"},"spec":{"numberOfReplicas":3}}]}'
+run_success --control-plane-schedulable false
+assert_output '--from-literal=longhornReplicaCount=1'
+assert_no_output 'patch volumes.longhorn.io preserve '
+
+# Persisted HA cannot disappear through an ordinary rerun or read-only query.
+nodes 3 0
+export MOCK_STORED_HA_MODE=true
+run_success --print-longhorn-replicas
+[[ "$TEST_OUTPUT" == 3 ]]
+run_success --control-plane-schedulable true
+assert_output '--from-literal=highAvailabilityEnabled=true'
+export HIGH_AVAILABILITY_ENABLED=false
+run_failure --print-longhorn-replicas
+assert_output 'Cannot disable persisted HA mode'
+run_success --allow-ha-disable --control-plane-schedulable true
+assert_output '--from-literal=highAvailabilityEnabled=false'
+assert_output '--from-literal=longhornReplicaCount=1'
+unset HIGH_AVAILABILITY_ENABLED
+run_failure --allow-ha-disable
+assert_output 'requires explicit HIGH_AVAILABILITY_ENABLED=false'
+export MOCK_STORED_HA_MODE=invalid
+run_failure
+assert_output 'Persisted highAvailabilityEnabled must be true or false'
+export MOCK_STORED_HA_MODE='' MOCK_STORED_HA_EXIT=1
+run_failure
+assert_output 'Cannot read persisted HA topology mode'
+
+printf 'Topology CLI tests passed (quorum, persisted HA, storage capacity, outages, placement and non-decreasing volume replicas).\n'

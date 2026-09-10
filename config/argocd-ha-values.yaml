@@ -1,0 +1,94 @@
+# Opt-in HA for the request path and cache. The application controller remains
+# one active Deployment: Kubernetes replaces it after a node failure. See docs.
+global:
+  affinity:
+    podAntiAffinity: hard
+  tolerations:
+    - key: node.kubernetes.io/not-ready
+      operator: Exists
+      effect: NoExecute
+      tolerationSeconds: 30
+    - key: node.kubernetes.io/unreachable
+      operator: Exists
+      effect: NoExecute
+      tolerationSeconds: 30
+server:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+repoServer:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+controller:
+  replicas: 1
+  # Upstream alpha feature switches the controller to a Deployment. One replica
+  # processes the sole cluster without static shards or an idle second shard.
+  dynamicClusterDistribution: true
+  pdb:
+    enabled: true
+    maxUnavailable: 1
+applicationSet:
+  replicas: 2
+  pdb:
+    enabled: true
+    minAvailable: 1
+redis:
+  enabled: false
+redis-ha:
+  enabled: true
+  replicas: 3
+  image:
+    repository: docker.io/library/redis
+    tag: 8.10.0-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+  auth: true
+  existingSecret: argocd-redis
+  hardAntiAffinity: true
+  podDisruptionBudget:
+    maxUnavailable: 1
+  persistentVolume:
+    enabled: false
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  redis:
+    config:
+      min-replicas-to-write: 1
+      min-replicas-max-lag: 5
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: "1", memory: 256Mi}
+  sentinel:
+    auth: true
+    existingSecret: argocd-redis
+    authKey: auth
+    quorum: 2
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  init:
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  splitBrainDetection:
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  haproxy:
+    enabled: true
+    replicas: 2
+    hardAntiAffinity: true
+    podDisruptionBudget:
+      minAvailable: 1
+    securityContext:
+      seccompProfile:
+        type: RuntimeDefault
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 128Mi}
+    init:
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+        limits: {cpu: 250m, memory: 64Mi}

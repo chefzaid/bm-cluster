@@ -11,11 +11,17 @@ fi
 source "$NETWORK_LIBRARY"
 
 APPLY=false
+RECONCILE_CONTROL_PLANE_SSH=false
 SERVER_EXPOSURE="${SERVER_EXPOSURE:-internet}"
 NODE_ROLE="${NODE_ROLE:-control-plane}"
 PRIVATE_CONTROL_PLANE=false
+INHERITED_PRIVATE_CONTROL_PLANE=false
 K3S_NODE_NETWORK_CIDR="${K3S_NODE_NETWORK_CIDR:-}"
 CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-}"
+CONTROL_PLANE_SSH_IPS="${CONTROL_PLANE_SSH_IPS:-}"
+CONTROL_PLANE_SSH_STATE=/etc/bm-cluster/control-plane-ssh-ips
+PRIVATE_NETWORK_CIDR_STATE=/etc/bm-cluster/private-node-network-cidr
+PRIVATE_NETWORK_CONFIG=/etc/rancher/k3s/config.yaml.d/20-bm-private-node-network.yaml
 HARDENED_SSH_PORT="${HARDENED_SSH_PORT:-}"
 CLOUDFLARE_PROXY_ONLY="${CLOUDFLARE_PROXY_ONLY:-}"
 SSH_ALLOWED_USERS="${SSH_ALLOWED_USERS:-${SUDO_USER:-$USER}}"
@@ -23,12 +29,17 @@ APT_UPDATED=false
 
 usage() {
   echo "Usage: $0 [--apply] [--server-exposure internet|local] [--node-role control-plane|worker] [--private-control-plane] [--control-plane-ip PRIVATE_IP] [--ssh-port PORT]"
-  echo "  --private-control-plane: join-server policy; private SSH from --control-plane-ip, no public ingress"
+  echo "  --private-control-plane: private join-server policy, no public ingress"
+  echo "  --control-plane-ssh-ips CSV: verified control-plane private IPs allowed to administer this node"
+  echo "  --reconcile-control-plane-ssh: update only managed private SSH rules (requires --apply)"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=true ;;
+    --reconcile-control-plane-ssh) RECONCILE_CONTROL_PLANE_SSH=true ;;
+    --control-plane-ssh-ips) shift; [[ $# -gt 0 ]] || { usage; exit 1; }; CONTROL_PLANE_SSH_IPS="$1" ;;
+    --control-plane-ssh-ips=*) CONTROL_PLANE_SSH_IPS="${1#*=}" ;;
     --private-control-plane) PRIVATE_CONTROL_PLANE=true ;;
     --server-exposure)
       shift
@@ -93,6 +104,148 @@ normalize_node_role() {
 
 private_node_policy() {
   [[ "$NODE_ROLE" == "worker" || "$PRIVATE_CONTROL_PLANE" == "true" ]]
+}
+
+# Enrollment persists this marker before installing the private firewall.
+# A later local installer must not turn the same host into a public bootstrap
+# server just because --private-control-plane was omitted.
+inherit_private_control_plane_policy() {
+  local configuration="" saved="" address private_ip private_interface
+  [[ "$NODE_ROLE" == control-plane ]] || return 0
+  if sudo test -f "$PRIVATE_NETWORK_CONFIG"; then
+    configuration="$(sudo cat "$PRIVATE_NETWORK_CONFIG")"
+  fi
+  if ! grep -Fxq '# exposure: private-only' <<< "$configuration"; then
+    if [[ "$PRIVATE_CONTROL_PLANE" != true ]] && {
+      sudo test -f "$CONTROL_PLANE_SSH_STATE" ||
+      sudo test -f "$PRIVATE_NETWORK_CIDR_STATE" ||
+      sudo test -f /etc/nftables.d/bm-cluster-worker-ingress.nft;
+    }; then
+      err "Existing private-node policy lacks its managed control-plane network marker; refusing public firewall reconciliation"
+    fi
+    return 0
+  fi
+  grep -Fxq '# Managed by scripts/configure-k3s-control-plane-network.sh' <<< "$configuration" || \
+    err "Private control-plane network configuration is not managed by this installer"
+  private_ip="$(sed -n 's/^node-ip: "\([0-9.]*\)"$/\1/p' <<< "$configuration")"
+  private_interface="$(sed -n 's/^flannel-iface: "\([A-Za-z0-9_.:-]*\)"$/\1/p' <<< "$configuration")"
+  trusted_private_ipv4 "$private_ip" && [[ -n "$private_interface" ]] || \
+    err "Managed private control-plane address/interface is missing or invalid"
+  [[ "$(interface_owning_ip "$private_ip")" == "$private_interface" ]] || \
+    err "Managed private control-plane address no longer belongs to its interface"
+  [[ -z "${K3S_PRIVATE_ADDRESS:-}" || "$K3S_PRIVATE_ADDRESS" == "$private_ip" ]] || \
+    err "K3S_PRIVATE_ADDRESS conflicts with the persisted private control-plane address"
+  K3S_PRIVATE_ADDRESS="$private_ip"
+  if sudo test -f "$PRIVATE_NETWORK_CIDR_STATE"; then
+    saved="$(sudo cat "$PRIVATE_NETWORK_CIDR_STATE")"
+    [[ -z "$K3S_NODE_NETWORK_CIDR" || "$K3S_NODE_NETWORK_CIDR" == "$saved" ]] || \
+      err "Private node CIDR changed; migrate the network before reconciling its firewall"
+    K3S_NODE_NETWORK_CIDR="$saved"
+  fi
+  if ! trusted_private_cidr "$K3S_NODE_NETWORK_CIDR" || ! cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$private_ip"; then
+    err "A validated K3S_NODE_NETWORK_CIDR is required for this existing private control plane"
+  fi
+  PRIVATE_CONTROL_PLANE=true
+  SERVER_EXPOSURE=local
+  if sudo test -f "$CONTROL_PLANE_SSH_STATE"; then
+    saved="$(sudo cat "$CONTROL_PLANE_SSH_STATE")"
+    [[ -n "$saved" ]] || err "Existing private control-plane SSH allowlist is empty"
+    while IFS= read -r address; do
+      if ! trusted_private_ipv4 "$address" || ! cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$address"; then
+        err "Existing private control-plane SSH allowlist contains an invalid address"
+      fi
+    done <<< "$saved"
+    if [[ -z "$CONTROL_PLANE_SSH_IPS" ]]; then
+      CONTROL_PLANE_SSH_IPS="$(paste -sd, - <<< "$saved")"
+    fi
+    INHERITED_PRIVATE_CONTROL_PLANE=true
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      address="${SSH_CONNECTION%% *}"
+      grep -Fxq "$address" <<< "$saved" || \
+        err "Current SSH source is outside the persisted control-plane allowlist"
+      [[ -z "$CONTROL_PLANE_IP" || "$CONTROL_PLANE_IP" == "$address" ]] || \
+        err "CONTROL_PLANE_IP does not match the current private SSH source"
+      CONTROL_PLANE_IP="$address"
+    elif [[ -z "$CONTROL_PLANE_IP" ]]; then
+      CONTROL_PLANE_IP="$(awk -v local_ip="$private_ip" '$0 != local_ip {print; exit}' <<< "$saved")"
+      [[ -n "$CONTROL_PLANE_IP" ]] || err "Private console reconciliation needs a recorded control-plane peer"
+    fi
+  fi
+  info "Preserving the enrolled control plane's private firewall policy"
+}
+
+# Keep the actual SSH source separate from the complete management allowlist.
+# A persisted list survives a later full firewall reconciliation from another CP.
+prepare_control_plane_ssh_policy() {
+  local address saved=""
+  local -a addresses=()
+  private_node_policy || return 0
+  if [[ -z "$CONTROL_PLANE_SSH_IPS" ]] && sudo test -f "$CONTROL_PLANE_SSH_STATE"; then
+    saved="$(sudo cat "$CONTROL_PLANE_SSH_STATE")"
+    CONTROL_PLANE_SSH_IPS="$(tr '\n' ',' <<< "$saved")"
+    CONTROL_PLANE_SSH_IPS="${CONTROL_PLANE_SSH_IPS%,}"
+  fi
+  CONTROL_PLANE_SSH_IPS="${CONTROL_PLANE_SSH_IPS:-$CONTROL_PLANE_IP}"
+  [[ -n "$CONTROL_PLANE_SSH_IPS" && "$CONTROL_PLANE_SSH_IPS" != ,* &&
+     "$CONTROL_PLANE_SSH_IPS" != *, && "$CONTROL_PLANE_SSH_IPS" != *,,* ]] || \
+    err "Control-plane SSH addresses must be a non-empty comma-separated list"
+  IFS=',' read -r -a addresses <<< "$CONTROL_PLANE_SSH_IPS"
+  for address in "${addresses[@]}"; do
+    if ! trusted_private_ipv4 "$address" || ! cidr_contains_ip "$K3S_NODE_NETWORK_CIDR" "$address"; then
+      err "Invalid control-plane SSH source outside the private node network: $address"
+    fi
+  done
+  [[ ",$CONTROL_PLANE_SSH_IPS," == *",$CONTROL_PLANE_IP,"* ]] || \
+    err "The verified current SSH source must remain in the control-plane allowlist"
+  CONTROL_PLANE_SSH_IPS="$(printf '%s\n' "${addresses[@]}" | LC_ALL=C sort -u | paste -sd, -)"
+}
+
+persist_control_plane_ssh_policy() {
+  local policy_file
+  policy_file="$(mktemp)"
+  printf '%s\n' "$CONTROL_PLANE_SSH_IPS" | tr ',' '\n' > "$policy_file"
+  sudo install -D -o root -g root -m 0644 "$policy_file" "$CONTROL_PLANE_SSH_STATE"
+  if [[ "$PRIVATE_CONTROL_PLANE" == true ]]; then
+    printf '%s\n' "$K3S_NODE_NETWORK_CIDR" > "$policy_file"
+    sudo install -D -o root -g root -m 0644 "$policy_file" "$PRIVATE_NETWORK_CIDR_STATE"
+  fi
+  rm -f "$policy_file"
+}
+
+allow_control_plane_ssh() {
+  local cluster_interface="$1" address
+  local -a addresses=()
+  IFS=',' read -r -a addresses <<< "$CONTROL_PLANE_SSH_IPS"
+  for address in "${addresses[@]}"; do
+    sudo ufw allow in on "$cluster_interface" from "$address" to any port "$HARDENED_SSH_PORT" proto tcp comment 'BM control-plane SSH' >/dev/null
+  done
+}
+
+reconcile_control_plane_ssh() {
+  local cluster_interface previous="" address
+  private_node_policy || err "SSH-only reconciliation requires a private node policy"
+  command -v ufw >/dev/null 2>&1 || err "UFW is not installed on this node"
+  sudo ufw status | grep -q '^Status: active' || err "Refusing SSH-only reconciliation while UFW is inactive"
+  # Validate every input and the active private session before changing a rule.
+  prepare_control_plane_ssh_policy
+  configure_tailscale_firewall_integration
+  validate_worker_private_ssh_before_firewall
+  cluster_interface="$(interface_owning_ip "$(awk '{print $3}' <<< "$SSH_CONNECTION")")"
+  if sudo test -f "$CONTROL_PLANE_SSH_STATE"; then
+    previous="$(sudo cat "$CONTROL_PLANE_SSH_STATE")"
+  fi
+  while IFS= read -r address; do
+    [[ -z "$address" ]] || trusted_private_ipv4 "$address" || err "Invalid saved control-plane SSH policy"
+  done <<< "$previous"
+  allow_control_plane_ssh "$cluster_interface"
+  # Only remove addresses previously recorded as managed, after their replacements
+  # are active. All unrelated host rules and the active SSH source are preserved.
+  while IFS= read -r address; do
+    [[ -n "$address" && ",$CONTROL_PLANE_SSH_IPS," != *",$address,"* ]] || continue
+    sudo ufw --force delete allow in on "$cluster_interface" from "$address" to any port "$HARDENED_SSH_PORT" proto tcp comment 'BM control-plane SSH' >/dev/null
+  done <<< "$previous"
+  persist_control_plane_ssh_policy
+  info "Private SSH administration reconciled for verified control planes: $CONTROL_PLANE_SSH_IPS"
 }
 
 detect_control_plane_cluster_interface() {
@@ -189,6 +342,13 @@ validate_worker_private_ssh_before_firewall() {
   local ssh_client_ip ssh_server_ip ssh_server_port ssh_interface
 
   private_node_policy || return 0
+  if [[ "${INHERITED_PRIVATE_CONTROL_PLANE:-false}" == true && -z "${SSH_CONNECTION:-}" ]]; then
+    # A local console run can preserve an already validated policy. First-time
+    # enrollment and all SSH runs still require the original SSH proof below.
+    [[ -n "${K3S_PRIVATE_ADDRESS:-}" && -n "$(interface_owning_ip "$K3S_PRIVATE_ADDRESS")" ]] || \
+      err "Private console reconciliation lost its validated local interface"
+    return 0
+  fi
   route="$(ip -4 route get "$CONTROL_PLANE_IP" 2>/dev/null)" || \
     err "Refusing to configure worker UFW: the private control-plane address is not routable"
   route_interface="$(awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}' <<< "$route")"
@@ -695,8 +855,8 @@ configure_ufw() {
       sudo ufw allow 443/tcp >/dev/null
     fi
   else
-    info "Restricting private-node SSH to bootstrap control plane $CONTROL_PLANE_IP on $cluster_interface..."
-    sudo ufw allow in on "$cluster_interface" from "$CONTROL_PLANE_IP" to any port "$HARDENED_SSH_PORT" proto tcp comment 'SSH from control plane only' >/dev/null
+    info "Allowing private-node SSH from verified control planes on $cluster_interface..."
+    allow_control_plane_ssh "$cluster_interface"
 
     # Kubernetes NodePort and Docker-published traffic may traverse FORWARD
     # instead of INPUT. Deny both paths on every provider/non-cluster interface
@@ -966,6 +1126,8 @@ if [[ "$APPLY" != "true" ]]; then
   exit 0
 fi
 
+inherit_private_control_plane_policy
+
 if [[ "$PRIVATE_CONTROL_PLANE" == "true" && "$NODE_ROLE" != "control-plane" ]]; then
   err "--private-control-plane requires --node-role control-plane"
 fi
@@ -990,6 +1152,12 @@ if private_node_policy; then
   fi
 fi
 
+if [[ "$RECONCILE_CONTROL_PLANE_SSH" == "true" ]]; then
+  reconcile_control_plane_ssh
+  exit 0
+fi
+prepare_control_plane_ssh_policy
+
 # Search workloads need this node setting; application init containers must
 # never receive privileged access just to set a host-wide sysctl.
 current_map_count="$(sysctl -n vm.max_map_count)"
@@ -1002,6 +1170,7 @@ sudo sysctl -p /etc/sysctl.d/99-bm-search.conf >/dev/null
 configure_tailscale_firewall_integration
 validate_worker_private_ssh_before_firewall
 configure_ufw
+if private_node_policy; then persist_control_plane_ssh_policy; fi
 make_ufw_authoritative_for_tailscale
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
   configure_sshd

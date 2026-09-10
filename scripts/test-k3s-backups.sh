@@ -56,6 +56,7 @@ run_backup() (
     # shellcheck disable=SC1090
     source <(sed \
         -e '/^\[\[ "\$EUID" -eq 0 \]\]/d' \
+        -e "s|^POSTGRES_ACCESS_LIBRARY=.*|POSTGRES_ACCESS_LIBRARY='$SCRIPT_DIR/lib/postgres-access.sh'|" \
         -e "s|/run/lock/|$TEST_DIR/locks/|g" \
         -e "s|/var/lib/bm-cluster/|$TEST_DIR/vault/|g" \
         "$SCRIPT_DIR/backup-k3s.sh")

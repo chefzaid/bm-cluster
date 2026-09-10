@@ -1,0 +1,7 @@
+# Reference shape only. The migration helper records the verified cluster ID.
+# Merge its generated active-values.yaml map into reviewed platform values.
+kafkaHa:
+  enabled: true
+  phase: dynamic
+  clusterId: "" # Never copy an identity from a different installation.
+  bootstrap: false

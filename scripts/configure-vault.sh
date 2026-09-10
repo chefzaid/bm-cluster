@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+set +x
 
 NAMESPACE="${1:-infra}"
 VAULT_POD="${VAULT_POD:-vault-0}"
@@ -16,6 +17,7 @@ SSO_ADMIN_LIBRARY="$SCRIPT_DIR/lib/sso-admin.sh"
 VAULT_STATE_DIR="${VAULT_STATE_DIR:-/var/lib/bm-cluster}"
 VAULT_UNSEAL_KEY_FILE="$VAULT_STATE_DIR/vault-unseal-key"
 VAULT_BOOTSTRAP_TOKEN_FILE="$VAULT_STATE_DIR/vault-bootstrap-token"
+VAULT_HA_ENABLED="${VAULT_HA_ENABLED:-${HIGH_AVAILABILITY_ENABLED:-false}}"
 
 info()  { echo -e "\033[0;32m[INFO]\033[0m  $*"; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*"; }
@@ -92,6 +94,26 @@ source "$SSO_ADMIN_LIBRARY"
 
 sudo install -d -o root -g root -m 0700 "$VAULT_STATE_DIR"
 
+# A surviving peer is sufficient for configuration. Never treat a replacement
+# vault-0 with empty storage as permission to initialize a second cluster.
+if sudo test -s "$VAULT_UNSEAL_KEY_FILE"; then
+  sudo env VAULT_NAMESPACE="$NAMESPACE" VAULT_UNSEAL_KEY_FILE="$VAULT_UNSEAL_KEY_FILE" \
+    KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}" bash "$SCRIPT_DIR/vault-unseal.sh" || \
+    warn "Some Vault peers are still joining or unsealing."
+fi
+vault_pods="$(kubectl get pods -n "$NAMESPACE" \
+  -l app.kubernetes.io/name=vault,app.kubernetes.io/instance=vault,component=server -o json)"
+while IFS= read -r candidate; do
+  candidate_status="$(timeout "${VAULT_EXEC_TIMEOUT:-10s}" kubectl --request-timeout=10s exec -n "$NAMESPACE" "$candidate" -- \
+    env VAULT_CLIENT_TIMEOUT=5s VAULT_ADDR="$VAULT_ADDR" vault status -format=json 2>/dev/null || true)"
+  if jq -e '.initialized == true' <<< "$candidate_status" >/dev/null 2>&1; then
+    VAULT_POD="$candidate"
+    break
+  fi
+done < <(jq -r '.items[] | select(.status.phase == "Running") |
+  select(any(.metadata.ownerReferences[]?; .kind == "StatefulSet" and .name == "vault")) |
+  .metadata.name | select(test("^vault-[0-9]+$"))' <<< "$vault_pods")
+
 info "Waiting for Vault pod ($VAULT_POD) to be running..."
 kubectl wait --for=jsonpath='{.status.phase}'=Running "pod/$VAULT_POD" -n "$NAMESPACE" --timeout=300s >/dev/null
 
@@ -101,6 +123,9 @@ initialized="$(echo "$status_json" | jq -r '.initialized')"
 sealed="$(echo "$status_json" | jq -r '.sealed')"
 
 if [[ "$initialized" != "true" ]]; then
+  if sudo test -s "$VAULT_UNSEAL_KEY_FILE" || sudo test -s "$VAULT_BOOTSTRAP_TOKEN_FILE"; then
+    error "Vault recovery material already exists but no initialized peer is reachable. Restore or join the existing Raft cluster; refusing to initialize or replace its credentials."
+  fi
   info "Initializing Vault..."
   init_json="$(vault_cmd operator init -key-shares=1 -key-threshold=1 -format=json)"
   unseal_key="$(echo "$init_json" | jq -r '.unseal_keys_b64[0]')"
@@ -141,6 +166,17 @@ status_json="$(vault_cmd status -format=json 2>/dev/null || true)"
 [[ -n "$status_json" ]] || error "Unable to read Vault status after unseal."
 sealed="$(echo "$status_json" | jq -r '.sealed')"
 [[ "$sealed" == "false" ]] || error "Vault remains sealed after unseal attempt."
+
+if [[ "$VAULT_HA_ENABLED" == true ]]; then
+  info "Joining and unsealing all Vault Raft peers..."
+  for (( attempt=0; attempt<60; attempt++ )); do
+    sudo env VAULT_NAMESPACE="$NAMESPACE" VAULT_UNSEAL_KEY_FILE="$VAULT_UNSEAL_KEY_FILE" \
+      KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}" bash "$SCRIPT_DIR/vault-unseal.sh" || true
+    if VAULT_STATE_DIR="$VAULT_STATE_DIR" "$SCRIPT_DIR/configure-vault-ha.sh" --namespace "$NAMESPACE" --verify; then break; fi
+    sleep 5
+  done
+  (( attempt < 60 )) || error "Vault has not reached three healthy Raft voters."
+fi
 
 if ! vault_cmd_auth "$root_token" audit list -format=json | jq -e '."stdout/"' >/dev/null 2>&1; then
   info "Enabling the Vault stdout audit device..."
@@ -211,8 +247,17 @@ vault_cmd_auth "$root_token" write auth/kubernetes/role/external-secrets-role \
 
 postgres_default_username="${POSTGRES_DEFAULT_USERNAME:-admin}"
 postgres_default_password="${POSTGRES_DEFAULT_PASSWORD:-}"
-postgres_runtime_username="$(kubectl exec -n "$NAMESPACE" deployment/postgres -- printenv POSTGRES_USER 2>/dev/null || true)"
-postgres_runtime_password="$(kubectl exec -n "$NAMESPACE" deployment/postgres -- printenv POSTGRES_PASSWORD 2>/dev/null || true)"
+postgres_secret="$(kubectl get secret postgres-secret -n "$NAMESPACE" --ignore-not-found -o json)"
+postgres_runtime_username="$(jq -r '.data.POSTGRES_USER // "" | @base64d' <<< "$postgres_secret")"
+postgres_runtime_password="$(jq -r '.data.POSTGRES_PASSWORD // "" | @base64d' <<< "$postgres_secret")"
+if kubectl get clusters.postgresql.cnpg.io postgres-ha -n "$NAMESPACE" >/dev/null 2>&1; then
+  [[ -n "$postgres_runtime_username" && -n "$postgres_runtime_password" ]] || \
+    error "PostgreSQL HA exists but canonical postgres-secret is incomplete; restore its credentials before configuring Vault."
+elif [[ -z "$postgres_runtime_username" || -z "$postgres_runtime_password" ]]; then
+  postgres_runtime_username="$(kubectl exec -n "$NAMESPACE" deployment/postgres -- printenv POSTGRES_USER 2>/dev/null || true)"
+  postgres_runtime_password="$(kubectl exec -n "$NAMESPACE" deployment/postgres -- printenv POSTGRES_PASSWORD 2>/dev/null || true)"
+fi
+unset postgres_secret
 [[ -n "$postgres_default_password" ]] || postgres_default_password="$(generate_secret)"
 
 if ! vault_cmd_auth "$root_token" kv get -format=json secret/infra/postgres >/dev/null 2>&1; then

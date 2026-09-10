@@ -3,8 +3,13 @@ set -euo pipefail
 set +x
 umask 077
 
+# shellcheck source=lib/postgres-access.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/postgres-access.sh"
+# shellcheck source=lib/vault-access.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/vault-access.sh"
+
 NAMESPACE="${NAMESPACE:-infra}"
-VAULT_POD="${VAULT_POD:-vault-0}"
+VAULT_POD="${VAULT_POD:-}"
 VAULT_ADDR="http://127.0.0.1:8200"
 VAULT_BOOTSTRAP_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
@@ -62,6 +67,8 @@ case "$start_at" in
   postgres|mongodb|gitlab|grafana|keycloak|portainer|sonarqube|elasticsearch) ;;
   *) fail "Unknown --from service: $start_at" ;;
 esac
+
+[[ -n "$VAULT_POD" ]] || VAULT_POD="$(vault_runtime_pod "$NAMESPACE")"
 
 [[ -n "$local_admin_password" ]] || fail "Supply the password through stdin or LOCAL_ADMIN_PASSWORD."
 (( ${#local_admin_password} >= 12 )) || fail "The local administrator password must contain at least 12 characters."
@@ -173,20 +180,23 @@ wait_secret_value() {
 }
 
 rotate_postgres() {
-  local current_password
+  local current_password postgres_username postgres_target
+  postgres_target="$(postgres_runtime_target "$NAMESPACE")" || fail "Cannot resolve active PostgreSQL primary."
+  postgres_username="$(secret_value "$NAMESPACE" postgres-secret POSTGRES_USER)"
   current_password="$(secret_value "$NAMESPACE" postgres-secret POSTGRES_PASSWORD)"
-  info "Rotating PostgreSQL local superuser 'admin'..."
-  { printf '%s\n' "$current_password"; printf '%s\n' "$local_admin_password"; } | \
-    kubectl exec -i -n "$NAMESPACE" deployment/postgres -- sh -ec '
+  info "Rotating the PostgreSQL local administrator password..."
+  { printf '%s\n' "$postgres_username"; printf '%s\n' "$current_password"; printf '%s\n' "$local_admin_password"; } | \
+    kubectl exec -i -n "$NAMESPACE" "$postgres_target" -c postgres -- sh -ec '
+      IFS= read -r postgres_username
       IFS= read -r current_password
       IFS= read -r desired_password
-      printf "%s\n" "ALTER ROLE :\"admin_user\" WITH LOGIN PASSWORD :'\''desired_password'\'';" | \
-        PGPASSWORD="$current_password" psql \
-          --username="$POSTGRES_USER" \
+      printf "%s\n" "\\getenv desired_password PG_NEW_ADMIN_PASSWORD" \
+        "ALTER ROLE :\"admin_user\" WITH LOGIN PASSWORD :'\''desired_password'\'';" | \
+        PGPASSWORD="$current_password" PG_NEW_ADMIN_PASSWORD="$desired_password" psql \
+          --host=127.0.0.1 --username="$postgres_username" \
           --dbname=postgres \
           --set=ON_ERROR_STOP=1 \
-          --set=admin_user="$POSTGRES_USER" \
-          --set=desired_password="$desired_password" >/dev/null
+          --set=admin_user="$postgres_username" >/dev/null
     '
   vault_store secret/infra/postgres password
   unset current_password

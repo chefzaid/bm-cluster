@@ -1,0 +1,11 @@
+# Opt-in staging profile. Prepare the operator/bootstrap Secret with
+# scripts/configure-postgres-ha.py before applying this profile.
+# Keep active=false until the explicit maintenance migration is verified.
+highAvailabilityEnabled: true
+postgresHa:
+  enabled: true
+  active: false
+  bootstrapOwner: admin
+  bootstrapDatabase: appdb
+  storageSize: 2Gi
+  image: ghcr.io/cloudnative-pg/postgresql:18.6-system-bookworm@sha256:1365ec5cae7bd2b80dd3ccf95a4f500a2d5e7dc13a38a5145203880cd6c0f600

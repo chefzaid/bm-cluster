@@ -5,6 +5,80 @@ cloudflareAccessTeamName: ""
 appsEnabled: false
 deschedulerEnabled: true
 securityImagesEnabled: true
+highAvailabilityEnabled: false
+nodeFencing:
+  enabled: false
+  inventorySecret: node-fencing-inventory
+  nodeNames: []
+
+# Application cache and rate-limit state. Durable application jobs live in
+# PostgreSQL. Sentinel replication is asynchronous; a failover can lose recent
+# cache writes. Three voters plus a replica-write requirement prevent a lone
+# isolated Redis primary from continuing indefinitely.
+redis-ha:
+  fullnameOverride: shared-redis-ha
+  image:
+    repository: docker.io/library/redis
+    tag: 8.10.0-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
+  replicas: 3
+  hardAntiAffinity: true
+  persistentVolume:
+    enabled: true
+    storageClass: longhorn
+    size: 1Gi
+  podDisruptionBudget:
+    minAvailable: 2
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+  redis:
+    config:
+      min-replicas-to-write: 1
+      min-replicas-max-lag: 5
+      maxmemory: 192mb
+      maxmemory-policy: noeviction
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {cpu: "1", memory: 384Mi}
+  sentinel:
+    quorum: 2
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  init:
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  splitBrainDetection:
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 64Mi}
+  haproxy:
+    enabled: true
+    replicas: 3
+    hardAntiAffinity: true
+    podDisruptionBudget:
+      minAvailable: 2
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 99
+      fsGroup: 99
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      readOnlyRootFilesystem: true
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 500m, memory: 128Mi}
+    init:
+      resources:
+        requests: {cpu: 25m, memory: 32Mi}
+        limits: {cpu: 250m, memory: 64Mi}
 
 trivy-operator:
   enabled: true
@@ -22,8 +96,10 @@ trivy-operator:
     scannerReportTTL: 24h
     builtInTrivyServer: true
     accessGlobalSecretsAndServiceAccount: true
+    # Application credentials come from each workload/ServiceAccount's
+    # imagePullSecrets. Only platform fallback credentials belong here.
     privateRegistryScanSecretsNames:
-      apps: devapp-registry-auth,indezy-registry-auth,thoughty-registry-auth,website-registry-auth,platform-registry-auth
+      apps: platform-registry-auth
       infra: platform-registry-auth
       gitlab-runners: platform-registry-auth
       kube-system: platform-registry-auth

@@ -1,14 +1,15 @@
 # Ansible installation and reconciliation
 
-Both playbooks run locally from this checkout on the **first control-plane
-host**, as a non-root user with passwordless sudo. The supplied inventory uses
-`localhost`; node enrollment reaches other hosts over SSH. Adding inventory
-hosts does not distribute platform installation.
+Both playbooks run locally from this checkout on a control-plane host, as a
+non-root user with passwordless sudo. Bootstrap and default-mode reconciliation
+use the first control plane; an HA platform can be reconciled from a surviving
+control plane. The supplied inventory uses `localhost`; node enrollment reaches
+other hosts over SSH. Adding inventory hosts does not distribute installation.
 
 | Playbook | Starting state | Purpose |
 | --- | --- | --- |
 | `ansible/install.yml` | Ubuntu host with Git, Python, Ansible and passwordless sudo | Full unattended installation through `install-control-plane.sh --yes` |
-| `ansible/deploy.yml` | Installed bootstrap K3s server, matching kubeconfig, kubectl, Helm, jq, OpenSSL, Git, Python and Ansible | Reconcile shared platform services and optional host/network integrations |
+| `ansible/deploy.yml` | Installed eligible K3s control plane, matching kubeconfig, kubectl, Helm, jq, OpenSSL, Git, Python and Ansible | Reconcile shared platform services and optional host/network integrations |
 
 Both paths use the shared [platform configuration](../config/platform.env),
 manifest inventories and provisioning helpers. Node roles, private networking,
@@ -61,10 +62,11 @@ mechanism. Use [add-node.sh](node-enrollment.md) for later node enrollment.
 
 ## Platform reconciliation
 
-Preflight verifies the local bootstrap K3s service and kubeconfig before host
-changes. Workers and additional private control planes are rejected. Set
-`CONTROL_PLANE_NODE_NAME` explicitly if K3s uses a name different from the local
-hostname.
+Preflight verifies the local K3s service, control-plane role and kubeconfig
+before host changes. Workers are rejected; additional private control planes
+are accepted when HA is requested or already recorded in the cluster. Set
+`CONTROL_PLANE_NODE_NAME` to the local registered node name if it differs from
+the hostname.
 
 ```bash
 export PLATFORM_DOMAIN=example.com
@@ -83,10 +85,19 @@ is internet exposure. Set `CLOUDFLARE_ACCESS_TEAM_NAME` when using an existing
 Zero Trust team. The internal DNS zone and public node label use the same
 defaults as the installer.
 
+[Control-plane SSH access](node-enrollment.md#remote-enrollment) is reconciled
+from registered control-plane private addresses on multi-node installations.
 The playbook preserves control-plane scheduling by default and retains private
 exposure on joined servers. Set `CONTROL_PLANE_SCHEDULABLE=true|false` only to
 change the policy deliberately. Longhorn uses the shared
 [storage placement rule](node-enrollment.md#scheduling-and-storage).
+
+For HA, complete the explicit PostgreSQL, Kafka and Vault workflows in
+[high availability](high-availability.md#activate-in-order) before reconciling
+with `HIGH_AVAILABILITY_ENABLED=true` and `PLATFORM_HA_VALUES_FILE`. The playbook
+uses the same verified profile as the shell installer, preserves recorded HA
+on later runs, and refuses unfinished migrations or implicit downgrades.
+Include `-e configure_cloudflare=true` for the public Tunnel/DNS cutover.
 
 Feature switches select reconciliation tasks:
 

@@ -134,6 +134,8 @@ CLOUDFLARE_ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE
 CLUSTER_NODE_COUNT="${CLUSTER_NODE_COUNT:-}"
 CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-}"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
+HIGH_AVAILABILITY_ENABLED="${HIGH_AVAILABILITY_ENABLED:-}"
+export HIGH_AVAILABILITY_ENABLED
 PLANNED_WORKER_COUNT=0
 WORKERS_TO_ADD=0
 CONTROL_PLANES_TO_ADD=0
@@ -613,18 +615,20 @@ installer_prompt_section "Cluster identity and deployment scope" \
     "Choose where this cluster runs and whether it includes application workloads."
 prompt_cluster_identity
 
-SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
+enrolled_exposure=""
+if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+    enrolled_exposure="$(kubectl get node "$CONTROL_PLANE_NODE_NAME" --ignore-not-found \
+        -o jsonpath='{.metadata.labels.node\.bm-cluster\.io/exposure}')"
+fi
+if [[ "$enrolled_exposure" == local ]]; then
+    SERVER_EXPOSURE=local
+    info "Preserving this enrolled control plane's private exposure policy."
+else
+    SERVER_EXPOSURE="$(ask_server_exposure "$SERVER_EXPOSURE")"
+fi
 if [[ "$AUTO_APPROVE" == true ]]; then
     CONFIGURE_CLOUDFLARE="${CONFIGURE_CLOUDFLARE:-$([[ "$SERVER_EXPOSURE" == internet ]] && printf true || printf false)}"
     [[ "$CONFIGURE_CLOUDFLARE" =~ ^(true|false)$ ]] || error "CONFIGURE_CLOUDFLARE must be true or false."
-    if [[ "$CONFIGURE_CLOUDFLARE" == true ]]; then
-        [[ "$SERVER_EXPOSURE" == internet ]] || error "Cloudflare requires internet exposure."
-        [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || error "Set CLOUDFLARE_API_TOKEN or CONFIGURE_CLOUDFLARE=false for --yes."
-        if [[ "${CLOUDFLARE_ENABLE_ACCESS:-true}" == true ]]; then
-            [[ -n "${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}" ]] || \
-                error "Set CLOUDFLARE_ACCESS_ALLOWED_EMAILS or CLOUDFLARE_ENABLE_ACCESS=false for --yes."
-        fi
-    fi
 fi
 if [[ "$SERVER_EXPOSURE" == "internet" ]]; then
     info "Internet-exposed mode selected: enabling UFW, Fail2ban, CrowdSec, and control-plane Lynis."
@@ -645,6 +649,25 @@ fi
 installer_prompt_section "Cluster nodes and scheduling" \
     "Choose an odd control-plane count, total nodes, and scheduling for all control planes."
 configure_cluster_topology_plan
+POSTGRES_HA_ACTIVE=false
+if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+    INSTALLER_TEMP_DIR="$(mktemp -d /tmp/bm-cluster-installers.XXXXXX)"
+    HIGH_AVAILABILITY_ENABLED="$(python3 "$SCRIPT_DIR/scripts/resolve-ha-profile.py" --output "$INSTALLER_TEMP_DIR/ha-values.json")"
+    if [[ -f "$INSTALLER_TEMP_DIR/ha-values.json" ]]; then
+        export PLATFORM_HA_VALUES_FILE="$INSTALLER_TEMP_DIR/ha-values.json"
+        POSTGRES_HA_ACTIVE="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("postgresHa", {}).get("active", False)).lower())' "$PLATFORM_HA_VALUES_FILE")"
+    fi
+elif [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+    error "Install and enroll the nodes first, then activate HA using docs/high-availability.md."
+fi
+HIGH_AVAILABILITY_ENABLED="${HIGH_AVAILABILITY_ENABLED:-false}"
+[[ "$HIGH_AVAILABILITY_ENABLED" =~ ^(true|false)$ ]] || error "HIGH_AVAILABILITY_ENABLED must be true or false."
+if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+    (( CONTROL_PLANE_COUNT >= 3 )) || error "HA requires at least three planned control planes. Add servers before enabling it."
+    if [[ "$CONTROL_PLANE_SCHEDULABLE" != true ]]; then
+        (( PLANNED_WORKER_COUNT >= 3 )) || error "HA needs three workers when control planes are unschedulable."
+    fi
+fi
 if [[ "$AUTO_APPROVE" == true ]]; then
     if (( CONTROL_PLANES_TO_ADD > 0 )) && [[ -z "${K3S_CONTROL_PLANE_HOSTS:-}${K3S_CONTROL_PLANE_IPS:-}" ]]; then
         error "Provide K3S_CONTROL_PLANE_HOSTS or K3S_CONTROL_PLANE_IPS for non-interactive server enrollment."
@@ -768,6 +791,15 @@ if [[ "$ADD_K3S_WORKERS" == "true" || "$ADD_K3S_CONTROL_PLANES" == "true" ]]; th
 fi
 
 configure_platform_component_selection
+if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+    INSTALL_LONGHORN=true
+    INSTALL_INGRESS=true
+    INSTALL_VAULT_STACK=true
+    DEPLOY_DATA_STORES=true
+    DEPLOY_PLATFORM_SERVICES=true
+    INSTALL_ARGOCD=true
+    CONFIGURE_CLOUDFLARE=true
+fi
 
 installer_prompt_section "Recovery and public access" \
     "Configure off-node backups and, for internet-facing clusters, public DNS and TLS."
@@ -776,6 +808,20 @@ if [[ "$SERVER_EXPOSURE" == "internet" && "$AUTO_APPROVE" != true ]]; then
     ask_with_default "Configure Cloudflare public DNS and Origin TLS?" "Y" && CONFIGURE_CLOUDFLARE=true || CONFIGURE_CLOUDFLARE=false
 elif [[ "$SERVER_EXPOSURE" != internet ]]; then
     CONFIGURE_CLOUDFLARE=false
+fi
+if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+    CONFIGURE_CLOUDFLARE=true
+    # Tunnel mode has no public origin address. A node administration record
+    # may be managed separately using an explicit --origin-ip.
+    export CLOUDFLARE_PUBLISH_NODE_DNS=false
+fi
+if [[ "$AUTO_APPROVE" == true && "$CONFIGURE_CLOUDFLARE" == true ]]; then
+    [[ "$SERVER_EXPOSURE" == internet || "$HIGH_AVAILABILITY_ENABLED" == true ]] || error "Direct Cloudflare ingress requires internet exposure."
+    [[ -n "${CLOUDFLARE_API_TOKEN:-}" ]] || error "Set CLOUDFLARE_API_TOKEN for Cloudflare reconciliation with --yes."
+    if [[ "${CLOUDFLARE_ENABLE_ACCESS:-true}" == true ]]; then
+        [[ -n "${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}" ]] || \
+            error "Set CLOUDFLARE_ACCESS_ALLOWED_EMAILS or CLOUDFLARE_ENABLE_ACCESS=false for --yes."
+    fi
 fi
 if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$AUTO_APPROVE" != "true" ]]; then
     installer_prompt_value CLOUDFLARE_ACCESS_TEAM_NAME \
@@ -973,13 +1019,13 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     kubectl cluster-info &>/dev/null || error "Cannot reach K8s cluster."
     [[ "$NEEDS_HELM" != "true" ]] || command -v helm &>/dev/null || error "helm not found."
 
-    # Only this bootstrap host owns public ingress. Joined servers retain their
-    # private exposure and disabled ServiceLB labels on subsequent runs.
+    # Direct ingress uses the bootstrap host. Tunnel HA uses private listeners
+    # on every control plane and leaves the public ServiceLB disabled.
     kubectl get node "$CONTROL_PLANE_NODE_NAME" -o json | jq -e \
         '.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")' >/dev/null || \
         error "CONTROL_PLANE_NODE_NAME must identify the bootstrap control-plane node."
     kubectl label "node/$CONTROL_PLANE_NODE_NAME" \
-        svccontroller.k3s.cattle.io/enablelb=true \
+        "svccontroller.k3s.cattle.io/enablelb=$([[ "$HIGH_AVAILABILITY_ENABLED" == true ]] && echo false || echo true)" \
         node.bm-cluster.io/role=control-plane \
         "node.bm-cluster.io/exposure=$SERVER_EXPOSURE" \
         --overwrite >/dev/null
@@ -1052,6 +1098,16 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
         --expected-control-plane-count "$CONTROL_PLANE_COUNT" \
         --expected-node-count "$CLUSTER_NODE_COUNT"
+    if (( CLUSTER_NODE_COUNT > 1 )); then
+        "$SCRIPT_DIR/scripts/reconcile-control-plane-access.sh" \
+            --node-network-cidr "$K3S_NODE_NETWORK_CIDR" \
+            --control-plane-ip "$K3S_PRIVATE_ADDRESS"
+    fi
+    if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+        "$SCRIPT_DIR/scripts/configure-ha-control-planes.sh" --reconcile \
+            --node-network-cidr "$K3S_NODE_NETWORK_CIDR" \
+            --control-plane-ip "$K3S_PRIVATE_ADDRESS"
+    fi
     if [[ "$INSTALL_APPS" == "true" ]]; then
         step "Creating the shared application namespace..."
         kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
@@ -1112,20 +1168,12 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 
     if [[ "$INSTALL_INGRESS" == "true" ]]; then
         step "Installing Nginx Ingress Controller..."
-        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true
-        helm repo update > /dev/null 2>&1
-        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
-            --namespace infra \
-            --version "$INGRESS_NGINX_CHART_VERSION" \
-            --values "$INGRESS_VALUES_FILE" \
-            --set controller.service.type=LoadBalancer \
-            --set controller.service.enableHttp=true \
-            --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true' \
-            --set-string 'controller.nodeSelector.svccontroller\.k3s\.cattle\.io/enablelb=true' \
-            --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane' \
-            --set-string 'controller.tolerations[0].operator=Exists' \
-            --set-string 'controller.tolerations[0].effect=NoSchedule' \
-            --wait --timeout "$INGRESS_HELM_TIMEOUT"
+        if [[ "$HIGH_AVAILABILITY_ENABLED" == true && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            installer_prompt_secret CLOUDFLARE_API_TOKEN "Cloudflare token with Tunnel Edit and DNS/TLS permissions (input hidden)"
+            export CLOUDFLARE_API_TOKEN
+        fi
+        INGRESS_VALUES_FILE="$INGRESS_VALUES_FILE" INGRESS_NGINX_CHART_VERSION="$INGRESS_NGINX_CHART_VERSION" \
+            INGRESS_HELM_TIMEOUT="$INGRESS_HELM_TIMEOUT" "$SCRIPT_DIR/scripts/configure-ingress.sh"
     fi
 
     if [[ "$CONFIGURE_CLOUDFLARE" == "true" ]]; then
@@ -1152,7 +1200,11 @@ EOF
         step "Installing HashiCorp Vault..."
         helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
         helm repo update > /dev/null 2>&1
-        helm upgrade --install vault hashicorp/vault \
+        if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+            "$SCRIPT_DIR/scripts/configure-vault-ha.sh" --namespace infra \
+                --values "$VAULT_VALUES_FILE" --chart-version "$VAULT_CHART_VERSION"
+        else
+            helm upgrade --install vault hashicorp/vault \
             --namespace infra \
             --version "$VAULT_CHART_VERSION" \
             --values "$VAULT_VALUES_FILE" \
@@ -1168,14 +1220,18 @@ EOF
             --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault \
             --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false \
             --set 'server.statefulSet.securityContext.container.capabilities.drop[0]=ALL'
+        fi
 
         step "Installing External Secrets Operator..."
         helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
         helm repo update > /dev/null 2>&1
+        external_secrets_ha_args=()
+        [[ "$HIGH_AVAILABILITY_ENABLED" != true ]] || external_secrets_ha_args+=(--values "$SCRIPT_DIR/config/external-secrets-ha-values.yaml")
         helm upgrade --install external-secrets external-secrets/external-secrets \
             --namespace infra \
             --version "$EXTERNAL_SECRETS_CHART_VERSION" \
             --values "$SCRIPT_DIR/config/external-secrets-values.yaml" \
+            "${external_secrets_ha_args[@]}" \
             --set installCRDs=true \
             --wait --timeout "$EXTERNAL_SECRETS_HELM_TIMEOUT"
 
@@ -1188,6 +1244,10 @@ EOF
         [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || error "Vault configurator is not executable: $VAULT_BOOTSTRAP_SCRIPT"
         step "Bootstrapping Vault auth/policies and seeding secrets..."
         "$VAULT_BOOTSTRAP_SCRIPT" infra
+        if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+            "$SCRIPT_DIR/scripts/sync-vault-recovery.sh" --all-control-planes \
+                --node-network-cidr "$K3S_NODE_NETWORK_CIDR" --control-plane-ip "$K3S_PRIVATE_ADDRESS"
+        fi
 
         for es in "${EXTERNAL_SECRET_NAME_ARRAY[@]}"; do
             kubectl wait --for=condition=Ready externalsecret/"$es" -n infra \
@@ -1197,11 +1257,25 @@ EOF
 
     if [[ "$DEPLOY_DATA_STORES" == "true" ]]; then
         step "Deploying core data stores..."
+        if [[ -n "${PLATFORM_HA_VALUES_FILE:-}" ]]; then
+            kubectl apply -f "$K8S_DIR/ha/platform.yaml"
+        fi
+        if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
+            "$SCRIPT_DIR/scripts/reconcile-system-hardening.sh"
+            kubectl rollout status deployment/coredns -n kube-system --timeout="$DATASTORE_WAIT_TIMEOUT"
+            kubectl rollout status statefulset/shared-redis-ha-server -n infra --timeout="$DATASTORE_WAIT_TIMEOUT"
+            kubectl rollout status deployment/shared-redis-ha-haproxy -n infra --timeout="$DATASTORE_WAIT_TIMEOUT"
+        fi
         for manifest in "${DATASTORE_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"
         done
 
         for app in "${DATASTORE_WAIT_APP_ARRAY[@]}"; do
+            if [[ "$app" == postgres && "$POSTGRES_HA_ACTIVE" == true ]]; then
+                kubectl wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres-ha -n infra --timeout="$DATASTORE_WAIT_TIMEOUT"
+                continue
+            fi
+            [[ "$HIGH_AVAILABILITY_ENABLED" != true || "$app" != redis ]] || continue
             kubectl wait --for=condition=ready pod -l "app=$app" -n infra \
                 --timeout="$DATASTORE_WAIT_TIMEOUT"
         done
@@ -1278,10 +1352,13 @@ EOF
         step "Installing ArgoCD..."
         helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
         helm repo update > /dev/null 2>&1
+        argocd_ha_args=()
+        [[ "$HIGH_AVAILABILITY_ENABLED" != true ]] || argocd_ha_args+=(--values "$SCRIPT_DIR/config/argocd-ha-values.yaml")
         helm upgrade --install argocd argo/argo-cd \
             --namespace infra \
             --version "$ARGOCD_CHART_VERSION" \
             --values "$ARGOCD_VALUES_FILE" \
+            "${argocd_ha_args[@]}" \
             --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
             --wait --timeout "$ARGOCD_HELM_TIMEOUT"
 

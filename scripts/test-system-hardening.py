@@ -2,9 +2,11 @@
 """Exercise admission against server-side dry runs; never change workloads."""
 import copy
 import json
+from pathlib import Path
 import re
 import subprocess
 import unittest
+import yaml
 
 
 def kubectl(*args, payload=None):
@@ -128,7 +130,8 @@ class SystemHardeningTest(unittest.TestCase):
         targets += [('longhorn-system', name, 'deployment') for name in
                     ('longhorn-ui', 'csi-attacher', 'csi-provisioner', 'csi-resizer', 'csi-snapshotter')]
         targets += [('longhorn-system', 'longhorn-csi-plugin', 'daemonset'),
-                    ('infra', 'ingress-nginx-controller', 'deployment')]
+                    ('infra', 'ingress-nginx-controller', 'deployment'),
+                    ('infra', 'ingress-nginx-controller', 'daemonset')]
         for namespace, name, kind in targets:
             with self.subTest(name=name):
                 result = subprocess.run(['kubectl', 'get', 'mutatingadmissionpolicy',
@@ -140,7 +143,11 @@ class SystemHardeningTest(unittest.TestCase):
                 expected = dict(re.findall(r"name: '([^']+)',\s*image: '([^']+)'",
                     policy['spec']['mutations'][0]['applyConfiguration']['expression']))
                 self.assertTrue(expected)
-                source = kubectl('get', kind, name, '-n', namespace, '-o', 'json')
+                source_result = subprocess.run(['kubectl', 'get', kind, name, '-n', namespace,
+                    '--ignore-not-found', '-o', 'json'], capture_output=True, text=True, check=True)
+                if not source_result.stdout.strip():
+                    continue  # Only one ingress workload kind exists in each profile.
+                source = json.loads(source_result.stdout)
                 spec = copy.deepcopy(source['spec']['template']['spec'])
                 spec['imagePullSecrets'] = [{'name': 'unrelated-dry-run-credential'}]
                 for container in spec['containers']:
@@ -179,6 +186,19 @@ class SystemHardeningTest(unittest.TestCase):
         self.assertEqual(actual['containers'][0]['image'], expected)
         self.assertIn({'name': 'unrelated-dry-run-credential'}, actual['imagePullSecrets'])
         self.assertEqual({'name': 'platform-registry-auth'} in actual['imagePullSecrets'], '/security/coredns:' in expected)
+
+
+class SystemHardeningSourceTest(unittest.TestCase):
+    def test_ingress_policy_and_reconciliation_cover_both_workload_kinds(self):
+        root = Path(__file__).resolve().parents[1]
+        policies = list(yaml.safe_load_all((root/'k8s/platform/system-image-overrides.yaml').read_text()))
+        ingress = next(policy for policy in policies if policy['kind'] == 'MutatingAdmissionPolicy' and policy['metadata']['name'] == 'bm-ingress-nginx-controller-security-image')
+        self.assertEqual(set(ingress['spec']['matchConstraints']['resourceRules'][0]['resources']), {'deployments', 'daemonsets'})
+        reconciler = (root/'scripts/reconcile-system-hardening.sh').read_text()
+        for kind in ('deployment', 'daemonset'):
+            self.assertIn(kind+'/infra/ingress-nginx-controller', reconciler)
+        # Privileged CSI exclusions must not exempt the HA ingress sidecars.
+        self.assertIn('$name != "longhorn-csi-plugin"', reconciler)
 
 
 if __name__ == "__main__":

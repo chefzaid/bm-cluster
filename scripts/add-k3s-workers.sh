@@ -12,6 +12,8 @@ if [[ ! -r "$NETWORK_LIBRARY" ]]; then
 fi
 # shellcheck source=lib/network.sh
 source "$NETWORK_LIBRARY"
+# shellcheck source=lib/control-plane-access.sh
+source "$SCRIPT_DIR/lib/control-plane-access.sh"
 PROMPT_LIBRARY="$SCRIPT_DIR/lib/installer-prompts.sh"
 if [[ ! -r "$PROMPT_LIBRARY" ]]; then
     echo "[ERROR] Shared installer prompt library not found: $PROMPT_LIBRARY" >&2
@@ -47,6 +49,7 @@ TAILSCALE_CONFIGURATOR="$SCRIPT_DIR/configure-tailscale.sh"
 OVH_VRACK_CONFIGURATOR="$SCRIPT_DIR/configure-ovh-vrack.sh"
 CLUSTER_TOPOLOGY_RECONCILER="$SCRIPT_DIR/reconcile-cluster-topology.sh"
 K3S_HA_SCRIPT="$SCRIPT_DIR/configure-k3s-ha.sh"
+HA_CONTROL_PLANE_CONFIGURATOR="$SCRIPT_DIR/configure-ha-control-planes.sh"
 WORKER_IPS="${K3S_WORKER_IPS:-}"
 WORKER_HOSTS="${K3S_WORKER_HOSTS:-}"
 REQUESTED_WORKER_COUNT="${K3S_WORKER_COUNT:-}"
@@ -61,6 +64,9 @@ EXPECTED_CONTROL_PLANE_COUNT="${CONTROL_PLANE_COUNT:-}"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
 NODE_TRANSPORT="${K3S_NODE_TRANSPORT:-}"
 SERVER_URL=""
+CONTROL_PLANE_IP="${K3S_PRIVATE_ADDRESS:-}"
+CONTROL_PLANE_SSH_IPS=""
+CONTROL_PLANE_ACCESS_RECONCILER="$SCRIPT_DIR/reconcile-control-plane-access.sh"
 SSH_USER="${USER:-}"
 SSH_PORT="22"
 IDENTITY_FILE=""
@@ -125,7 +131,8 @@ Control-plane options:
   --control-plane-schedulable true|false|preserve
                             Scheduling mode (default: inherit existing mode)
   --transport MODE          vrack for OVHcloud-only, tailscale for hybrid nodes
-  --server-url URL          This server's private IPv4 K3s join endpoint
+  --server-url URL          Any registered control plane's private IPv4 join endpoint
+  --control-plane-ip IP    This host's private SSH source (detected by default)
   --node-network-cidr CIDR  Trusted RFC1918 subnet or Tailscale 100.64.0.0/10
   --ssh-user USER           Default SSH user; requires passwordless sudo or root
   --ssh-port PORT           Default SSH port (22)
@@ -174,7 +181,8 @@ Options:
   --worker-count COUNT      Number of workers to prompt for interactively
   --control-plane-schedulable true|false|preserve
                             Explicit post-enrollment control-plane scheduling mode
-  --server-url URL          K3s URL using this control plane's private IPv4
+  --server-url URL          K3s URL using a registered control plane's private IPv4
+  --control-plane-ip IP    This host's private SSH source (detected by default)
   --ssh-user USER           Default SSH user (each server can override it)
   --ssh-port PORT           Default SSH port (each server can override it)
   --identity-file PATH      Default private key (each server can override it)
@@ -231,6 +239,8 @@ while [[ $# -gt 0 ]]; do
         --expected-control-plane-count=*) EXPECTED_CONTROL_PLANE_COUNT="${1#*=}" ;;
         --control-plane-schedulable) shift; [[ $# -gt 0 ]] || error "Missing control-plane scheduling mode"; CONTROL_PLANE_SCHEDULABLE="$1" ;;
         --control-plane-schedulable=*) CONTROL_PLANE_SCHEDULABLE="${1#*=}" ;;
+        --control-plane-ip) shift; [[ $# -gt 0 ]] || error "Missing local control-plane IP"; CONTROL_PLANE_IP="$1" ;;
+        --control-plane-ip=*) CONTROL_PLANE_IP="${1#*=}" ;;
         --server-url)       shift; [[ $# -gt 0 ]] || error "Missing value for --server-url"; SERVER_URL="$1" ;;
         --server-url=*)     SERVER_URL="${1#*=}" ;;
         --ssh-user)         shift; [[ $# -gt 0 ]] || error "Missing value for --ssh-user"; SSH_USER="$1" ;;
@@ -283,6 +293,13 @@ command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
 command -v jq >/dev/null 2>&1 || error "jq is required."
 kubectl cluster-info >/dev/null 2>&1 || error "Cannot reach the Kubernetes API with the current kubeconfig."
+stored_ha_mode="$(kubectl -n infra get configmap bm-cluster-topology --ignore-not-found -o jsonpath='{.data.highAvailabilityEnabled}')"
+if [[ -z "${HIGH_AVAILABILITY_ENABLED:-}" ]]; then
+    HIGH_AVAILABILITY_ENABLED="${stored_ha_mode:-false}"
+fi
+[[ "$HIGH_AVAILABILITY_ENABLED" == true || "$HIGH_AVAILABILITY_ENABLED" == false ]] || error "Invalid HA mode"
+[[ "$stored_ha_mode" != true || "$HIGH_AVAILABILITY_ENABLED" == true ]] || error "Cannot disable persisted HA while adding nodes"
+export HIGH_AVAILABILITY_ENABLED
 if [[ -z "$CONTROL_PLANE_SCHEDULABLE" ]]; then
     if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
         CONTROL_PLANE_SCHEDULABLE=preserve
@@ -387,6 +404,7 @@ else
     fi
     default_ip="$(detect_private_ip || true)"
 fi
+CONTROL_PLANE_IP="${CONTROL_PLANE_IP:-$default_ip}"
 if [[ -z "$SERVER_URL" && -n "$default_ip" ]]; then
     SERVER_URL="https://${default_ip}:6443"
 fi
@@ -428,7 +446,7 @@ trap cleanup_credentials EXIT HUP INT TERM
 if [[ "$NON_INTERACTIVE" != "true" ]]; then
     installer_prompt_section "$ENROLLMENT_ROLE enrollment defaults" \
         "These connection, network, label, and version values apply to every new node."
-    installer_prompt_value SERVER_URL "K3s URL using this control plane's private IPv4 address" "$SERVER_URL"
+    installer_prompt_value SERVER_URL "K3s URL using a registered control plane's private IPv4 address" "$SERVER_URL"
     installer_prompt_value SSH_USER "Default $ENROLLMENT_ROLE SSH user" "$SSH_USER"
     installer_prompt_value SSH_PORT "$ENROLLMENT_ROLE SSH port" "$SSH_PORT"
     installer_prompt_value IDENTITY_FILE "SSH private key path (blank for agent/config)" "$IDENTITY_FILE"
@@ -472,22 +490,28 @@ cidr_contains_ip "$NODE_NETWORK_CIDR" "$SERVER_PRIVATE_IP" || \
     error "Control-plane URL address $SERVER_PRIVATE_IP is outside $NODE_NETWORK_CIDR"
 [[ -f "$SECURITY_HARDENER" ]] || error "Security policy script not found: $SECURITY_HARDENER"
 [[ -x "$K3S_NETWORK_CONFIGURATOR" ]] || error "K3s network configurator not found or not executable: $K3S_NETWORK_CONFIGURATOR"
-CONTROL_PLANE_CLUSTER_INTERFACE="$(interface_owning_ip "$SERVER_PRIVATE_IP")"
+CONTROL_PLANE_SSH_IPS="$(control_plane_private_ips "$(kubectl get nodes -o json)" "$NODE_NETWORK_CIDR")" || \
+    error "Cannot obtain verified private control-plane addresses from Kubernetes"
+control_plane_address_member "$CONTROL_PLANE_SSH_IPS" "$SERVER_PRIVATE_IP" || \
+    error "The K3s join endpoint must belong to a registered control plane"
+control_plane_address_member "$CONTROL_PLANE_SSH_IPS" "$CONTROL_PLANE_IP" || \
+    error "The local SSH source must belong to a registered control plane"
+CONTROL_PLANE_CLUSTER_INTERFACE="$(interface_owning_ip "$CONTROL_PLANE_IP")"
 [[ -n "$CONTROL_PLANE_CLUSTER_INTERFACE" ]] || \
-    error "Control-plane address $SERVER_PRIVATE_IP is not assigned to a local interface. Run this mode on the control-plane node."
+    error "Control-plane SSH source $CONTROL_PLANE_IP is not assigned to a local interface. Run this mode on the control-plane node."
 [[ "$CONTROL_PLANE_CLUSTER_INTERFACE" == "tailscale0" ]] || [[ ! "$CONTROL_PLANE_CLUSTER_INTERFACE" =~ ^(lo|docker|br-|cni|flannel|veth) ]] || \
-    error "Control-plane address $SERVER_PRIVATE_IP belongs to unsupported virtual interface $CONTROL_PLANE_CLUSTER_INTERFACE."
+    error "Control-plane SSH source $CONTROL_PLANE_IP belongs to unsupported virtual interface $CONTROL_PLANE_CLUSTER_INTERFACE."
 if [[ "$CONTROL_PLANE_CLUSTER_INTERFACE" == "tailscale0" ]]; then
-    tailscale_ipv4 "$SERVER_PRIVATE_IP" || error "tailscale0 must use an address from 100.64.0.0/10"
+    tailscale_ipv4 "$CONTROL_PLANE_IP" || error "tailscale0 must use an address from 100.64.0.0/10"
     command -v tailscale >/dev/null 2>&1 || error "Tailscale address selected but Tailscale is not installed"
     "${LOCAL_SUDO[@]}" tailscale status >/dev/null 2>&1 || error "Tailscale address selected but this node is not connected"
     "${LOCAL_SUDO[@]}" tailscale set --ssh=false --netfilter-mode=nodivert >/dev/null || \
         error "Unable to make UFW authoritative for Tailscale traffic"
 fi
 
-info "Reconciling K3s private networking on $SERVER_PRIVATE_IP via $CONTROL_PLANE_CLUSTER_INTERFACE..."
+info "Reconciling K3s private networking on $CONTROL_PLANE_IP via $CONTROL_PLANE_CLUSTER_INTERFACE..."
 "$K3S_NETWORK_CONFIGURATOR" \
-    --private-ip "$SERVER_PRIVATE_IP" \
+    --private-ip "$CONTROL_PLANE_IP" \
     --private-interface "$CONTROL_PLANE_CLUSTER_INTERFACE" \
     --restart
 
@@ -689,6 +713,8 @@ check_target() {
         error "Control-plane source $client_ip is outside trusted node CIDR $NODE_NETWORK_CIDR."
     cidr_contains_ip "$NODE_NETWORK_CIDR" "$worker_ip" || \
         error "Worker address $worker_ip is outside trusted node CIDR $NODE_NETWORK_CIDR."
+    [[ "$client_ip" == "$CONTROL_PLANE_IP" ]] || \
+        error "SSH used $client_ip instead of the verified local control-plane source $CONTROL_PLANE_IP"
     TARGET_CONTROL_PLANE_IP="$client_ip"
     TARGET_WORKER_IP="$worker_ip"
 }
@@ -726,7 +752,7 @@ preflight_control_plane_count() {
                     error "Invalid vRack control-plane IP: $host"
                 fi
                 cidr_contains_ip "$NODE_NETWORK_CIDR" "$host" || error "$host is outside $NODE_NETWORK_CIDR."
-                [[ "$host" != "$SERVER_PRIVATE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
+                [[ "$host" != "$CONTROL_PLANE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
                 node_name="$host"
                 existing_role="$(jq -r --arg ip "$host" '.items[] | select(any(.status.addresses[]?; .type == "InternalIP" and .address == $ip)) | if (.metadata.labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) then "control-plane" else "worker" end' <<< "$nodes")"
             fi
@@ -778,6 +804,10 @@ install_worker() {
     local target="$1" node_name="$2" node_ip="$3" labels="$4" taints="$5" control_plane_ip="$6"
     local remote_dir="" remote_installer="" remote_hardener=""
     local remote_command quoted quoted_dir quoted_installer quoted_hardener argument existing_node existing_role registered_ip
+    CONTROL_PLANE_SSH_IPS="$(control_plane_private_ips "$(kubectl get nodes -o json)" "$NODE_NETWORK_CIDR")" || \
+        error "Cannot verify control-plane SSH sources before enrollment"
+    control_plane_address_member "$CONTROL_PLANE_SSH_IPS" "$control_plane_ip" || \
+        error "The actual SSH source is not a verified control plane"
     local worker_args=(
         --non-interactive
         --node-role "$ENROLLMENT_ROLE"
@@ -787,11 +817,12 @@ install_worker() {
         --node-name "$node_name"
         --ssh-port "$SSH_PORT"
         --control-plane-ip "$control_plane_ip"
+        --control-plane-ssh-ips "$CONTROL_PLANE_SSH_IPS"
     )
 
     [[ "$node_name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && ${#node_name} -le 253 ]] || \
         error "Invalid Kubernetes node name: $node_name"
-    [[ "$node_ip" != "$SERVER_PRIVATE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
+    [[ "$node_ip" != "$CONTROL_PLANE_IP" ]] || error "The bootstrap control plane cannot enroll itself."
     existing_node="$(kubectl get nodes -o json | jq -c --arg name "$node_name" --arg ip "$node_ip" '
         [.items[] | select(.metadata.name == $name or any(.status.addresses[]?; .type == "InternalIP" and .address == $ip))]')"
     if [[ "$(jq length <<< "$existing_node")" -gt 0 ]]; then
@@ -838,7 +869,7 @@ install_worker() {
     scp "${scp_options[@]}" "$LONGHORN_HOST_CONFIGURATOR" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$LONGHORN_MULTIPATH_CONFIG" "$target:$remote_dir/config/multipath/"
     if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
-        scp "${scp_options[@]}" "$LYNIS_SCHEDULER" "$NODE_AUDITOR" "$target:$remote_dir/scripts/"
+        scp "${scp_options[@]}" "$LYNIS_SCHEDULER" "$NODE_AUDITOR" "${HA_CONTROL_PLANE_CONFIGURATOR:-$SCRIPT_DIR/configure-ha-control-planes.sh}" "$target:$remote_dir/scripts/"
         ssh "${ssh_options[@]}" "$target" "chmod 700 $(printf '%q' "$remote_dir/scripts/configure-lynis-schedule.sh") $(printf '%q' "$remote_dir/scripts/audit-cluster-nodes.sh")"
     fi
     info "Copying the worker host-security policy to $target..."
@@ -850,6 +881,9 @@ install_worker() {
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
     remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-k3s-apparmor.sh") $(printf '%q' "$remote_dir/scripts/configure-longhorn-host.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-registry-mirror.sh") $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-control-plane-network.sh") && $quoted_installer"
+    if [[ "$ENROLLMENT_ROLE" == control-plane && "${HIGH_AVAILABILITY_ENABLED:-false}" == true ]]; then
+        remote_command="export HIGH_AVAILABILITY_ENABLED=true; $remote_command"
+    fi
     for argument in "${worker_args[@]}"; do
         printf -v quoted '%q' "$argument"
         remote_command+=" $quoted"
@@ -880,6 +914,9 @@ install_worker() {
         "node.bm-cluster.io/role=$ENROLLMENT_ROLE" \
         node.bm-cluster.io/exposure=local \
         --overwrite >/dev/null
+    if [[ "$target" == *@* ]]; then
+        kubectl annotate "node/$node_name" "node.bm-cluster.io/ssh-user=${target%@*}" --overwrite >/dev/null
+    fi
     if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
         kubectl label "node/$node_name" svccontroller.k3s.cattle.io/enablelb=false --overwrite >/dev/null
     else
@@ -1027,4 +1064,15 @@ if [[ "$DEFER_TOPOLOGY" != "true" ]]; then
 fi
 
 info "$ENROLLMENT_ROLE enrollment complete."
+if [[ "$DEFER_TOPOLOGY" != true ]]; then
+    access_args=(--node-network-cidr "$NODE_NETWORK_CIDR" --control-plane-ip "$CONTROL_PLANE_IP"
+                 --ssh-user "$SSH_USER" --ssh-port "$SSH_PORT")
+    [[ -z "$IDENTITY_FILE" ]] || access_args+=(--identity-file "$IDENTITY_FILE")
+    "$CONTROL_PLANE_ACCESS_RECONCILER" "${access_args[@]}"
+    ha_mode="$(kubectl -n infra get configmap bm-cluster-topology --ignore-not-found -o jsonpath='{.data.highAvailabilityEnabled}')"
+    if [[ "$ha_mode" == true && "$ENROLLMENT_ROLE" == control-plane ]]; then
+        HIGH_AVAILABILITY_ENABLED=true bash "$HA_CONTROL_PLANE_CONFIGURATOR" --reconcile "${access_args[@]}"
+        "$SCRIPT_DIR/sync-vault-recovery.sh" --all-control-planes "${access_args[@]}"
+    fi
+fi
 kubectl get nodes -o wide

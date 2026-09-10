@@ -26,6 +26,16 @@
 {{- $content = replace "__CLOUDFLARE_ACCESS_TEAM_NAME__" (required "cloudflareAccessTeamName is required" $root.Values.cloudflareAccessTeamName) $content -}}
 {{- $content = replace "__APPS_ENABLED__" (toString $root.Values.appsEnabled) $content -}}
 {{- $content = replace "__DESCHEDULER_ENABLED__" (toString $root.Values.deschedulerEnabled) $content -}}
+{{- $ha := dict "highAvailabilityEnabled" $root.Values.highAvailabilityEnabled -}}
+{{- if $root.Values.postgresHa -}}
+{{- $_ := set $ha "postgresHa" $root.Values.postgresHa -}}
+{{- end -}}
+{{- range $key := list "kafkaHa" "nodeFencing" -}}
+{{- if hasKey $root.Values $key -}}
+{{- $_ := set $ha $key (index $root.Values $key) -}}
+{{- end -}}
+{{- end -}}
+{{- $content = replace "__HA_VALUES_OBJECT__" (toJson $ha) $content -}}
 {{ $content }}
 ---
 {{- end -}}
@@ -36,10 +46,65 @@
 {{- end }}
 {{- end }}
 {{- range $path, $_ := .Files.Glob "datastores/*.yaml" }}
+{{- $pg := $.Values.postgresHa | default dict }}
+{{- if and (eq $path "datastores/postgres.yaml") $pg.enabled $pg.active }}
+{{- range $document := splitList "\n---" (include "bm-cluster.render" (list $ $path)) }}
+{{- $resource := $document | fromYaml }}
+{{- if $resource.kind }}
+{{- if eq $resource.kind "Deployment" }}
+{{- $_ := set $resource.spec "replicas" 0 }}
+{{- else if eq $resource.kind "Service" }}
+{{- $_ := set $resource.spec "selector" (dict "cnpg.io/cluster" "postgres-ha" "cnpg.io/instanceRole" "primary") }}
+{{- end }}
+{{ toYaml $resource }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- if and (eq $path "datastores/redis.yaml") $.Values.highAvailabilityEnabled }}
+{{- range $document := splitList "\n---" (include "bm-cluster.render" (list $ $path)) }}
+{{- $resource := $document | fromYaml }}
+{{- if $resource.kind }}
+{{- if eq $resource.kind "Deployment" }}
+{{- $_ := set $resource.spec "replicas" 0 }}
+{{- else if eq $resource.kind "Service" }}
+{{- $_ := set $resource.spec "selector" (dict "app" "redis-ha-haproxy" "release" "bm-cluster" "component" "haproxy") }}
+{{- end }}
+{{ toYaml $resource }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
+{{- $kafka := $.Values.kafkaHa | default dict }}
+{{- if and (eq $path "datastores/kafka.yaml") $kafka.enabled }}
+{{ include "bm-cluster.kafka-ha" (list $ $path) }}
+{{- else }}
 {{ include "bm-cluster.render" (list $ $path) }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- range $path, $_ := .Files.Glob "platform/*.yaml" }}
+{{- if and (eq $path "platform/keycloak.yaml") $.Values.highAvailabilityEnabled }}
+{{- range $document := splitList "\n---" (include "bm-cluster.render" (list $ $path)) }}
+{{- $resource := $document | fromYaml }}
+{{- if $resource.kind }}
+{{- if eq $resource.kind "Deployment" }}
+{{- $_ := set $resource.spec "replicas" 2 }}
+{{- $selector := dict "matchLabels" (dict "app" "keycloak") }}
+{{- $term := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" $selector }}
+{{- $_ := set $resource.spec.template.spec "affinity" (dict "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list $term))) }}
+{{- $_ := set $resource.spec "strategy" (dict "type" "RollingUpdate" "rollingUpdate" (dict "maxUnavailable" 0 "maxSurge" 1)) }}
+{{- $container := index $resource.spec.template.spec.containers 0 }}
+{{- $_ := set $container "env" (concat $container.env (list (dict "name" "KC_CACHE_STACK" "value" "jdbc-ping"))) }}
+{{- end }}
+{{ toYaml $resource }}
+---
+{{- end }}
+{{- end }}
+{{- else }}
 {{ include "bm-cluster.render" (list $ $path) }}
+{{- end }}
 {{- end }}
 {{- if .Values.appsEnabled }}
 {{- range $path, $_ := .Files.Glob "apps/*.yaml" }}

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Provision a project-scoped, pull-only token for patched platform images.
 set -euo pipefail
+set +x
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
 source "$script_dir/lib/gitlab-admin-token.sh"
+# shellcheck source=lib/vault-access.sh
+source "$script_dir/lib/vault-access.sh"
+vault_pod="$(vault_runtime_pod infra)"
 work_dir="$(mktemp -d /tmp/bm-security-registry.XXXXXX)"
 cleanup() {
   rm -r -- "$work_dir"
@@ -15,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 gitlab_acquire_admin_token
 vault_token="$(sudo cat "${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}")"
-{ printf '%s\n' "$vault_token"; } | kubectl exec -i -n infra vault-0 -- sh -ceu '
+{ printf '%s\n' "$vault_token"; } | kubectl exec -i -n infra "$vault_pod" -- sh -ceu '
   IFS= read -r VAULT_TOKEN
   export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
   vault kv get -format=json secret/infra/gitlab
@@ -44,7 +48,7 @@ curl --config "$work_dir/api.conf" --fail --silent --show-error --request POST \
   "http://$gitlab_ip/api/v4/projects/$project_id/deploy_tokens" > "$work_dir/token.json"
 jq '{registry_pull_username:.username,registry_pull_token:.token,registry_pull_token_id:(.id|tostring)}' \
   "$work_dir/token.json" > "$work_dir/vault.json"
-{ printf '%s\n' "$vault_token"; cat "$work_dir/vault.json"; } | kubectl exec -i -n infra vault-0 -- sh -ceu '
+{ printf '%s\n' "$vault_token"; cat "$work_dir/vault.json"; } | kubectl exec -i -n infra "$vault_pod" -- sh -ceu '
   IFS= read -r VAULT_TOKEN
   export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
   vault kv patch secret/infra/gitlab - >/dev/null

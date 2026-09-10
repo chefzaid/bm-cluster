@@ -41,7 +41,7 @@ ENABLE_RATE_LIMIT="${CLOUDFLARE_ENABLE_RATE_LIMIT:-true}"
 ENABLE_CACHE_RULES="${CLOUDFLARE_ENABLE_CACHE_RULES:-true}"
 ENABLE_REGISTRY_API_COMPATIBILITY="${CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY:-true}"
 ENABLE_ACCESS="${CLOUDFLARE_ENABLE_ACCESS:-true}"
-PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-true}"
+PUBLISH_APEX="${CLOUDFLARE_PUBLISH_APEX:-false}"
 ACCESS_ALLOWED_EMAILS="${CLOUDFLARE_ACCESS_ALLOWED_EMAILS:-}"
 ACCESS_SESSION_DURATION="${CLOUDFLARE_ACCESS_SESSION_DURATION:-24h}"
 ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-}}"
@@ -49,6 +49,10 @@ ACCESS_TEAM_NAME_EXPLICIT=false
 [[ -z "$ACCESS_TEAM_NAME" ]] || ACCESS_TEAM_NAME_EXPLICIT=true
 ACCESS_OIDC_CLIENT_SECRET="${CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET:-}"
 INGRESS_CONFIGMAP="${INGRESS_CONFIGMAP:-$INGRESS_SERVICE}"
+INGRESS_MODE="${CLOUDFLARE_INGRESS_MODE:-}"
+TUNNEL_ID=""
+DNS_RECORD_TYPE=A
+DNS_RECORD_CONTENT=""
 ORIGIN_LOCK_STATUS="not requested"
 REGISTRY_BOT_STATUS="not requested"
 WORK_DIR=""
@@ -105,7 +109,7 @@ Optional environment variables:
   CLOUDFLARE_ENABLE_REGISTRY_API_COMPATIBILITY
                                       Prevent browser-only bot challenges on the Registry (default: true)
   CLOUDFLARE_ENABLE_ACCESS         Default: true
-  CLOUDFLARE_PUBLISH_APEX          Publish the zone apex for the application-owned public website (default: true)
+  CLOUDFLARE_PUBLISH_APEX          Also manage zone-apex DNS (default: false; application-owned)
   CLOUDFLARE_PUBLISH_NODE_DNS      Publish NODE.DOMAIN unproxied for administration (default: true)
   CLOUDFLARE_NODE_DNS_LABEL        Public node label (default: config/platform.env)
   CLOUDFLARE_ACCESS_ALLOWED_EMAILS Space-separated Access email allowlist
@@ -115,6 +119,7 @@ Optional environment variables:
   INGRESS_NAMESPACE
   INGRESS_SERVICE
   INGRESS_CONFIGMAP
+  CLOUDFLARE_INGRESS_MODE         direct or tunnel; defaults to persisted cluster mode
 EOF
 }
 
@@ -742,6 +747,7 @@ append_unique_namespace() {
 
 configure_ingress_proxy_trust() {
     local cidr_csv="$1"
+    local use_forwarded_headers="${2:-true}"
     local current_data desired_data
 
     if ! kubectl get configmap "$INGRESS_CONFIGMAP" -n "$INGRESS_NAMESPACE" >/dev/null 2>&1; then
@@ -749,11 +755,11 @@ configure_ingress_proxy_trust() {
         return 0
     fi
 
-    desired_data="$(jq -n --arg cidrs "$cidr_csv" '{
+    desired_data="$(jq -n --arg cidrs "$cidr_csv" --arg forwarded "$use_forwarded_headers" '{
         "enable-real-ip":"true",
         "forwarded-for-header":"CF-Connecting-IP",
         "proxy-real-ip-cidr":$cidrs,
-        "use-forwarded-headers":"true",
+        "use-forwarded-headers":$forwarded,
         "ssl-protocols":"TLSv1.2 TLSv1.3",
         "server-tokens":"false"
     }')"
@@ -773,6 +779,11 @@ lock_origin_firewall() {
     local cidr
     local previous_cidr
     local sudo_command=()
+
+    if [[ "$INGRESS_MODE" == tunnel ]]; then
+        ORIGIN_LOCK_STATUS="outbound tunnel; no public ingress listener"
+        return 0
+    fi
 
     if [[ "$LOCK_ORIGIN" != "true" ]]; then
         ORIGIN_LOCK_STATUS="left unchanged"
@@ -916,6 +927,28 @@ verify_registrar_and_dnssec() {
 }
 
 step "Validating the Cloudflare User API Token"
+ingress_state="$(kubectl get configmap bm-cluster-public-ingress -n "$INGRESS_NAMESPACE" -o json --ignore-not-found)"
+[[ -n "$ingress_state" ]] || ingress_state='{}'
+stored_ingress_mode="$(jq -r '.data.mode // "direct"' <<< "$ingress_state")"
+INGRESS_MODE="${INGRESS_MODE:-$stored_ingress_mode}"
+[[ "$INGRESS_MODE" =~ ^(direct|tunnel)$ ]] || error "CLOUDFLARE_INGRESS_MODE must be direct or tunnel."
+if [[ "$stored_ingress_mode" == tunnel && "$INGRESS_MODE" != tunnel ]]; then
+    error "A tunnel is configured. Reverting public DNS requires an explicit maintenance migration; the direct installer cannot overwrite it."
+fi
+if [[ "$INGRESS_MODE" == tunnel ]]; then
+    TUNNEL_ID="$(jq -r '.data.tunnelID // empty' <<< "$ingress_state")"
+    [[ "$TUNNEL_ID" =~ ^[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}$ ]] || error "Prepare HA ingress with configure-cloudflare-tunnel.py first."
+    [[ "$(jq -r '.data.domain // empty' <<< "$ingress_state")" == "$ZONE_NAME" ]] || error "Tunnel domain differs from the requested zone."
+    # Count distinct nodes, not pods: duplicate replicas on one host are not HA.
+    ready_connectors="$(kubectl get pods -n "$INGRESS_NAMESPACE" -l app.kubernetes.io/component=controller,app.kubernetes.io/name=ingress-nginx -o json | jq '
+      [.items[] | select(.metadata.deletionTimestamp == null) |
+       select(any(.status.containerStatuses[]?; .name == "cloudflared" and .ready == true)) |
+       select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) |
+       .spec.nodeName] | unique | length')"
+    (( ready_connectors >= 3 )) || error "Public DNS was not changed: HA ingress needs ready connectors on at least three nodes."
+    DNS_RECORD_TYPE=CNAME
+    DNS_RECORD_CONTENT="$TUNNEL_ID.cfargotunnel.com"
+fi
 token_response="$(cf_request GET /user/tokens/verify)"
 require_success "$token_response" "Token verification"
 [[ "$(jq -r '.result.status' <<< "$token_response")" == "active" ]] || error "The Cloudflare token is not active."
@@ -975,15 +1008,24 @@ fi
 if [[ -z "$ORIGIN_IP" ]]; then
     ORIGIN_IP="$(kubectl get service "$INGRESS_SERVICE" -n "$INGRESS_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
 fi
-valid_ipv4 "$ORIGIN_IP" || error "Could not discover a valid public IPv4 for $INGRESS_NAMESPACE/$INGRESS_SERVICE; use --origin-ip."
-info "Using NGINX origin IP: $ORIGIN_IP"
+if [[ "$INGRESS_MODE" == direct || "$PUBLISH_NODE_DNS" == true ]]; then
+    valid_ipv4 "$ORIGIN_IP" || error "Could not discover a public IPv4; use --origin-ip or disable node DNS publication in tunnel mode."
+fi
+if [[ "$INGRESS_MODE" == direct ]]; then
+    DNS_RECORD_CONTENT="$ORIGIN_IP"
+fi
+info "Using public ingress destination: $DNS_RECORD_CONTENT"
 
 proxy_ip_response="$(cf_request GET /ips)"
 require_success "$proxy_ip_response" "Reading Cloudflare proxy networks"
 mapfile -t CLOUDFLARE_PROXY_CIDRS < <(jq -r '.result.ipv4_cidrs[], .result.ipv6_cidrs[]' <<< "$proxy_ip_response")
 (( ${#CLOUDFLARE_PROXY_CIDRS[@]} > 0 )) || error "Cloudflare returned no proxy networks."
 cloudflare_proxy_cidr_csv="$(IFS=,; echo "${CLOUDFLARE_PROXY_CIDRS[*]}")"
-configure_ingress_proxy_trust "$cloudflare_proxy_cidr_csv"
+if [[ "$INGRESS_MODE" == tunnel ]]; then
+    configure_ingress_proxy_trust '127.0.0.1/32,::1/128' false
+else
+    configure_ingress_proxy_trust "$cloudflare_proxy_cidr_csv"
+fi
 
 if [[ -n "${CLOUDFLARE_HOST_LABELS:-}" ]]; then
     read -r -a HOST_LABELS <<< "$CLOUDFLARE_HOST_LABELS"
@@ -1011,6 +1053,7 @@ for label in "${HOST_LABELS[@]}"; do
     DNS_HOSTS+=("$label.$ZONE_NAME")
 done
 
+reconcile_public_dns() {
 step "Reconciling proxied DNS records"
 for retired_label in "${RETIRED_HOST_LABELS[@]}"; do
     [[ -n "$retired_label" ]] || continue
@@ -1035,20 +1078,20 @@ for fqdn in "${DNS_HOSTS[@]}"; do
     ((address_record_count <= 1)) || error "$fqdn has multiple A/AAAA/CNAME records; reconcile the conflict before rerunning."
 
     desired_record_file="$WORK_DIR/dns-${fqdn//./-}.json"
-    jq -n --arg name "$fqdn" --arg content "$ORIGIN_IP" \
-        '{type:"A",name:$name,content:$content,ttl:1,proxied:true,comment:"Managed by bm-cluster/scripts/configure-cloudflare.sh"}' \
+    jq -n --arg name "$fqdn" --arg content "$DNS_RECORD_CONTENT" --arg type "$DNS_RECORD_TYPE" \
+        '{type:$type,name:$name,content:$content,ttl:1,proxied:true,comment:"Managed by bm-cluster/scripts/configure-cloudflare.sh"}' \
         > "$desired_record_file"
 
     if ((address_record_count == 0)); then
         update_response="$(cf_request POST "/zones/$ZONE_ID/dns_records" "$desired_record_file")"
         require_success "$update_response" "Creating DNS record $fqdn"
-        info "Created $fqdn -> $ORIGIN_IP (proxied)."
+        info "Created $fqdn -> $DNS_RECORD_CONTENT (proxied)."
         continue
     fi
 
     current_record="$(jq -c '[.result[] | select(.type == "A" or .type == "AAAA" or .type == "CNAME")][0]' <<< "$record_response")"
-    if jq -e --arg content "$ORIGIN_IP" \
-        '.type == "A" and .content == $content and .proxied == true and .ttl == 1' \
+    if jq -e --arg content "$DNS_RECORD_CONTENT" --arg type "$DNS_RECORD_TYPE" \
+        '.type == $type and .content == $content and .proxied == true and .ttl == 1' \
         <<< "$current_record" >/dev/null; then
         info "DNS record already correct: $fqdn"
         continue
@@ -1057,8 +1100,9 @@ for fqdn in "${DNS_HOSTS[@]}"; do
     record_id="$(jq -r '.id' <<< "$current_record")"
     update_response="$(cf_request PUT "/zones/$ZONE_ID/dns_records/$record_id" "$desired_record_file")"
     require_success "$update_response" "Updating DNS record $fqdn"
-    info "Updated $fqdn -> $ORIGIN_IP (proxied)."
+    info "Updated $fqdn -> $DNS_RECORD_CONTENT (proxied)."
 done
+}
 
 NODE_FQDN=""
 if [[ "$PUBLISH_NODE_DNS" == "true" ]]; then
@@ -1144,6 +1188,12 @@ for namespace in "${TLS_NAMESPACES[@]}"; do
     info "Installed $TLS_SECRET_NAME in namespace $namespace."
 done
 
+if [[ "$INGRESS_MODE" == tunnel ]]; then
+    python3 "$SCRIPT_DIR/configure-cloudflare-tunnel.py" --verify-origins \
+        --domain "$ZONE_NAME" --namespace "$INGRESS_NAMESPACE"
+fi
+reconcile_public_dns
+
 step "Applying the Cloudflare security and performance baseline"
 set_zone_setting ssl strict "Full (strict) TLS"
 set_zone_setting always_use_https on "Always Use HTTPS"
@@ -1213,9 +1263,9 @@ lock_origin_firewall
 
 step "Verifying Cloudflare and Kubernetes state"
 for fqdn in "${DNS_HOSTS[@]}"; do
-    record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?type=A&name=$fqdn&per_page=100")"
+    record_response="$(cf_request GET "/zones/$ZONE_ID/dns_records?type=$DNS_RECORD_TYPE&name=$fqdn&per_page=100")"
     require_success "$record_response" "Final DNS verification for $fqdn"
-    jq -e --arg content "$ORIGIN_IP" \
+    jq -e --arg content "$DNS_RECORD_CONTENT" \
         '.result | length == 1 and .[0].content == $content and .[0].proxied == true' \
         <<< "$record_response" >/dev/null || error "Final DNS verification failed for $fqdn."
 done
@@ -1255,11 +1305,19 @@ kubectl get secret "$TLS_SECRET_NAME" -n "$INGRESS_NAMESPACE" -o jsonpath='{.dat
 openssl x509 -in "$WORK_DIR/verify.crt" -noout -checkend 2592000 >/dev/null 2>&1 || \
     error "The Kubernetes Origin CA certificate failed final validation."
 
+if [[ "$INGRESS_MODE" == tunnel ]]; then
+    publication_patch="$(jq -cn --arg tunnel "$TUNNEL_ID" \
+        '[{op:"test",path:"/data/tunnelID",value:$tunnel},
+          {op:"add",path:"/data/publishedTunnelID",value:$tunnel}]')"
+    kubectl patch configmap bm-cluster-public-ingress -n "$INGRESS_NAMESPACE" \
+        --type=json -p "$publication_patch" >/dev/null
+fi
+
 info "Cloudflare configuration is complete."
 echo ""
 echo "  Zone:          $ZONE_NAME ($ZONE_STATUS)"
-echo "  Origin:        $ORIGIN_IP"
-echo "  DNS records:   ${#DNS_HOSTS[@]} proxied A records"
+echo "  Origin:        $DNS_RECORD_CONTENT ($INGRESS_MODE)"
+echo "  DNS records:   ${#DNS_HOSTS[@]} proxied $DNS_RECORD_TYPE records"
 echo "  Node DNS:      ${NODE_FQDN:-disabled}"
 echo "  TLS mode:      Full (strict)"
 echo "  Minimum TLS:   $MIN_TLS_VERSION"

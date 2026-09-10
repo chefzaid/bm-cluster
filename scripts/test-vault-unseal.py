@@ -17,6 +17,7 @@ stdin = sys.stdin.read() if '-i' in args else ''
 log = pathlib.Path(os.environ['MOCK_LOG'])
 with log.open('a') as f:
     f.write(json.dumps({'args': args, 'stdin': stdin}) + '\n')
+args = [a for a in args if not a.startswith('--request-timeout=')]
 if args[0] == 'get':
     print(os.environ.get('MOCK_PHASE', 'Running'))
 elif 'status' in args:

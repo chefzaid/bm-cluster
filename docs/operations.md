@@ -43,6 +43,13 @@ Use current reports or Grafana's Trivy Security Reports dashboard when reviewing
 findings; committed scan snapshots become stale. Secret findings contain
 metadata, not the discovered secret values.
 
+For private application images, declare registry credentials through workload or
+ServiceAccount `imagePullSecrets` in the application namespace. Trivy Operator
+uses those references without a central list of application credential names;
+see its [private registry guidance](https://aquasecurity.github.io/trivy-operator/v0.27.0/tutorials/private-registries/).
+Application repositories own secret provisioning and rotation. Platform fallback
+credentials cover only platform-owned images.
+
 ```bash
 kubectl get vulnerabilityreports,configauditreports,exposedsecretreports -A
 ```

@@ -462,7 +462,7 @@ spec:
       - apiGroups: [apps]
         apiVersions: [v1]
         operations: [CREATE, UPDATE]
-        resources: [deployments]
+        resources: [deployments, daemonsets]
   matchConditions:
     - name: ingress-nginx-controller-only
       expression: object.metadata.namespace == 'infra' && object.metadata.name == 'ingress-nginx-controller'

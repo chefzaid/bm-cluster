@@ -1,0 +1,95 @@
+{{- define "bm-cluster.kafka-ha" -}}
+{{- $root := index . 0 -}}
+{{- $path := index . 1 -}}
+{{- $ha := $root.Values.kafkaHa -}}
+{{- if not (kindIs "bool" $ha.enabled) }}{{ fail "kafkaHa.enabled must be a boolean" }}{{ end }}
+{{- if not (has $ha.phase (list "dynamic" "expanded" "active")) }}{{ fail "kafkaHa.phase must be dynamic, expanded or active" }}{{ end }}
+{{- if not (regexMatch "^[A-Za-z0-9_-]{22}$" $ha.clusterId) }}{{ fail "kafkaHa.clusterId must be the verified existing Kafka UUID" }}{{ end }}
+{{- if and (hasKey $ha "bootstrap") (not (kindIs "bool" $ha.bootstrap)) }}{{ fail "kafkaHa.bootstrap must be a boolean" }}{{ end }}
+{{- if and $ha.bootstrap (ne $ha.phase "dynamic") }}{{ fail "kafkaHa.bootstrap is only permitted during explicit fresh dynamic bootstrap" }}{{ end }}
+{{- $replicas := ternary 1 3 (eq $ha.phase "dynamic") -}}
+{{- $quorum := "kafka-controller-0.kafka-controller.infra.svc.cluster.local:9093" -}}
+{{- if ne $ha.phase "dynamic" -}}
+{{- $quorum = printf "%s,kafka-controller-1.kafka-controller.infra.svc.cluster.local:9093,kafka-controller-2.kafka-controller.infra.svc.cluster.local:9093" $quorum -}}
+{{- end -}}
+{{- range $document := splitList "\n---" (include "bm-cluster.render" (list $root $path)) }}
+{{- $resource := $document | fromYaml }}
+{{- if $resource.kind }}
+{{- if and (eq $resource.kind "Service") (eq $resource.metadata.name "kafka-controller") }}
+{{- $_ := set $resource.spec "publishNotReadyAddresses" true }}
+{{- else if eq $resource.kind "StatefulSet" }}
+{{- $_ := set $resource.spec "replicas" $replicas }}
+{{- $pod := $resource.spec.template.spec }}
+{{- $container := index $pod.containers 0 }}
+{{- $selector := dict "matchLabels" (dict "app" $resource.metadata.name) }}
+{{- $_ := set $pod "affinity" (dict "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list (dict "labelSelector" $selector "topologyKey" "kubernetes.io/hostname")))) }}
+{{- $_ := set $container "command" (list "/bin/bash" "/opt/bm-cluster/kafka-start.sh") }}
+{{- $_ := unset $container "args" }}
+{{- $env := list }}
+{{- range $value := $container.env }}
+{{- if not (has $value.name (list "CLUSTER_ID" "KAFKA_NODE_ID" "KAFKA_ADVERTISED_LISTENERS" "KAFKA_CONTROLLER_QUORUM_VOTERS" "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR")) }}
+{{- $env = append $env $value }}
+{{- end }}
+{{- end }}
+{{- $env = concat $env (list
+    (dict "name" "CLUSTER_ID" "value" $ha.clusterId)
+    (dict "name" "KAFKA_HEAP_OPTS" "value" (ternary "-Xms128m -Xmx256m" "-Xms256m -Xmx768m" (eq $resource.metadata.name "kafka-controller")))
+    (dict "name" "KAFKA_CONTROLLER_QUORUM_AUTO_JOIN_ENABLE" "value" "false")
+    (dict "name" "KAFKA_CONTROLLER_QUORUM_BOOTSTRAP_SERVERS" "value" $quorum)
+    (dict "name" "BM_KAFKA_ALLOW_INITIAL_FORMAT" "value" (toString ($ha.bootstrap | default false)))
+    (dict "name" "POD_NAME" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.name")))
+    (dict "name" "POD_NAMESPACE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.namespace")))) }}
+{{- if eq $resource.metadata.name "kafka" }}
+{{- $rf := toString $replicas }}
+{{- $isr := ternary "2" "1" (eq $ha.phase "active") }}
+{{- $env = concat $env (list
+    (dict "name" "KAFKA_DEFAULT_REPLICATION_FACTOR" "value" $rf)
+    (dict "name" "KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR" "value" $rf)
+    (dict "name" "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR" "value" $rf)
+    (dict "name" "KAFKA_TRANSACTION_STATE_LOG_MIN_ISR" "value" $isr)
+    (dict "name" "KAFKA_MIN_INSYNC_REPLICAS" "value" $isr)
+    (dict "name" "KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE" "value" "false")) }}
+{{- end }}
+{{- $_ := set $container "env" $env }}
+{{- $_ := set $container.securityContext "readOnlyRootFilesystem" true }}
+{{- $_ := set $container "volumeMounts" (concat $container.volumeMounts (list
+    (dict "name" "ha-startup" "mountPath" "/opt/bm-cluster" "readOnly" true)
+    (dict "name" "runtime-config" "mountPath" "/etc/kafka")
+    (dict "name" "runtime-tmp" "mountPath" "/tmp"))) }}
+{{- $_ := set $pod "volumes" (concat ($pod.volumes | default list) (list
+    (dict "name" "ha-startup" "configMap" (dict "name" "kafka-ha-startup" "defaultMode" 365))
+    (dict "name" "runtime-config" "emptyDir" (dict "sizeLimit" "64Mi"))
+    (dict "name" "runtime-tmp" "emptyDir" (dict "sizeLimit" "128Mi")))) }}
+{{- end }}
+{{ toYaml $resource }}
+---
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- $ha := .Values.kafkaHa | default dict -}}
+{{- if $ha.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-ha-startup
+  namespace: infra
+data:
+  kafka-start.sh: |
+{{ .Files.Get "ha/kafka-start.sh" | indent 4 }}
+{{- if eq $ha.phase "active" }}
+{{- range $name := list "kafka" "kafka-controller" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: infra
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: {{ $name }}
+{{- end }}
+{{- end }}
+{{- end }}

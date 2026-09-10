@@ -410,15 +410,6 @@ data:
     ensure_client argocd true '' \
       '["https://argocd.__PUBLIC_DOMAIN__/auth/callback","https://argocd.__PUBLIC_DOMAIN__/pkce/verify","http://localhost:8085/auth/callback"]' \
       '["https://argocd.__PUBLIC_DOMAIN__"]' 'https://argocd.__PUBLIC_DOMAIN__'
-    ensure_client devapp-web true '' \
-      '["https://devapp.__PUBLIC_DOMAIN__/*"]' \
-      '["https://devapp.__PUBLIC_DOMAIN__"]' 'https://devapp.__PUBLIC_DOMAIN__'
-    ensure_client thoughty-web true '' \
-      '["https://thoughty.__PUBLIC_DOMAIN__/*"]' \
-      '["https://thoughty.__PUBLIC_DOMAIN__"]' 'https://thoughty.__PUBLIC_DOMAIN__'
-    ensure_client indezy-web true '' \
-      '["https://indezy.__PUBLIC_DOMAIN__/*"]' \
-      '["https://indezy.__PUBLIC_DOMAIN__"]' 'https://indezy.__PUBLIC_DOMAIN__'
 
     expect_success "$(request GET "realms/$realm/groups?search=platform-admins&exact=true")"
     group_id="$(extract_id)"

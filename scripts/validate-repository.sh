@@ -166,14 +166,14 @@ if [[ "$topology_mapping" == "0:1,1:1,2:2,3:3,4:4" ]] &&
        "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
    grep -Fq -- '--control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE"' \
        "$REPOSITORY_ROOT/scripts/add-k3s-workers.sh" &&
-   grep -Fq "!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master" \
+   grep -Fq 'scripts/reconcile-cluster-topology.sh --print-longhorn-replicas' \
        "$REPOSITORY_ROOT/ansible/deploy.yml"; then
     pass "install and worker enrollment share control-plane and Longhorn topology policy"
 else
     fail "install and worker enrollment share control-plane and Longhorn topology policy"
 fi
 
-for topology_test in test-cluster-plan.sh test-cluster-topology.sh test-ha-network.sh test-k3s-ha.sh test-k3s-backups.sh test-ha-enrollment.sh test-add-node.sh; do
+for topology_test in test-cluster-plan.sh test-cluster-topology.sh test-ha-network.sh test-k3s-ha.sh test-k3s-backups.sh test-ha-enrollment.sh test-add-node.sh test-control-plane-access.sh test-postgres-access.sh; do
     if bash "$SCRIPT_DIR/$topology_test"; then
         pass "$topology_test behavioral checks"
     else
@@ -277,7 +277,11 @@ else
 fi
 
 legacy_internal_references="$({
+    # Native HA peers advertise stable Kubernetes DNS; the PostgreSQL server
+    # certificate also needs the canonical Service SAN for verified clients.
     grep -RIl --exclude='coredns-custom.yaml' --exclude='configure-k3s-registry-mirror.sh' \
+        --exclude='kafka-ha.yaml' --exclude='postgres-ha.yaml' --exclude='configure-kafka-ha.py' \
+        --exclude='test-*.py' --exclude='test-*.sh' \
         --exclude='validate-repository.sh' --exclude='.gitlab-ci.yml' --exclude-dir=.git \
         --exclude-dir=node_modules --exclude-dir=target \
         'infra\.svc\.cluster\.local' "$REPOSITORY_ROOT" || true
@@ -315,7 +319,7 @@ for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MA
         fi
     done
 done
-for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS POST_ARGOCD_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS DEFAULT_CLOUDFLARE_NON_BROWSER_HOST_LABELS DEFAULT_CLOUDFLARE_EXTERNAL_INGRESS_HOST_LABELS; do
+for inventory in FOUNDATION_MANIFESTS DATASTORE_MANIFESTS PLATFORM_MANIFESTS POST_DEPLOY_CREATE_MANIFESTS POST_ARGOCD_MANIFESTS EXTERNAL_SECRET_NAMES DATASTORE_WAIT_APPS PLATFORM_WAIT_APPS PLATFORM_WAIT_DAEMONSETS DEFAULT_CLOUDFLARE_HOST_LABELS DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS DEFAULT_CLOUDFLARE_NON_BROWSER_HOST_LABELS; do
     value="${!inventory}"
     if [[ "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | wc -l)" -ne "$(tr ',' '\n' <<< "$value" | sed '/^$/d' | sort -u | wc -l)" ]]; then
         printf 'Contract list contains duplicates: %s\n' "$inventory" >&2
@@ -374,7 +378,6 @@ info "Checking public service inventories"
 csv_to_file "$DEFAULT_CLOUDFLARE_HOST_LABELS" "$TEMP_DIR/public-hosts"
 csv_to_file "$DEFAULT_CLOUDFLARE_ACCESS_HOST_LABELS" "$TEMP_DIR/access-hosts"
 csv_to_file "$DEFAULT_CLOUDFLARE_NON_BROWSER_HOST_LABELS" "$TEMP_DIR/non-browser-hosts"
-csv_to_file "$DEFAULT_CLOUDFLARE_EXTERNAL_INGRESS_HOST_LABELS" "$TEMP_DIR/external-ingress-hosts"
 
 if [[ -s "$TEMP_DIR/access-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/access-hosts" "$TEMP_DIR/public-hosts")" ]]; then
     fail "Cloudflare Access hosts are a subset of published hosts"
@@ -386,12 +389,6 @@ if [[ -s "$TEMP_DIR/non-browser-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/non-br
     fail "non-browser hosts are a subset of published hosts"
 else
     pass "non-browser hosts are a subset of published hosts"
-fi
-
-if [[ -s "$TEMP_DIR/external-ingress-hosts" ]] && [[ -n "$(comm -23 "$TEMP_DIR/external-ingress-hosts" "$TEMP_DIR/public-hosts")" ]]; then
-    fail "application-owned Ingress hosts are a subset of published hosts"
-else
-    pass "application-owned Ingress hosts are a subset of published hosts"
 fi
 
 if grep -Fq 'configure_registry_bot_compatibility' "$REPOSITORY_ROOT/scripts/configure-cloudflare.sh" &&
@@ -552,14 +549,12 @@ sed -nE 's#.*href:[[:space:]]+https://([^/[:space:]]+).*#\1#p' "$K8S_ROOT/platfo
     awk 'index($0, ".__PUBLIC_DOMAIN__") == length($0) - length(".__PUBLIC_DOMAIN__") + 1 {sub("\\.__PUBLIC_DOMAIN__$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/homepage-hosts"
 comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/non-browser-hosts" > "$TEMP_DIR/dashboard-hosts"
-comm -23 "$TEMP_DIR/dashboard-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-dashboard-hosts"
-compare_sets "$TEMP_DIR/central-dashboard-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every centrally owned browser-facing cluster hostname"
+compare_sets "$TEMP_DIR/dashboard-hosts" "$TEMP_DIR/homepage-hosts" "Homepage contains every centrally owned browser-facing cluster hostname"
 
 sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "${kubernetes_manifests[@]}" |
     awk '$0 != "__PUBLIC_DOMAIN__" && index($0, ".__PUBLIC_DOMAIN__") == length($0) - length(".__PUBLIC_DOMAIN__") + 1 {sub("\\.__PUBLIC_DOMAIN__$", ""); print}' |
     LC_ALL=C sort -u > "$TEMP_DIR/ingress-hosts"
-comm -23 "$TEMP_DIR/public-hosts" "$TEMP_DIR/external-ingress-hosts" > "$TEMP_DIR/central-ingress-hosts"
-compare_sets "$TEMP_DIR/central-ingress-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
+compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
 
 if command -v node >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
     if "$SCRIPT_DIR/test-sonar-discovery.sh"; then
@@ -723,7 +718,20 @@ if command -v helm >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; 
     else
         fail "public bootstrap and patched security image profiles"
     fi
+    if python3 "$SCRIPT_DIR/test-platform-ha.py"; then
+        pass "DNS, secrets, delivery, and cache HA profiles"
+    else
+        fail "DNS, secrets, delivery, and cache HA profiles"
+    fi
 fi
+
+for ha_test in test-public-ingress.py test-vault-ha.py test-postgres-ha.py test-ha-profile.py test-ha-readiness.py test-node-fencing.py test-ha-control-planes.py test-kafka-ha.py; do
+    if python3 "$SCRIPT_DIR/$ha_test"; then
+        pass "$ha_test"
+    else
+        fail "$ha_test"
+    fi
+done
 
 if command -v ansible-playbook >/dev/null 2>&1; then
     ansible_syntax_ok=true
@@ -777,6 +785,22 @@ if [[ "$LIVE_VALIDATION" == "true" ]]; then
             fail "all manifests pass Kubernetes server-side dry-run"
         else
             pass "all manifests pass Kubernetes server-side dry-run"
+        fi
+        # Admission CEL is type-checked by the API; YAML/Helm rendering alone
+        # cannot establish that the opt-in policy is accepted by this K3s version.
+        if helm template bm-cluster "$K8S_ROOT" --namespace infra \
+            --set highAvailabilityEnabled=true \
+            --set publicDomain=example.com --set internalDnsZone=internal.example.com \
+            --set gitopsRepositoryURL=https://github.com/example/bm-cluster.git \
+            --set cloudflareAccessTeamName=example \
+            --set nodeFencing.enabled=true --set nodeFencing.inventorySecret=fixture-inventory \
+            --set 'nodeFencing.nodeNames[0]=fixture-node' \
+            --show-only templates/high-availability.yaml --show-only templates/node-fencing.yaml \
+            > "$TEMP_DIR/ha-policies.yaml" && \
+            kubectl apply --dry-run=server -f "$TEMP_DIR/ha-policies.yaml" >/dev/null; then
+            pass "HA admission, network, disruption and fencing resources pass server-side dry-run"
+        else
+            fail "HA admission, network, disruption and fencing resources pass server-side dry-run"
         fi
         if kubectl get mutatingadmissionpolicy bm-k3s-stateless-controller-hardening >/dev/null 2>&1; then
             if python3 "$SCRIPT_DIR/test-system-hardening.py"; then

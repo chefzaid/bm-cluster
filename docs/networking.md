@@ -1,33 +1,43 @@
 # Networking
 
-The first control plane owns public ingress. Additional control planes and
-workers communicate over one private node transport. Adding servers provides
-datastore redundancy; public DNS continues to target the first host.
+Nodes communicate over one private transport. The default public entry point
+is the first control plane. After explicit [HA activation](high-availability.md),
+public traffic reaches a Tunnel connector and its local ingress on each
+control plane, with no dependency on the first host's public address.
 
 ## Node topology
 
 ```mermaid
 flowchart TB
-    accTitle: Public entry point and private node topology
-    accDescr: Only the first control plane receives public web traffic. Additional control planes and workers join through vRack or Tailscale.
-    Edge["Cloudflare<br/>Public HTTP and HTTPS"] --> First
+    accTitle: Default and HA ingress over the private node network
+    accDescr: Default public traffic enters the first control plane. Opt-in HA uses outbound Cloudflare Tunnel connectors beside ingress on each control plane. Control planes and workers communicate privately through vRack or Tailscale.
+    Edge["Cloudflare<br/>Public hostnames and edge TLS"]
     subgraph Private["Private node network: vRack or Tailscale"]
-        First["First control plane<br/>K3s API and public ingress entry"]
-        Servers["Additional control planes, when configured<br/>K3s API and embedded etcd"]
+        First["First control plane<br/>K3s API and ingress<br/>HA: co-located Tunnel connector"]
+        Servers["Additional control planes<br/>K3s API and embedded etcd<br/>HA: ingress and Tunnel per host"]
         Workers["Workers, when configured<br/>Workloads and Longhorn storage"]
-        First <-->|etcd replication in HA| Servers
+        First <-->|embedded etcd replication| Servers
         First <-->|K3s and storage traffic| Workers
         Servers <-->|K3s node traffic| Workers
         First -.->|private SSH enrollment| Servers
         First -.->|private SSH enrollment| Workers
     end
+    Edge -->|default: public HTTPS| First
+    First <-->|HA: outbound Tunnel| Edge
+    Servers <-->|HA: outbound Tunnels| Edge
 ```
 
 Solid links show runtime traffic; dotted links show enrollment. Single-server
 installations omit the additional nodes and run workloads and storage on the
 control plane. With workers, scheduling and Longhorn placement follow the
-[node enrollment policy](node-enrollment.md#scheduling-and-storage). Public
-ingress still depends on the first host when more control planes are added.
+[node enrollment policy](node-enrollment.md#scheduling-and-storage). The default
+and HA ingress paths are alternatives: adding control planes leaves the first
+path in place until the explicit migration.
+
+K3s agents learn the available API servers through their
+[built-in client load balancer](https://docs.k3s.io/architecture#how-agent-node-registration-works).
+Operator access uses a reachable control plane's private API and verified
+private SSH; no floating administrative API address is installed.
 
 ## Private node network
 
@@ -110,14 +120,14 @@ reconciled.
 
 | Node | Inbound access |
 | --- | --- |
-| First control plane | Local or internet exposure; public HTTP/HTTPS is restricted to Cloudflare networks in the managed public configuration |
-| Additional control plane | Private SSH from the first control plane, private Kubernetes API and etcd peers; no public ServiceLB advertisement |
-| Worker | Private SSH from the first control plane and required K3s/Longhorn peer traffic; no inbound server API, etcd or public ingress |
+| First control plane | Default local or internet exposure; direct public HTTP/HTTPS is restricted to Cloudflare networks. HA ingress uses an outbound Tunnel instead of public ServiceLB |
+| Additional control plane | Private SSH from verified control planes, private Kubernetes API and etcd peers; HA adds an outbound Tunnel with local ingress, without public ServiceLB advertisement |
+| Worker | Private SSH from verified control planes and required K3s/Longhorn peer traffic; no inbound server API, etcd or public ingress |
 
 Added nodes use default-deny inbound UFW. Both host input and forwarded
 Docker/Kubernetes traffic are restricted on non-cluster interfaces for IPv4
 and IPv6; outbound connections and their replies remain available. Private
-SSH must originate from the exact trusted control-plane address before the
+SSH must originate from the declared control-plane address before the
 provider-facing path is closed. See [host security](security.md) for controls
 and audits, and [node enrollment](node-enrollment.md) for role-specific setup.
 
@@ -135,14 +145,32 @@ the Dependency Proxy uses canonical `gitlab.<your-domain>` HTTPS. Kubernetes
 API clients retain `kubernetes.default.svc`, which matches the server certificate.
 Public Docker clients use `registry.<your-domain>` over HTTPS.
 
+In the opt-in HA profile, CoreDNS runs three replicas across three hosts with
+an availability budget of two. The HA admission policy preserves that placement
+and replica count when K3s reapplies its packaged Deployment or a scale request
+is submitted. The installer triggers reconciliation after installing the policy.
+External Secrets uses two replicas per component; its main and certificate
+controllers elect leaders, while both webhook replicas accept requests.
+
+The shared HA cache accepts application traffic only through HAProxy on port
+6379 from `infra`, `apps` and `corp`. Its Redis and Sentinel ports accept traffic
+only from that release's server and HAProxy pods in `infra`. Applications cannot
+reach Sentinel management directly; these NetworkPolicies preserve the existing
+application cache credential contract.
+
 ## Cloudflare
 
-Public host inventories live in [config/platform.env](../config/platform.env).
-The configurator reconciles proxied DNS, Origin CA TLS, DNSSEC, WAF/cache rules
-and Keycloak-backed Access for administration. Both the apex and `www` records
-are published; the website repository owns the redirect and application Ingress.
-Node administration has a separate unproxied hostname controlled by
-`CLOUDFLARE_NODE_DNS_LABEL`.
+Platform host inventories live in [config/platform.env](../config/platform.env).
+The configurator reconciles their proxied DNS, Origin CA TLS, DNSSEC, WAF/cache
+rules and Keycloak-backed Access for administration. Application names are not
+part of that inventory. Apex DNS publication is disabled by default; set
+`CLOUDFLARE_PUBLISH_APEX=true` only when the platform should manage that record.
+Applications own their public DNS records, Ingress resources and redirects,
+including apex/`www` behavior when applicable.
+
+In the default layout, node administration has a separate unproxied hostname
+controlled by `CLOUDFLARE_NODE_DNS_LABEL`. HA public-host reconciliation does
+not publish node administration records; maintain any required record separately.
 
 ```bash
 ./scripts/configure-cloudflare.sh --zone example.com
@@ -153,6 +181,63 @@ required permissions. For automation, supply `CLOUDFLARE_API_TOKEN`,
 `CLOUDFLARE_ACCESS_ALLOWED_EMAILS` and `CLOUDFLARE_ACCESS_TEAM_NAME`. Complete
 registrar nameserver delegation and DNSSEC prerequisites before unattended
 setup; interactive setup pauses with the required registrar values.
+
+### Application DNS ownership
+
+Each application provisions and removes its own DNS records with its deployment
+lifecycle. In the default layout, use proxied records targeting the public ingress
+host supplied by the operator. No platform repository change is needed when an
+application is added or removed.
+
+After HA activation, use proxied CNAME records targeting
+`<publishedTunnelID>.cfargotunnel.com`. The platform publishes its nonsecret
+endpoint state in `infra/bm-cluster-public-ingress`:
+
+```bash
+kubectl -n infra get configmap bm-cluster-public-ingress -o json
+```
+
+An application must wait until `data.mode=tunnel`, `data.publishedTunnelID` is
+nonempty and equals `data.tunnelID` before switching DNS. A prepared tunnel is
+not an activated endpoint. Keep any existing records until those checks pass;
+application release automation owns the cutover and its own public-path checks.
+
+The tunnel accepts the configured zone apex and wildcard subdomains and forwards
+them to local NGINX; Kubernetes Ingress resources select the application. This
+uses Cloudflare's [hostname wildcard matching](https://developers.cloudflare.com/tunnel/advanced/local-management/configuration-file/#wildcards).
+It creates no wildcard DNS record and grants no application deployment ownership
+to the platform. A hostname without a matching Ingress receives NGINX's default
+404 response. Other public zones require a separate ingress and DNS arrangement.
+
+### HA public ingress
+
+The [HA ingress profile](../config/ingress-nginx-ha-values.yaml) runs NGINX as a
+DaemonSet on control planes, with one co-located `cloudflared` container per
+pod. Every connector uses the same tunnel identity and connects outbound to
+Cloudflare. NGINX uses normal pod networking and an internal Service; additional
+hosts need no inbound public web listener or shared public IP.
+
+The connector sends HTTPS to its own NGINX listener over loopback, verifies the
+Cloudflare Origin CA certificate against the public domain, and preserves the
+request Host. NGINX accepts `CF-Connecting-IP` only from that loopback peer;
+visitor-supplied forwarded host, scheme and port headers remain untrusted.
+Application proxy and NetworkPolicy contracts still see the NGINX pod network.
+Keycloak/OIDC URLs, Access protection and Registry authentication retain their
+public hostnames.
+
+The connector's liveness check withdraws it when its local NGINX stops serving;
+its readiness check requires a connected tunnel. Before changing public DNS to
+the tunnel CNAME, the configurator checks connectors on at least three distinct
+Ready control planes and performs verified HTTPS origin probes. The API token
+also needs account-level **Cloudflare Tunnel Edit** permission. Use the ordered
+[HA migration](high-availability.md#activate-in-order); allow a maintenance
+window for replacing the direct ingress path.
+
+Tunnel replicas provide connection redundancy; they do not promise even
+traffic distribution or preserve an interrupted client connection. See
+[Cloudflare's replica and load-balancer distinction](https://developers.cloudflare.com/tunnel/routing/#replicas-versus-load-balancers).
+Public uploads still pass through Cloudflare's request limits. Verify Registry
+push/pull and application login through the tunnel before relying on failover.
 
 Registry clients cannot answer browser bot challenges. Reconciliation disables
 basic Bot Fight Mode, which has no hostname exceptions, and skips Super Bot

@@ -1,0 +1,83 @@
+# Opt-in overlay. Existing singleton releases must use configure-vault-ha.sh:
+# adding the audit claim template requires a gated StatefulSet migration.
+injector:
+  enabled: false
+server:
+  updateStrategyType: OnDelete
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: "true"
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  affinity: |
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault
+              app.kubernetes.io/instance: "{{ .Release.Name }}"
+              component: server
+          topologyKey: kubernetes.io/hostname
+  service:
+    publishNotReadyAddresses: false
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  dataStorage:
+    enabled: true
+    storageClass: longhorn
+  auditStorage:
+    enabled: true
+    storageClass: local-path
+    size: 5Gi
+  # The chart supplies the audit volume/mount for each server and sidecar.
+  volumes:
+    - name: vault-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 32Mi
+  volumeMounts:
+    - name: vault-tmp
+      mountPath: /tmp
+  statefulSet:
+    securityContext:
+      pod:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      container:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+  ha:
+    enabled: true
+    replicas: 3
+    disruptionBudget:
+      enabled: true
+      maxUnavailable: 1
+    raft:
+      enabled: true
+      config: |
+        ui = true
+        listener "tcp" {
+          tls_disable = 1
+          address = "[::]:8200"
+          cluster_address = "[::]:8201"
+        }
+        storage "raft" {
+          path = "/vault/data"
+          retry_join {
+            leader_api_addr = "http://vault-0.vault-internal.{{ .Release.Namespace }}.svc:8200"
+          }
+          retry_join {
+            leader_api_addr = "http://vault-1.vault-internal.{{ .Release.Namespace }}.svc:8200"
+          }
+          retry_join {
+            leader_api_addr = "http://vault-2.vault-internal.{{ .Release.Namespace }}.svc:8200"
+          }
+        }
+        service_registration "kubernetes" {}

@@ -13,6 +13,7 @@ NODE_LABELS=""
 NODE_TAINTS=""
 NODE_NETWORK_CIDR=""
 CONTROL_PLANE_IP=""
+CONTROL_PLANE_SSH_IPS="${CONTROL_PLANE_SSH_IPS:-}"
 K3S_VERSION=""
 ENROLLMENT_ROLE="${K3S_ENROLLMENT_ROLE:-worker}"
 CONTROL_PLANE_SCHEDULABLE="${CONTROL_PLANE_SCHEDULABLE:-}"
@@ -115,7 +116,8 @@ Required server token: sudo cat /var/lib/rancher/k3s/server/token
   --domain DOMAIN            Cluster domain for the container Registry
   --k3s-version VERSION      Exact K3s server version (required)
   --node-network-cidr CIDR   RFC1918 subnet or Tailscale 100.64.0.0/10
-  --control-plane-ip IP      Bootstrap private SSH source (default: server URL IP)
+  --control-plane-ip IP      Actual private SSH source (default: server URL IP)
+  --control-plane-ssh-ips CSV Verified control-plane administration addresses
   --transport MODE           vrack or tailscale
   --vrack-interface NAME     Physical private NIC if not configured
   --vrack-interface-mac MAC  Expected private NIC MAC
@@ -167,7 +169,8 @@ Options:
   --labels CSV              Initial Kubernetes node labels (key=value,key=value)
   --taints CSV              Initial Kubernetes node taints (key=value:effect,...)
   --node-network-cidr CIDR  RFC1918 network or Tailscale 100.64.0.0/10
-  --control-plane-ip IP     Exact private control-plane source allowed to SSH here
+  --control-plane-ip IP     Actual private source of this SSH connection
+  --control-plane-ssh-ips CSV Verified control-plane administration addresses
   --k3s-version VERSION     Install the control plane's exact K3s version
   --transport MODE          OVHcloud-only vrack, or hybrid/non-OVH tailscale
   --vrack-interface NAME    OVHcloud physical private NIC (if not configured)
@@ -216,6 +219,8 @@ while [[ $# -gt 0 ]]; do
         --taints=*)         NODE_TAINTS="${1#*=}" ;;
         --node-network-cidr) shift; [[ $# -gt 0 ]] || error "Missing value for --node-network-cidr"; NODE_NETWORK_CIDR="$1" ;;
         --node-network-cidr=*) NODE_NETWORK_CIDR="${1#*=}" ;;
+        --control-plane-ssh-ips) shift; [[ $# -gt 0 ]] || error "Missing control-plane SSH IP list"; CONTROL_PLANE_SSH_IPS="$1" ;;
+        --control-plane-ssh-ips=*) CONTROL_PLANE_SSH_IPS="${1#*=}" ;;
         --control-plane-ip) shift; [[ $# -gt 0 ]] || error "Missing value for --control-plane-ip"; CONTROL_PLANE_IP="$1" ;;
         --control-plane-ip=*) CONTROL_PLANE_IP="${1#*=}" ;;
         --k3s-version)      shift; [[ $# -gt 0 ]] || error "Missing value for --k3s-version"; K3S_VERSION="$1" ;;
@@ -509,10 +514,14 @@ else
 fi
 security_args=(--apply --server-exposure local --node-role "$ENROLLMENT_ROLE"
     --control-plane-ip "$CONTROL_PLANE_IP" --ssh-port "$HARDENING_SSH_PORT")
+[[ -z "$CONTROL_PLANE_SSH_IPS" ]] || security_args+=(--control-plane-ssh-ips "$CONTROL_PLANE_SSH_IPS")
 if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
     security_args+=(--private-control-plane)
     [[ -x "$K3S_NETWORK_CONFIGURATOR" ]] || error "K3s network configurator is required for server joins."
     "$K3S_NETWORK_CONFIGURATOR" --private-ip "$NODE_IP" --private-interface "$NODE_INTERFACE" --private-only
+    if [[ "${HIGH_AVAILABILITY_ENABLED:-false}" == true ]]; then
+        bash "$SCRIPT_DIR/configure-ha-control-planes.sh" --prepare-local
+    fi
 fi
 K3S_NODE_NETWORK_CIDR="$NODE_NETWORK_CIDR" K3S_PRIVATE_ADDRESS="$NODE_IP" \
     "$SECURITY_HARDENER" "${security_args[@]}"

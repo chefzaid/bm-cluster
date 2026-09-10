@@ -1,5 +1,14 @@
 #!/bin/bash
 set -euo pipefail
+set +x
+
+POSTGRES_ACCESS_LIBRARY="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/postgres-access.sh"
+[[ -r "$POSTGRES_ACCESS_LIBRARY" ]] || POSTGRES_ACCESS_LIBRARY=/usr/local/lib/bm-cluster/postgres-access.sh
+# shellcheck source=lib/postgres-access.sh
+source "$POSTGRES_ACCESS_LIBRARY"
+VAULT_ACCESS_LIBRARY="$(dirname "$POSTGRES_ACCESS_LIBRARY")/vault-access.sh"
+# shellcheck source=lib/vault-access.sh
+source "$VAULT_ACCESS_LIBRARY"
 
 BACKUP_ENVIRONMENT_FILE="${BACKUP_ENVIRONMENT_FILE:-/etc/bm-cluster/backup.env}"
 if [[ -r "$BACKUP_ENVIRONMENT_FILE" ]]; then
@@ -118,27 +127,29 @@ if command -v kubectl >/dev/null 2>&1 && kubectl get --raw=/readyz >/dev/null 2>
       recurring-job-group.longhorn.io/bm-cluster=enabled --overwrite >/dev/null 2>&1 || true
   fi
 
-  if kubectl get pod vault-0 -n infra >/dev/null 2>&1 && [[ -s /var/lib/bm-cluster/vault-bootstrap-token ]]; then
-    vault_snapshot_path="/tmp/bm-cluster-$TIMESTAMP.snap"
+  if kubectl get service vault -n infra >/dev/null 2>&1 && [[ -s /var/lib/bm-cluster/vault-bootstrap-token ]]; then
+    vault_backup_pod="$(vault_runtime_pod infra)"
+    vault_snapshot_path="/vault/data/.bm-cluster-$TIMESTAMP.snap"
     vault_token="$(< /var/lib/bm-cluster/vault-bootstrap-token)"
-    { printf '%s\n' "$vault_token"; } | kubectl exec -i -n infra vault-0 -- sh -ceu '
+    { printf '%s\n' "$vault_token"; } | kubectl exec -i -n infra "$vault_backup_pod" -- sh -ceu '
       IFS= read -r VAULT_TOKEN
       export VAULT_TOKEN VAULT_ADDR=http://127.0.0.1:8200
       vault operator raft snapshot save "$1"
     ' sh "$vault_snapshot_path" >/dev/null
-    kubectl cp "infra/vault-0:$vault_snapshot_path" "$staging_dir/vault/raft.snap" >/dev/null
-    kubectl exec -n infra vault-0 -- rm -f -- "$vault_snapshot_path"
+    kubectl exec -n infra "$vault_backup_pod" -- cat "$vault_snapshot_path" > "$staging_dir/vault/raft.snap"
+    kubectl exec -n infra "$vault_backup_pod" -- rm -f -- "$vault_snapshot_path"
     unset vault_token
   fi
 
-  if kubectl get deployment postgres -n infra >/dev/null 2>&1; then
+  if kubectl get service postgres -n infra >/dev/null 2>&1; then
+    postgres_target="$(postgres_runtime_target infra)"
     postgres_username="$(kubectl get secret postgres-secret -n infra -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)"
     postgres_password="$(kubectl get secret postgres-secret -n infra -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
-    { printf '%s\n%s\n' "$postgres_username" "$postgres_password"; } | kubectl exec -i -n infra deployment/postgres -- sh -ceu '
+    { printf '%s\n%s\n' "$postgres_username" "$postgres_password"; } | kubectl exec -i -n infra "$postgres_target" -c postgres -- sh -ceu '
       IFS= read -r postgres_username
       IFS= read -r PGPASSWORD
       export PGPASSWORD
-      exec pg_dumpall --username="$postgres_username" --clean --if-exists
+      exec pg_dumpall --host=127.0.0.1 --username="$postgres_username" --clean --if-exists
     ' | gzip -9 > "$staging_dir/application-data/postgresql.sql.gz"
     unset postgres_username postgres_password
   fi

@@ -4,20 +4,20 @@ K3s infrastructure for a single server or a cluster of control planes and worker
 This repository installs and manages the shared platform: networking, storage,
 identity, databases, delivery, observability, security, and Odoo.
 
-DevApp, Thoughty, Indezy, and Website keep their runtime manifests, pipelines,
-and Argo CD Applications in their own repositories. `pi-cluster` is a separate
-environment.
+Application repositories own their runtime manifests, pipelines, secrets
+contracts and Argo CD Applications. The platform discovers supported workloads
+through Kubernetes metadata; it has no application repository inventory.
 
 ## Topology
 
 ```mermaid
 flowchart TB
     accTitle: Cluster architecture and application ownership
-    accDescr: Public traffic enters through Cloudflare and the first control plane. Application and platform services use internal data services and persistent storage.
+    accDescr: Public traffic enters through Cloudflare. Default ingress uses the first control plane; the optional HA profile uses replicated tunnel connectors and ingress on every control plane. Applications and platform services use internal data services and persistent storage.
     Client["Browser or API client"] --> CF["Cloudflare<br/>DNS, edge TLS, and Access for admin UIs"]
     subgraph Cluster["K3s cluster"]
-        Ingress["NGINX ingress<br/>First control plane"]
-        Apps["apps<br/>DevApp, Thoughty, Indezy, Website"]
+        Ingress["NGINX ingress<br/>Default: first control plane<br/>HA: Tunnel and ingress per control plane"]
+        Apps["apps<br/>Externally managed applications"]
         Corp["corp<br/>Odoo"]
         Platform["infra<br/>Delivery, identity, and observability services"]
         Data["infra: internal data services<br/>PostgreSQL, MongoDB, Redis, Kafka, Elasticsearch"]
@@ -35,16 +35,19 @@ flowchart TB
     CF --> Ingress
 ```
 
-The installer supports one control plane or an odd number of control planes
-with embedded etcd, plus workers. Nodes communicate over a private network;
-workers and additional control planes accept no public ingress. Public DNS
-targets the first control plane. Control-plane quorum does not provide ingress
-failover or application replication.
+The default public entry point is the first control plane. Nodes communicate
+over a private network, with one control plane or an odd embedded-etcd quorum
+plus optional workers. The opt-in [HA profile](docs/high-availability.md) adds
+replicated Tunnel ingress and shared-service quorums after explicit data
+migrations. HA requires additional physical hosts; adding nodes alone does not
+enable it. Each application repository configures and verifies its own
+availability. Persistent singleton tools still have
+an outage while their writer and volume recover safely.
 
 | Namespace | Responsibility |
 |---|---|
 | `infra` | Shared platform services, managed here |
-| `apps` | First-party applications, managed by their repositories |
+| `apps` | External applications, managed by their repositories |
 | `corp` | Corporate applications; Odoo is managed here |
 | `gitlab-runners` | Isolated CI job workloads |
 | `longhorn-system` | Persistent storage management |
@@ -68,10 +71,6 @@ use the access controls described in [security and identity](docs/security.md).
 
 | Service | URL | Purpose |
 |---|---|---|
-| Website | [swirlit.dev](https://swirlit.dev), [www.swirlit.dev](https://www.swirlit.dev) | Public site; `www` redirects to the apex |
-| DevApp | [devapp.swirlit.dev](https://devapp.swirlit.dev) | Demonstration application |
-| Thoughty | [thoughty.swirlit.dev](https://thoughty.swirlit.dev) | Journaling application |
-| Indezy | [indezy.swirlit.dev](https://indezy.swirlit.dev) | Freelance-work application |
 | Odoo | [odoo.swirlit.dev](https://odoo.swirlit.dev) | ERP and CRM |
 | Homepage | [dashboard.swirlit.dev](https://dashboard.swirlit.dev) | Service catalog and cluster status |
 | GitLab | [gitlab.swirlit.dev](https://gitlab.swirlit.dev) | Source, CI, artifacts, and packages |
@@ -102,6 +101,7 @@ role and exposure.
 | Install the cluster | [Installation](docs/installation.md) |
 | Choose private transport and exposure | [Networking](docs/networking.md) |
 | Add control planes or workers | [Node enrollment](docs/node-enrollment.md) |
+| Prepare and activate availability across hosts | [High availability](docs/high-availability.md) |
 | Install or reconcile through Ansible | [Ansible](docs/ansible.md) |
 | Understand CI, registries, and GitOps | [Delivery](docs/delivery.md) |
 | Import and synchronize GitHub repositories | [Repository replication](docs/repository-replication.md) |

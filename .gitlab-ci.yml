@@ -25,7 +25,9 @@ validate:repository:
     policy: pull-push
   before_script:
     - mkdir -p "$APK_CACHE_DIR"
-    - apk add --cache-dir "$APK_CACHE_DIR" ansible-core bash coreutils findutils git grep iproute2 jq nodejs openssl py3-yaml python3 shellcheck sqlite util-linux
+    - apk add --cache-dir "$APK_CACHE_DIR" ansible-core bash coreutils findutils git grep helm iproute2 jq nodejs openssl py3-yaml python3 shellcheck sqlite util-linux
+    - helm repo add argo https://argoproj.github.io/argo-helm
+    - helm repo add external-secrets https://charts.external-secrets.io
   script:
     - bash scripts/validate-repository.sh
 

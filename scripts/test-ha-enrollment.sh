@@ -56,10 +56,13 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
     names = ("ip", "sudo", "systemctl", "apt-get", "dpkg", "curl", "mock-k3s-install")
     helpers = ("configure-node-security.sh", "configure-k3s-apparmor.sh", "configure-longhorn-host.sh",
                "configure-k3s-registry-mirror.sh", "configure-k3s-control-plane-network.sh",
-               "configure-ovh-vrack.sh", "configure-tailscale.sh")
+               "configure-ovh-vrack.sh", "configure-tailscale.sh", "configure-ha-control-planes.sh")
     for target in [commands / name for name in names] + [scripts / name for name in helpers]:
         target.write_text(mock)
         target.chmod(0o700)
+    (scripts / "configure-ha-control-planes.sh").write_text('#!/bin/sh\nexec "$(dirname "$0")/../bin/mock-ha-control-plane" "$@"\n')
+    (commands / "mock-ha-control-plane").write_text(mock.replace('name = pathlib.Path(sys.argv[0]).name', 'name = "configure-ha-control-planes.sh"'))
+    (commands / "mock-ha-control-plane").chmod(0o700)
     log = fixture / "calls.jsonl"
     environment = dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}", MOCK_LOG=str(log))
     for key in ("K3S_ENROLLMENT_ROLE", "CONTROL_PLANE_SCHEDULABLE", "K3S_REGISTRY_HOST", "PLATFORM_DOMAIN"):
@@ -70,10 +73,10 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
               "--k3s-version", "v1.35.1+k3s1"]
 
     def run(extra=(), role="control-plane", existing="", expected=0, arguments=None,
-            input_data="fixture-secret-never-in-argv\n"):
+            input_data="fixture-secret-never-in-argv\n", ha="false"):
         log.write_text("")
         current = dict(environment, K3S_ENROLLMENT_ROLE="worker" if role == "control-plane" else "control-plane",
-                       MOCK_EXISTING_SERVICE=existing)
+                       MOCK_EXISTING_SERVICE=existing, HIGH_AVAILABILITY_ENABLED=ha)
         result = subprocess.run(["bash", str(fixture / "add-node.sh"), "--role", role, "--mode", "local",
                                  *(common if arguments is None else arguments), *extra],
                                 input=input_data, text=True,
@@ -103,11 +106,17 @@ with tempfile.TemporaryDirectory(prefix="bm-cluster-ha-enrollment-test.") as dir
         network = next(call for call in calls if call["tool"] == "configure-k3s-control-plane-network.sh")
         assert "--private-only" in network["args"]
 
-    calls, _ = run(role="worker")
+    calls, _ = run(["--control-plane-schedulable", "true"], ha="true")
+    prepared = next(i for i, call in enumerate(calls) if call["tool"] == "configure-ha-control-planes.sh")
+    installed = next(i for i, call in enumerate(calls) if call["tool"] == "mock-k3s-install")
+    assert calls[prepared]["args"] == ["--prepare-local"] and prepared < installed
+
+    calls, _ = run(role="worker", ha="true")
     worker = next(call for call in calls if call["tool"] == "mock-k3s-install")
     assert worker["args"][0] == "agent" and "--secrets-encryption" not in worker["args"]
     assert "node.bm-cluster.io/role=worker" in worker["args"]
     assert all("--private-control-plane" not in call["args"] for call in calls)
+    assert not any(call["tool"] == "configure-ha-control-planes.sh" for call in calls)
 
     for role, service in (("control-plane", "k3s-agent.service"),
                           ("control-plane", "k3s.service"), ("worker", "k3s.service")):
@@ -146,6 +155,8 @@ PY
     trap 'rm -r -- "$TEST_DIR"' EXIT
     # shellcheck source=lib/network.sh
     source "$SCRIPT_DIR/lib/network.sh"
+    # shellcheck source=lib/control-plane-access.sh
+    source "$SCRIPT_DIR/lib/control-plane-access.sh"
     load_function() {
         eval "$(awk -v name="$1" '$0 == name "() {" {active=1} active {print} active && /^}$/ {exit}' "$SCRIPT_DIR/add-k3s-workers.sh")"
     }
@@ -178,6 +189,8 @@ PY
     NODE_TRANSPORT=vrack
     SERVER_URL=https://10.40.0.1:6443
     SERVER_PRIVATE_IP=10.40.0.1
+    CONTROL_PLANE_IP=10.40.0.1
+    CONTROL_PLANE_SSH_IPS=10.40.0.1
     NODE_NETWORK_CIDR=10.40.0.0/24
     SSH_PORT=22
     ssh_options=()
@@ -201,21 +214,21 @@ PY
     SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
     LYNIS_SCHEDULER="$SCRIPT_DIR/configure-lynis-schedule.sh"
     NODE_AUDITOR="$SCRIPT_DIR/audit-cluster-nodes.sh"
-    MOCK_NODES='{"items":[]}'
+    MOCK_NODES='{"items":[{"metadata":{"name":"cp-01","labels":{"node-role.kubernetes.io/control-plane":"true"}},"status":{"addresses":[{"type":"InternalIP","address":"10.40.0.1"}]}}]}'
     install_worker cp-02  cp-02 10.40.0.2 '' '' 10.40.0.1
-    for expected in '--node-role control-plane' '--control-plane-schedulable false' '--domain example.com' 'lib/installer-prompts.sh' 'config/apparmor/' 'config/multipath/' 'configure-longhorn-host.sh' 'configure-lynis-schedule.sh' 'enablelb=false'; do
+    for expected in '--node-role control-plane' '--control-plane-schedulable false' '--domain example.com' 'lib/installer-prompts.sh' 'config/apparmor/' 'config/multipath/' 'configure-longhorn-host.sh' 'configure-lynis-schedule.sh' 'configure-ha-control-planes.sh' 'enablelb=false'; do
         grep -Fq -- "$expected" "$TEST_DIR/calls"
     done
     if grep -Fq -- "$JOIN_TOKEN" "$TEST_DIR/calls"; then exit 1; fi
 
-    MOCK_NODES='{"items":[{"metadata":{"name":"cp-02","labels":{"node-role.kubernetes.io/control-plane":"true"}},"status":{"addresses":[{"type":"InternalIP","address":"10.40.0.2"}]}}]}'
+    MOCK_NODES='{"items":[{"metadata":{"name":"cp-01","labels":{"node-role.kubernetes.io/control-plane":"true"}},"status":{"addresses":[{"type":"InternalIP","address":"10.40.0.1"}]}},{"metadata":{"name":"cp-02","labels":{"node-role.kubernetes.io/control-plane":"true"}},"status":{"addresses":[{"type":"InternalIP","address":"10.40.0.2"}]}}]}'
     : > "$TEST_DIR/calls"
     install_worker cp-02 cp-02 10.40.0.2 '' '' 10.40.0.1
     if grep -q '^scp ' "$TEST_DIR/calls"; then exit 1; fi
     grep -q 'enablelb=false' "$TEST_DIR/calls"
     if (install_worker cp-02 wrong-name 10.40.0.2 '' '' 10.40.0.1) > "$TEST_DIR/error" 2>&1; then exit 1; fi
     grep -q 'collision' "$TEST_DIR/error"
-    MOCK_NODES="${MOCK_NODES//node-role.kubernetes.io\/control-plane/node-role.kubernetes.io\/worker}"
+    MOCK_NODES="$(jq '(.items[] | select(.metadata.name == "cp-02").metadata.labels) = {"node-role.kubernetes.io/worker":"true"}' <<< "$MOCK_NODES")"
     if (install_worker cp-02 cp-02 10.40.0.2 '' '' 10.40.0.1) > "$TEST_DIR/error" 2>&1; then exit 1; fi
     grep -q 'refusing to replace' "$TEST_DIR/error"
 

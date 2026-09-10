@@ -1,0 +1,93 @@
+{{- $pg := .Values.postgresHa | default dict -}}
+{{- if and $pg.active (not $pg.enabled) }}{{ fail "postgresHa.active requires postgresHa.enabled" }}{{ end }}
+{{- if $pg.enabled }}
+{{- if not (hasKey $pg "active") }}{{ fail "postgresHa.active must be explicitly false (staging) or true (verified cutover)" }}{{ end }}
+{{- if or (not (kindIs "bool" $pg.enabled)) (not (kindIs "bool" $pg.active)) }}{{ fail "postgresHa.enabled and postgresHa.active must be booleans" }}{{ end }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-ha
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    # Disabling the profile must never prune database instances or their PVCs.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  instances: 3
+  imageName: {{ required "postgresHa.image is required" $pg.image | quote }}
+  enableSuperuserAccess: false
+  certificates:
+    serverAltDNSNames:
+      - postgres
+      - postgres.infra
+      - postgres.infra.svc
+      - postgres.infra.svc.cluster.local
+  enablePDB: true
+  postgresUID: 26
+  postgresGID: 26
+  storage:
+    storageClass: longhorn
+    size: {{ required "postgresHa.storageSize is required" $pg.storageSize | quote }}
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+  bootstrap:
+    initdb:
+      database: {{ required "postgresHa.bootstrapDatabase is required" $pg.bootstrapDatabase | quote }}
+      owner: {{ required "postgresHa.bootstrapOwner is required" $pg.bootstrapOwner | quote }}
+      secret:
+        name: postgres-ha-bootstrap
+      encoding: UTF8
+      localeCollate: en_US.utf8
+      localeCType: en_US.utf8
+  postgresql:
+    synchronous:
+      method: any
+      number: 1
+      dataDurability: required
+      failoverQuorum: true
+    parameters:
+      synchronous_commit: "on"
+      max_connections: "100"
+    # Operator replication/certificate rules precede user rules. Staging blocks
+    # application TCP access while local exec restores and replicas still work.
+    pg_hba:
+{{- if $pg.active }}
+      - host all all all scram-sha-256
+{{- else }}
+      - host all all all reject
+{{- end }}
+  probes:
+    liveness:
+      isolationCheck:
+        enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 26
+    runAsGroup: 26
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudnative-pg-operator
+  namespace: cnpg-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+{{- end }}

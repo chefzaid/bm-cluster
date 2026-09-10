@@ -90,6 +90,8 @@
          default(default_cloudflare_node_dns_label, true) | lower }}
     control_plane_scheduling_mode: >-
       {{ lookup('ansible.builtin.env', 'CONTROL_PLANE_SCHEDULABLE') | default('preserve', true) | lower }}
+    high_availability_mode: >-
+      {{ lookup('ansible.builtin.env', 'HIGH_AVAILABILITY_ENABLED') | default('false', true) | lower }}
     cloudflare_access_team_name: >-
       {{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_TEAM_NAME') |
          default('bm-cluster-' ~ (platform_domain | replace('.', '-')), true) | lower }}
@@ -128,16 +130,16 @@
     ovh_vrack_service_name: "{{ lookup('ansible.builtin.env', 'OVH_VRACK_SERVICE_NAME') }}"
     ovh_control_plane_service_name: "{{ lookup('ansible.builtin.env', 'OVH_CONTROL_PLANE_SERVICE_NAME') }}"
     host_security_enabled: "{{ manage_host_security | default(harden_firewall | default(true)) | bool }}"
-    longhorn_enabled: "{{ install_longhorn | default(true) | bool }}"
+    longhorn_enabled: "{{ (install_longhorn | default(true) | bool) or high_availability_mode == 'true' }}"
     ingress_enabled: "{{ install_ingress | default(true) | bool }}"
-    cloudflare_enabled: "{{ configure_cloudflare | default(false) | bool }}"
+    cloudflare_enabled: "{{ (configure_cloudflare | default(false) | bool) or high_availability_mode == 'true' }}"
     vault_stack_enabled: "{{ install_vault_stack | default(true) | bool }}"
     data_stores_enabled: "{{ deploy_data_stores | default(true) | bool }}"
-    platform_services_enabled: "{{ (deploy_platform_services | default(true) | bool) or odoo_enabled }}"
+    platform_services_enabled: "{{ (deploy_platform_services | default(true) | bool) or odoo_enabled or high_availability_mode == 'true' }}"
     apps_enabled: "{{ install_apps | default(true) | bool }}"
     odoo_enabled: "{{ apps_enabled and (install_odoo | default(true) | bool) }}"
     descheduler_enabled: "{{ install_descheduler | default(true) | bool }}"
-    argocd_enabled: "{{ install_argocd | default(true) | bool }}"
+    argocd_enabled: "{{ (install_argocd | default(true) | bool) or high_availability_mode == 'true' }}"
     offsite_backups_enabled: >-
       {{ lookup('ansible.builtin.env', 'CONFIGURE_OFFSITE_BACKUPS') | default('false', true) | bool }}
     backup_s3_endpoint: "{{ lookup('ansible.builtin.env', 'BACKUP_S3_ENDPOINT') }}"
@@ -187,6 +189,7 @@
           - control_plane_node_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - cloudflare_node_dns_label is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - control_plane_scheduling_mode in ['true', 'false', 'preserve']
+          - high_availability_mode in ['true', 'false']
           - cloudflare_access_team_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
           - not argocd_enabled or gitops_repository_url is match('^https?://.*\\.git$')
         fail_msg: "The platform contract or server_exposure value is invalid."
@@ -200,22 +203,66 @@
         sudo -n true
         systemctl is-active --quiet k3s
         kubectl cluster-info >/dev/null
-        kubectl get node "$BOOTSTRAP_NODE" -o json | jq -e '
+        stored_ha_mode="$(kubectl -n infra get configmap bm-cluster-topology --ignore-not-found -o jsonpath='{.data.highAvailabilityEnabled}')"
+        node="$(kubectl get node "$BOOTSTRAP_NODE" -o json)"
+        jq -e --arg storedHa "$stored_ha_mode" '
           .metadata.labels as $labels |
           ($labels | has("node-role.kubernetes.io/control-plane") or has("node-role.kubernetes.io/master")) and
-          ($labels["svccontroller.k3s.cattle.io/enablelb"] != "false")
-        ' >/dev/null
+          ($labels["svccontroller.k3s.cattle.io/enablelb"] != "false" or env.HIGH_AVAILABILITY_ENABLED == "true" or $storedHa == "true")
+        ' <<< "$node" >/dev/null
+        jq -r '.metadata.labels["node.bm-cluster.io/exposure"] // ""' <<< "$node"
       args:
         executable: /bin/bash
       environment:
         BOOTSTRAP_NODE: "{{ control_plane_node_name }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       changed_when: false
+      register: enrolled_node_exposure
+
+    - name: Preserve an enrolled control plane's private exposure
+      ansible.builtin.set_fact:
+        server_exposure_mode: local
+      when: enrolled_node_exposure.stdout | trim == 'local'
 
     - name: Create a private rendered-configuration directory
       ansible.builtin.tempfile:
         state: directory
         prefix: bm-cluster-rendered.
       register: rendered_configuration
+
+    - name: Preserve verified HA settings before rendering or changing workloads
+      ansible.builtin.command: >-
+        python3 {{ repository_root }}/scripts/resolve-ha-profile.py
+        --output {{ rendered_configuration.path }}/ha-values.json
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ lookup('ansible.builtin.env', 'HIGH_AVAILABILITY_ENABLED') }}"
+        PLATFORM_HA_VALUES_FILE: "{{ lookup('ansible.builtin.env', 'PLATFORM_HA_VALUES_FILE') }}"
+      register: resolved_ha_mode
+      changed_when: false
+
+    - name: Inspect the verified HA profile
+      ansible.builtin.stat:
+        path: "{{ rendered_configuration.path }}/ha-values.json"
+      register: resolved_ha_profile
+
+    - name: Use the durable availability mode
+      ansible.builtin.set_fact:
+        high_availability_mode: "{{ resolved_ha_mode.stdout | trim }}"
+        platform_ha_values_file: "{{ (rendered_configuration.path ~ '/ha-values.json') if resolved_ha_profile.stat.exists else '' }}"
+
+    - name: Read the verified database and fencing profile
+      ansible.builtin.include_vars:
+        file: "{{ platform_ha_values_file }}"
+        name: verified_ha_settings
+      when: resolved_ha_profile.stat.exists
+
+    - name: Validate HA capacity before changing the host
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-cluster-topology.sh --print-longhorn-replicas"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
+        CONTROL_PLANE_SCHEDULABLE: "{{ control_plane_scheduling_mode }}"
+      changed_when: false
+      when: high_availability_mode == 'true'
 
     - name: Use the rendered Kubernetes and Argo CD configuration
       ansible.builtin.set_fact:
@@ -251,12 +298,14 @@
           - "{{ descheduler_enabled | ternary('true', 'false') }}"
       environment:
         SECURITY_IMAGES_ENABLED: "{{ security_images_enabled | default(lookup('env', 'SECURITY_IMAGES_ENABLED') | default('auto', true)) | lower }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
+        PLATFORM_HA_VALUES_FILE: "{{ platform_ha_values_file }}"
       changed_when: false
 
     - name: Validate automated Cloudflare inputs
       ansible.builtin.assert:
         that:
-          - server_exposure_mode == 'internet'
+          - server_exposure_mode == 'internet' or high_availability_mode == 'true'
           - cloudflare_api_token | length > 0
           - not cloudflare_access_enabled or cloudflare_access_emails | length > 0
         fail_msg: >-
@@ -465,7 +514,7 @@
           - kubectl
           - label
           - "node/{{ control_plane_node_name }}"
-          - svccontroller.k3s.cattle.io/enablelb=true
+          - "svccontroller.k3s.cattle.io/enablelb={{ (high_availability_mode != 'true') | ternary('true', 'false') }}"
           - node.bm-cluster.io/role=control-plane
           - "node.bm-cluster.io/exposure={{ server_exposure_mode }}"
           - --overwrite
@@ -479,6 +528,8 @@
           - --control-plane-schedulable
           - "{{ control_plane_scheduling_mode }}"
       register: topology_reconciliation
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       changed_when: true
 
     - name: Apply Kubernetes admission and namespace security baseline
@@ -516,6 +567,27 @@
       register: host_security_config_apply
       changed_when: "'created' in host_security_config_apply.stdout or 'configured' in host_security_config_apply.stdout"
 
+    - name: Reconcile management access from all verified control planes
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-control-plane-access.sh"
+      environment:
+        K3S_NODE_NETWORK_CIDR: "{{ reconciled_node_cidr | default(trusted_node_cidr) }}"
+        K3S_PRIVATE_ADDRESS: "{{ reconciled_private_address | default(control_plane_private_address) }}"
+        K3S_NODE_SSH_USER: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_USER') }}"
+        K3S_NODE_SSH_PORT: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_PORT') | default('22', true) }}"
+        K3S_NODE_IDENTITY_FILE: "{{ lookup('ansible.builtin.env', 'K3S_NODE_IDENTITY_FILE') }}"
+      when: (reconciled_private_address | default(control_plane_private_address) | length) > 0
+
+    - name: Require verified fencing before controller storage detach
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-ha-control-planes.sh --reconcile"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
+        K3S_NODE_NETWORK_CIDR: "{{ reconciled_node_cidr | default(trusted_node_cidr) }}"
+        K3S_PRIVATE_ADDRESS: "{{ reconciled_private_address | default(control_plane_private_address) }}"
+        K3S_NODE_SSH_USER: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_USER') }}"
+        K3S_NODE_SSH_PORT: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_PORT') | default('22', true) }}"
+        K3S_NODE_IDENTITY_FILE: "{{ lookup('ansible.builtin.env', 'K3S_NODE_IDENTITY_FILE') }}"
+      when: high_availability_mode == 'true'
+
     - name: Ensure local TLS certificates when Cloudflare is disabled
       ansible.builtin.command:
         argv:
@@ -546,13 +618,12 @@
       changed_when: false
       when: longhorn_enabled or ingress_effective or vault_stack_effective or argocd_enabled
 
-    - name: Count Ready worker nodes for Longhorn replicas
-      ansible.builtin.shell: >-
-        kubectl get nodes
-        -l '!node-role.kubernetes.io/control-plane,!node-role.kubernetes.io/master'
-        --no-headers |
-        awk '$2 ~ /^Ready/ {count++} END {print count+0}'
-      register: ready_worker_count
+    - name: Resolve Longhorn replicas from the shared registered-node policy
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-cluster-topology.sh --print-longhorn-replicas"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
+        CONTROL_PLANE_SCHEDULABLE: "{{ control_plane_scheduling_mode }}"
+      register: longhorn_replica_count
       changed_when: false
       when: longhorn_enabled
 
@@ -562,8 +633,8 @@
         --namespace longhorn-system
         --create-namespace
         --version {{ longhorn_chart_version }}
-        --set defaultSettings.defaultReplicaCount={{ [ready_worker_count.stdout | int, 1] | max }}
-        --set persistence.defaultClassReplicaCount={{ [ready_worker_count.stdout | int, 1] | max }}
+        --set defaultSettings.defaultReplicaCount={{ longhorn_replica_count.stdout | int }}
+        --set persistence.defaultClassReplicaCount={{ longhorn_replica_count.stdout | int }}
         --set defaultSettings.defaultDataLocality=best-effort
         --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1
         --set defaultSettings.storageMinimalAvailablePercentage=20
@@ -593,6 +664,8 @@
           - "{{ repository_root }}/scripts/reconcile-cluster-topology.sh"
           - --control-plane-schedulable
           - "{{ control_plane_scheduling_mode }}"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       when: longhorn_enabled
 
     - name: Configure recurring off-node Longhorn backups
@@ -612,19 +685,17 @@
         - offsite_backups_enabled
 
     - name: Install or upgrade NGINX Ingress
-      ansible.builtin.command: >-
-        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
-        --namespace {{ infra_namespace }}
-        --version {{ ingress_nginx_chart_version }}
-        --values {{ ingress_values_file }}
-        --set controller.service.type=LoadBalancer
-        --set controller.service.enableHttp=true
-        --set-string 'controller.nodeSelector.node-role\.kubernetes\.io/control-plane=true'
-        --set-string 'controller.nodeSelector.svccontroller\.k3s\.cattle\.io/enablelb=true'
-        --set-string 'controller.tolerations[0].key=node-role.kubernetes.io/control-plane'
-        --set-string 'controller.tolerations[0].operator=Exists'
-        --set-string 'controller.tolerations[0].effect=NoSchedule'
-        --wait --timeout {{ ingress_helm_timeout }}
+      ansible.builtin.command: "{{ repository_root }}/scripts/configure-ingress.sh"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
+        CONTROL_PLANE_SCHEDULABLE: "{{ control_plane_scheduling_mode }}"
+        INGRESS_NAMESPACE: "{{ infra_namespace }}"
+        INGRESS_VALUES_FILE: "{{ ingress_values_file }}"
+        INGRESS_NGINX_CHART_VERSION: "{{ ingress_nginx_chart_version }}"
+        INGRESS_HELM_TIMEOUT: "{{ ingress_helm_timeout }}"
+        CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+      no_log: true
       when: ingress_effective
 
     - name: Configure Cloudflare DNS, TLS, and edge policies
@@ -636,6 +707,7 @@
         INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
         CLOUDFLARE_NODE_DNS_LABEL: "{{ cloudflare_node_dns_label }}"
         CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
+        CLOUDFLARE_PUBLISH_NODE_DNS: "{{ (high_availability_mode != 'true') | ternary('true', 'false') }}"
       no_log: true
       when: cloudflare_enabled
 
@@ -657,7 +729,22 @@
         --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault
         --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false
         --set server.statefulSet.securityContext.container.capabilities.drop[0]=ALL
-      when: vault_stack_effective
+      when: vault_stack_effective and high_availability_mode != 'true'
+
+    - name: Install or migrate the native Vault Raft quorum
+      ansible.builtin.command:
+        argv:
+          - "{{ repository_root }}/scripts/configure-vault-ha.sh"
+          - --namespace
+          - "{{ infra_namespace }}"
+          - --values
+          - "{{ vault_values_file_effective }}"
+          - --chart-version
+          - "{{ vault_chart_version }}"
+      environment:
+        HIGH_AVAILABILITY_ENABLED: "true"
+        VAULT_HA_MIGRATE_EXISTING: "{{ lookup('ansible.builtin.env', 'VAULT_HA_MIGRATE_EXISTING') | default('false', true) }}"
+      when: vault_stack_effective and high_availability_mode == 'true'
 
     - name: Install or upgrade External Secrets Operator
       ansible.builtin.command: >-
@@ -665,6 +752,7 @@
         --namespace {{ infra_namespace }}
         --version {{ external_secrets_chart_version }}
         --values {{ repository_root }}/config/external-secrets-values.yaml
+        {{ ('--values ' ~ repository_root ~ '/config/external-secrets-ha-values.yaml') if high_availability_mode == 'true' else '' }}
         --set installCRDs=true
         --wait --timeout {{ external_secrets_helm_timeout }}
       when: vault_stack_effective
@@ -696,8 +784,20 @@
         KEYCLOAK_SSO_BOOTSTRAP_USERNAME: "{{ keycloak_sso_bootstrap_username }}"
         KEYCLOAK_SSO_BOOTSTRAP_PASSWORD: "{{ keycloak_sso_bootstrap_password }}"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       no_log: true
       when: vault_stack_effective
+
+    - name: Distribute Vault recovery to verified control planes
+      ansible.builtin.command: "{{ repository_root }}/scripts/sync-vault-recovery.sh --all-control-planes"
+      environment:
+        K3S_NODE_NETWORK_CIDR: "{{ reconciled_node_cidr | default(trusted_node_cidr) }}"
+        K3S_PRIVATE_ADDRESS: "{{ reconciled_private_address | default(control_plane_private_address) }}"
+        K3S_NODE_SSH_USER: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_USER') }}"
+        K3S_NODE_SSH_PORT: "{{ lookup('ansible.builtin.env', 'K3S_NODE_SSH_PORT') | default('22', true) }}"
+        K3S_NODE_IDENTITY_FILE: "{{ lookup('ansible.builtin.env', 'K3S_NODE_IDENTITY_FILE') }}"
+      no_log: true
+      when: vault_stack_effective and high_availability_mode == 'true'
 
     - name: Wait for infrastructure secrets
       ansible.builtin.command: >-
@@ -706,6 +806,29 @@
       loop: "{{ external_secret_names }}"
       changed_when: false
       when: vault_stack_effective
+
+    - name: Prepare replicated platform dependencies before switching canonical services
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/ha/platform.yaml
+      when: platform_ha_values_file | length > 0 and data_stores_effective
+
+    - name: Reconcile existing CoreDNS against the durable HA admission policy
+      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-system-hardening.sh"
+      when: high_availability_mode == 'true' and data_stores_effective
+
+    - name: Wait for replicated cluster DNS
+      ansible.builtin.command: >-
+        kubectl rollout status deployment/coredns -n kube-system --timeout={{ datastore_wait_timeout }}
+      changed_when: false
+      when: high_availability_mode == 'true' and data_stores_effective
+
+    - name: Wait for the Redis quorum and write proxies
+      ansible.builtin.command: >-
+        kubectl rollout status {{ item }} -n {{ infra_namespace }} --timeout={{ datastore_wait_timeout }}
+      loop:
+        - statefulset/shared-redis-ha-server
+        - deployment/shared-redis-ha-haproxy
+      changed_when: false
+      when: high_availability_mode == 'true' and data_stores_effective
 
     - name: Deploy data stores
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
@@ -720,7 +843,17 @@
         -n {{ infra_namespace }} --timeout={{ datastore_wait_timeout }}
       loop: "{{ datastore_wait_apps }}"
       changed_when: false
-      when: data_stores_effective
+      when:
+        - data_stores_effective
+        - not (item == 'postgres' and (verified_ha_settings.postgresHa.active | default(false)))
+        - not (item == 'redis' and high_availability_mode == 'true')
+
+    - name: Wait for native PostgreSQL HA
+      ansible.builtin.command: >-
+        kubectl wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres-ha
+        -n {{ infra_namespace }} --timeout={{ datastore_wait_timeout }}
+      changed_when: false
+      when: data_stores_effective and (verified_ha_settings.postgresHa.active | default(false))
 
     - name: Cache GitLab before its registry can be restarted
       ansible.builtin.command: >-
@@ -794,6 +927,7 @@
         INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
         CLOUDFLARE_NODE_DNS_LABEL: "{{ cloudflare_node_dns_label }}"
         CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
+        CLOUDFLARE_PUBLISH_NODE_DNS: "{{ (high_availability_mode != 'true') | ternary('true', 'false') }}"
       no_log: true
       when:
         - cloudflare_enabled
@@ -851,6 +985,7 @@
         --namespace {{ infra_namespace }}
         --version {{ argocd_chart_version }}
         --values {{ argocd_values_file }}
+        {{ ('--values ' ~ repository_root ~ '/config/argocd-ha-values.yaml') if high_availability_mode == 'true' else '' }}
         --set-string global.image.tag={{ argocd_image_tag }}
         --wait --timeout {{ argocd_helm_timeout }}
       when: argocd_enabled

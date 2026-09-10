@@ -14,11 +14,16 @@ for target in \
   deployment/longhorn-system/longhorn-driver-deployer \
   deployment/longhorn-system/longhorn-ui \
   daemonset/longhorn-system/longhorn-csi-plugin \
-  deployment/infra/ingress-nginx-controller; do
+  deployment/infra/ingress-nginx-controller \
+  daemonset/infra/ingress-nginx-controller; do
   IFS=/ read -r kind namespace name <<< "$target"
   existing="$(kubectl get "$kind" "$name" -n "$namespace" --ignore-not-found -o name)"
   [[ -n "$existing" ]] || continue
   policy="$(kubectl get mutatingadmissionpolicy "bm-$name-security-image" --ignore-not-found -o json)"
+  ha_dns=false
+  if [[ "$name" == coredns ]] && [[ -n "$(kubectl get mutatingadmissionpolicy bm-coredns-availability --ignore-not-found -o name)" ]]; then
+    ha_dns=true
+  fi
   expected='{}'
   if [[ -n "$policy" ]]; then
     expected="$(jq -c '[.spec.mutations[] | .applyConfiguration.expression // empty |
@@ -35,11 +40,14 @@ for target in \
   for (( attempt=0; attempt<30; attempt++ )); do
     preview="$(kubectl patch "$kind" "$name" -n "$namespace" --type=merge \
       -p "$patch" --dry-run=server -o json)"
-    if jq -e --argjson expected "$expected" --arg kind "$kind" '
+    if jq -e --argjson expected "$expected" --arg kind "$kind" --arg name "$name" --argjson haDns "$ha_dns" '
       .spec.template.spec as $pod |
       ([$pod.containers[] | {key: .name, value: .image}] | from_entries) as $actual |
       all($expected | to_entries[]; $actual[.key] == .value) and
-      all($pod.containers[] | select($kind != "daemonset" or
+      (if $haDns then .spec.replicas == 3 and any($pod.topologySpreadConstraints[]?;
+        .minDomains == 3 and .topologyKey == "kubernetes.io/hostname" and
+        .whenUnsatisfiable == "DoNotSchedule") else true end) and
+      all($pod.containers[] | select($kind != "daemonset" or $name != "longhorn-csi-plugin" or
         .name == "node-driver-registrar" or .name == "longhorn-liveness-probe");
         ((.securityContext.seccompProfile.type // $pod.securityContext.seccompProfile.type) == "RuntimeDefault") and
         ((.securityContext.capabilities.drop // []) | index("ALL") != null) and

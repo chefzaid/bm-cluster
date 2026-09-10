@@ -75,13 +75,36 @@ while IFS= read -r -d '' file; do
     -e "s|__CLOUDFLARE_ACCESS_TEAM_NAME__|$cloudflare_access_team|g" \
     -e "s|__APPS_ENABLED__|$INSTALL_APPS|g" \
     -e "s|__DESCHEDULER_ENABLED__|$INSTALL_DESCHEDULER|g" \
+    -e 's|__HA_VALUES_OBJECT__|{"highAvailabilityEnabled":false}|g' \
     "$file"
 done < <(find "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" -type f -print0)
+
+# Also make the rendered chart values usable by staged migration helpers.
+# The source chart leaves identity blank because Argo normally supplies it.
+python3 - "$OUTPUT_DIR/k8s/values.yaml" "$PLATFORM_DOMAIN" "$INTERNAL_DNS_ZONE" \
+  "$GITOPS_REPOSITORY_URL" "$CLOUDFLARE_ACCESS_TEAM_NAME" "$INSTALL_APPS" "$INSTALL_DESCHEDULER" <<'PY'
+from pathlib import Path
+import sys, yaml
+path = Path(sys.argv[1])
+values = yaml.safe_load(path.read_text())
+values.update(zip(('publicDomain', 'internalDnsZone', 'gitopsRepositoryURL', 'cloudflareAccessTeamName'), sys.argv[2:6]))
+values.update(appsEnabled=sys.argv[6] == 'true', deschedulerEnabled=sys.argv[7] == 'true')
+path.write_text(yaml.safe_dump(values, sort_keys=False))
+PY
 
 render_token_pattern='__(PUBLIC_DOMAIN|INTERNAL_DNS_ZONE|GITOPS_REPOSITORY_URL|GITLAB_GROUP_PATH|GITLAB_PROJECT_NAME|CLOUDFLARE_ACCESS_TEAM_NAME|APPS_ENABLED|DESCHEDULER_ENABLED|SECURITY_IMAGE_PROFILE|SECURITY_SCANNER_REGISTRY|SECURITY_PULL_SECRETS)__'
 if grep -REn "$render_token_pattern" "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" >/dev/null; then
   grep -REn "$render_token_pattern" "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config" >&2
   fail "Rendered configuration still contains unresolved placeholders."
+fi
+
+if [[ "${HIGH_AVAILABILITY_ENABLED:-false}" == true || -n "${PLATFORM_HA_VALUES_FILE:-}" ]]; then
+  profile_args=(--root "$OUTPUT_DIR")
+  [[ -z "${PLATFORM_HA_VALUES_FILE:-}" ]] || profile_args+=(--values "$PLATFORM_HA_VALUES_FILE")
+  PLATFORM_DOMAIN="$PLATFORM_DOMAIN" INTERNAL_DNS_ZONE="$INTERNAL_DNS_ZONE" \
+    GITOPS_REPOSITORY_URL="$GITOPS_REPOSITORY_URL" CLOUDFLARE_ACCESS_TEAM_NAME="$CLOUDFLARE_ACCESS_TEAM_NAME" \
+    INSTALL_APPS="$INSTALL_APPS" INSTALL_DESCHEDULER="$INSTALL_DESCHEDULER" \
+    python3 "$SCRIPT_DIR/render-platform-ha.py" "${profile_args[@]}"
 fi
 
 printf '%s\n' "$OUTPUT_DIR"

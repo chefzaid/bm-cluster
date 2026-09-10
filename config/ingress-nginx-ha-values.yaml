@@ -1,0 +1,78 @@
+# One ingress and outbound Tunnel connector on every control plane. No public
+# VIP, shared layer-2 network, or public listener on the additional nodes.
+controller:
+  kind: DaemonSet
+  nodeSelector:
+    kubernetes.io/os: linux
+    node-role.kubernetes.io/control-plane: "true"
+    svccontroller.k3s.cattle.io/enablelb: null
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  service:
+    type: ClusterIP
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  config:
+    enable-real-ip: "true"
+    forwarded-for-header: CF-Connecting-IP
+    # Only the co-located connector can supply trusted client headers. Never
+    # trust the entire pod CIDR: applications could then forge client addresses.
+    proxy-real-ip-cidr: 127.0.0.1/32,::1/128
+    # Origin transport is already HTTPS with the original Host. Do not trust
+    # a visitor's X-Forwarded-Host/Proto/Port; real-IP trust remains separate.
+    use-forwarded-headers: "false"
+  extraContainers:
+    - name: cloudflared
+      image: cloudflare/cloudflared:2026.8.3@sha256:51c9cefcb4569df44e1ad403ab1d3d8065aa8e84339bcfc6aee75502e1140339
+      args:
+        - tunnel
+        - --no-autoupdate
+        - --metrics
+        - 0.0.0.0:2000
+        - run
+        - --token-file
+        - /etc/cloudflared/token
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 100m
+          memory: 64Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 2000
+        periodSeconds: 5
+      # Withdraw the connector if its local ingress stops serving. Cloudflare
+      # does not inspect Kubernetes readiness when routing to tunnel replicas.
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 10254
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        failureThreshold: 3
+      volumeMounts:
+        - name: cloudflare-tunnel
+          mountPath: /etc/cloudflared
+          readOnly: true
+  extraVolumes:
+    - name: cloudflare-tunnel
+      secret:
+        secretName: cloudflare-tunnel
+        defaultMode: 0444

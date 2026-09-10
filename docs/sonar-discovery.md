@@ -39,11 +39,11 @@ Keep these files and CI rules in every application repository:
 - `.sonar-auto.json` declares the quality job and scan-only variable:
 
   ```json
-  {"version":1,"job":"02-quality","scanOnlyVariable":"SONAR_SCAN_ONLY"}
+  {"version":1,"job":"sonar","scanOnlyVariable":"SONAR_SCAN_ONLY"}
   ```
 
-  Website uses `"job":"sonar"`. The declaration names the app's contract; the
-  platform does not modify its pipeline implementation.
+  Set `job` to the application's actual quality job. The declaration names its
+  contract; the platform does not modify the pipeline implementation.
 - A default-branch pipeline with `SONAR_SCAN_ONLY=true` must run only the needed
   compilation, tests/coverage and analysis. Job rules must exclude image builds,
   packaging for release, publishing, deployment and version changes.
@@ -57,10 +57,9 @@ the discovery Job visibly while other valid repositories continue. Check the
 Sonar project's source inventory to confirm that both backend and frontend were
 analyzed; namespace discovery alone does not establish source coverage.
 
-DevApp is the template: its `docs/code-quality.md` covers onboarding and manual
-scans, and `docs/adr/0008-code-quality-and-verification.md` records the decision.
-Other apps retain their own code-quality and deployment documentation. See
-[delivery](delivery.md) for the shared CI/GitOps boundary.
+Each application documents its source inventory, onboarding and manual scan
+commands in its own repository. See [delivery](delivery.md) for the shared
+CI/GitOps boundary.
 
 ## Credentials and operation
 
@@ -95,8 +94,8 @@ server-side processing, and a failed quality gate differs from submission failur
 ## Validation
 
 `./scripts/test-sonar-discovery.sh` checks namespace boundaries, deduplication,
-privacy, scan-only triggers, active/recent work and missing contracts. Each app's
-`infra/scripts/test-quality.sh` checks successful submission, scanner failure and
-missing-token behavior. Validate app CI with both values of `SONAR_SCAN_ONLY` and
-confirm that a scan-only pipeline cannot publish or deploy. The platform's
+privacy, scan-only triggers, active/recent work and missing contracts. Application
+repositories should test successful submission, scanner failure and missing-token
+behavior in their own quality jobs. Validate app CI with both values of
+`SONAR_SCAN_ONLY` and confirm that a scan-only pipeline cannot publish or deploy. The platform's
 [validation suite](operations.md#validation) includes discovery tests.

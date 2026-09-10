@@ -27,7 +27,7 @@ The assistant collects the domain, node identity, installation scope, topology,
 platform components, recovery destination, public access and administrator
 credentials. The recommended bundle installs the shared platform; declining it
 lets you select components individually. `infra + apps` adds centrally managed
-Odoo in `corp`. First-party applications remain in their own repositories and
+Odoo in `corp`. External applications remain in their own repositories and
 are onboarded through [repository replication](repository-replication.md).
 
 Prepare a domain for public deployment and an accessible GitOps repository URL.
@@ -48,9 +48,12 @@ servers join sequentially over the private network.
 Clusters without workers must permit control-plane workloads. Node enrollment
 also reconciles [Longhorn placement and replicas](node-enrollment.md#scheduling-and-storage).
 
-An etcd majority must remain available. The installer does not provide a
-floating API address, public ingress failover or application replication;
-public traffic still enters through the first host. See the
+An etcd majority must remain available. The default public entry point remains
+the first host after node enrollment. For replicated public ingress, shared
+data services and application profiles, follow the separate
+[HA migration](high-availability.md) after enrolling sufficient hosts.
+Administrative API access uses a reachable control plane's private address;
+no floating API address is installed. See the
 [K3s embedded-etcd guide](https://docs.k3s.io/datastore/ha-embedded).
 
 ## Unattended installation
@@ -81,6 +84,7 @@ unset KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
 | `SERVER_EXPOSURE=internet` | Enable the public host security policy; unattended installation enables Cloudflare by default |
 | `INTERNAL_DNS_ZONE` | Optional override for `internal.<PLATFORM_DOMAIN>` |
 | `CLOUDFLARE_NODE_DNS_LABEL` | Public administration hostname label, independent of the Kubernetes node name; defaults to `node-01` |
+| `CLOUDFLARE_PUBLISH_APEX` | Defaults to `false`; explicitly opt in only if the platform should manage apex DNS |
 | `CONTROL_PLANE_COUNT`, `CLUSTER_NODE_COUNT` | Desired final counts, including already registered nodes |
 | `K3S_NODE_TRANSPORT` | `vrack` or `tailscale` for multi-node enrollment |
 | `K3S_CONTROL_PLANE_IPS`, `K3S_WORKER_IPS` | Comma-separated prepared vRack addresses; exclude the first host |

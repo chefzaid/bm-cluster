@@ -1,0 +1,120 @@
+{{- if .Values.highAvailabilityEnabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keycloak
+  namespace: infra
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: keycloak
+---
+# K3s owns the CoreDNS Deployment and reapplies it on restart. Persist the
+# availability policy at admission, including attempts to scale it back to one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-coredns-availability
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, deployments/scale]
+  matchConditions:
+    - name: packaged-coredns-only
+      expression: object.metadata.namespace == 'kube-system' && object.metadata.name == 'coredns'
+  mutations:
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [JSONPatch{op: 'add', path: '/spec/replicas', value: 3}] +
+          (request.subResource == 'scale' ? [] : [JSONPatch{
+            op: 'add', path: '/spec/template/spec/topologySpreadConstraints',
+            value: [{
+              'maxSkew': dyn(1),
+              'minDomains': dyn(3),
+              'topologyKey': dyn('kubernetes.io/hostname'),
+              'whenUnsatisfiable': dyn('DoNotSchedule'),
+              'nodeAffinityPolicy': dyn('Honor'),
+              'nodeTaintsPolicy': dyn('Honor'),
+              'labelSelector': dyn({'matchLabels': {'k8s-app': 'kube-dns'}})
+            }]
+          }])
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-coredns-availability
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-coredns-availability
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+---
+# Applications reach the shared cache through HAProxy. Redis replication and
+# Sentinel management are restricted to this release's server/proxy pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shared-redis-ha-servers
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-ha
+      release: bm-cluster
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              release: bm-cluster
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [redis-ha, redis-ha-haproxy]
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 26379
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shared-redis-ha-clients
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app: redis-ha-haproxy
+      release: bm-cluster
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [infra, apps, corp]
+      ports:
+        - protocol: TCP
+          port: 6379
+{{- end }}

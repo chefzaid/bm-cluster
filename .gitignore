@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 *.pem
+!config/cloudflare-origin-ca.pem
 *.key
 *.p12
 *.kubeconfig

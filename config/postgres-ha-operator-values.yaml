@@ -1,0 +1,39 @@
+# CloudNativePG chart 0.29.0 / operator 1.30.0. Install separately before its CRs.
+replicaCount: 3
+image:
+  tag: "1.30.0@sha256:a2701eb97cdd2a34b1fdb2cb51987f544b706e40bec72ae7146cd8580efefebb"
+config:
+  data:
+    WATCH_NAMESPACE: infra
+additionalEnv:
+  - name: GOMEMLIMIT
+    value: 384MiB
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: cloudnative-pg
+        topologyKey: kubernetes.io/hostname
+# The chart defaults already enforce non-root, read-only root, drop ALL and
+# RuntimeDefault seccomp for the operator. Keep these explicit for review.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop: [ALL]
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault

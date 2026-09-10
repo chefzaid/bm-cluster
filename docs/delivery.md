@@ -10,19 +10,14 @@ The platform project is `<gitlab-group>/bm-cluster`. Its
 [pipeline](../.gitlab-ci.yml) runs on the shared Kubernetes runner in
 `gitlab-runners`. The [root Application](../k8s/addons/bm-cluster-application.yaml)
 reconciles the platform from Git, including centrally owned Odoo in `corp` when
-`appsEnabled=true`. First-party applications run in `apps` and reconcile through
-their own Applications:
+`appsEnabled=true`. External applications run in `apps` and reconcile through
+their own Applications. The platform does not declare their repository names,
+resource paths, release policies or deployment profiles.
 
-| Repository | Application bootstrap | Desired state |
-| --- | --- | --- |
-| `devapp` | `infra/argocd/application.yaml` | `infra/k8s` |
-| `thoughty` | `infra/argocd/application.yaml` | `infra/k8s/overlays/bm-cluster` |
-| `indezy` | `infra/argocd/application.yaml` | `infra/k8s` |
-| `website` | `infra/argocd/application.yaml` | `infra/k8s` |
-
-Each app's deployment guide covers its database, Vault, registry and CI inputs.
-DevApp, Thoughty and Indezy also provide `infra/ansible/site.yaml` for operator
-reconciliation. Keep application-specific resources in those repositories.
+Each application's deployment guide owns its database, Vault, registry and CI
+inputs, bootstrap procedure and recovery steps. Changes to its runtime resources
+and Argo CD Application belong in that repository. Public records follow the
+[application DNS contract](networking.md#application-dns-ownership).
 
 The installer and [Ansible](ansible.md) run
 [`configure-gitlab-ci.sh`](../scripts/configure-gitlab-ci.sh) to reconcile the
@@ -46,33 +41,30 @@ flowchart TB
     accDescr: App CI publishes outputs and commits image selection to Git; app-owned Argo Applications reconcile workloads and CI verifies rollout.
     GitHub["GitHub repository (optional)"] <-->|"Sync workflow and webhooks"| GitLab["App repository in GitLab"]
     GitLab --> Runner["Kubernetes runner jobs<br/>gitlab-runners namespace"]
-    Runner --> Build["Required build and package checks<br/>Website tests included"]
+    Runner --> Build["Build and verification<br/>Application-owned checks and policy"]
     Build -.-> Reports["App tests / coverage and Sonar<br/>optional E2E / security reports"]
     Build --> Publish["Publish release<br/>according to app CI rules"]
     Publish --> Images["Container Registry<br/>runtime images"]
-    Publish --> Packages["Package Registry<br/>binaries, frontend archives, SHA256SUMS<br/>DevApp / Thoughty / Indezy"]
-    Publish --> Commit["Commit Kustomization; push main<br/>apply and refresh Application"]
+    Publish --> Packages["Package Registry<br/>Application release artifacts"]
+    Publish --> Commit["Update app-owned desired state<br/>Immutable image tags or digests"]
     GitLab -->|"Tracks app-owned desired state"| Argo["App-owned Argo CD Application<br/>infra namespace"]
     Commit --> Argo
-    Argo -->|"Automatic sync"| Apps["Application workloads<br/>apps namespace"]
+    Argo -->|"Application sync policy"| Apps["Application workloads<br/>apps namespace"]
     Images -->|"Kubelet pulls images"| Apps
     Apps -.-> Verify["CI waits for the exact Git revision<br/>Synced / Healthy and smoke checks"]
     Argo -.-> Verify
 ```
 
-DevApp, Thoughty and Indezy keep tests/coverage, Sonar and security reports
-non-blocking. E2E is manual; security is manual in standard mode and automatic in
-full mode. Their release is manual except for a web-launched full-mode pipeline.
-Website requires its verification job, including tests and security checks,
-before automatic default-branch image publication and release; Sonar is non-blocking.
+This diagram describes the integration boundary. Each application's CI defines
+its required tests, report failure policy, release approval rules, artifacts and
+rollout verification. Publishing an image does not update a deployment by itself:
+the application must update its desired state and reconcile its own Application.
+Keep image selection and any bootstrap path changes in the application's Git
+history so later releases preserve them.
 
-The app-owned `infra/scripts/ci-release.sh` and image-selection helper commit
-version tags for DevApp/Thoughty/Indezy, and an image digest for Website. Argo CD
-reads those Git changes; CI reapplies the app's Application and verifies rollout.
-Exact jobs, downloadable artifacts and failure policies belong in each app's
-`.gitlab-ci.yml`. Default-branch Sonar runs automatically; manual and
-discovery-triggered [scan-only pipelines](sonar-discovery.md) stop after the
-build, tests/coverage and analysis, with no publication or deployment.
+The [source-analysis contract](sonar-discovery.md) supports automatic discovery
+and manual scan-only pipelines. An application implementing that contract must
+exclude publication and deployment from scan-only runs.
 
 ### Infrastructure reconciliation and verification
 
@@ -142,6 +134,21 @@ The installer and `ansible/deploy.yml` install Argo CD through Helm using render
 platform resources after bootstrap; it does not upgrade its own Argo CD Helm
 release. Reconcile Helm changes through the installer, Ansible, or a Helm upgrade
 with those same rendered inputs and pins.
+
+With `HIGH_AVAILABILITY_ENABLED=true`, the installer and Ansible also apply
+[`config/argocd-ha-values.yaml`](../config/argocd-ha-values.yaml). API/repository
+servers and ApplicationSet controllers run in pairs on separate hosts. The
+disposable Redis cache uses three Sentinel peers with authenticated Redis and
+Sentinel connections, two HAProxy endpoints, and disruption budgets.
+
+The application controller remains one active process. The overlay enables
+upstream [dynamic cluster distribution](https://argo-cd.readthedocs.io/en/stable/operator-manual/dynamic-cluster-distribution/)
+to run it as a Deployment, with 30-second not-ready/unreachable tolerations so
+Kubernetes can replace it on a surviving host. With one replica it processes
+the whole cluster; there is no second controller acting as a standby. GitOps
+reconciliation pauses while the replacement starts and rebuilds its cache.
+Upstream marks this mechanism alpha, so check its chart behavior during upgrades.
+Existing applications continue running during that pause.
 
 The application controller caches cluster resources. Its `GOMEMLIMIT` is kept
 below the container memory limit to leave room for non-Go allocations and

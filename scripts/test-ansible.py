@@ -18,7 +18,8 @@ public = ("PLATFORM_DOMAIN", "CONFIGURE_REPOSITORY_SYNC", "GITHUB_USERNAME",
           "GITHUB_REPOSITORIES", "DEPLOY_REPOSITORIES", "CLOUDFLARE_ENABLE_ACCESS",
           "K3S_PRIVATE_ADDRESS", "K3S_PRIVATE_INTERFACE", "K3S_NODE_NETWORK_CIDR",
           "CONTROL_PLANE_COUNT", "CLUSTER_NODE_COUNT", "K3S_CONTROL_PLANE_IPS",
-          "K3S_WORKER_IPS", "SERVER_EXPOSURE")
+          "K3S_WORKER_IPS", "SERVER_EXPOSURE", "HIGH_AVAILABILITY_ENABLED",
+          "CLOUDFLARE_PUBLISH_NODE_DNS")
 entry = {"tool": name, "args": args,
          "env": {key: os.environ[key] for key in public if key in os.environ},
          "github_token_present": bool(os.environ.get("GITHUB_ADMIN_TOKEN"))}
@@ -29,9 +30,20 @@ if name == os.environ.get("MOCK_FAIL"):
 if name == "systemctl":
     sys.exit(1 if os.environ.get("MOCK_NO_K3S") else 0)
 if name == "kubectl":
-    if args[:2] == ["get", "node"]:
+    if 'configmap' in args and os.environ.get('MOCK_HA'):
+        pg = {"enabled": True, "active": True, "bootstrapOwner": "admin", "bootstrapDatabase": "appdb",
+              "storageSize": "2Gi", "image": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bookworm"}
+        data = {"highAvailabilityEnabled": "true"} if 'bm-cluster-topology' in args else {"phase": "active", "postgresHa": json.dumps(pg)}
+        if 'kafka-ha-state' in args:
+            data = {"phase": "active", "kafkaHa": json.dumps({"enabled": True, "phase": "active", "clusterId": "fixture", "bootstrap": False})}
+        print('true' if any('jsonpath=' in arg for arg in args) else json.dumps({"data": data}))
+    elif args[:2] == ["get", "node"]:
         labels = {"node-role.kubernetes.io/control-plane": "true",
                   "svccontroller.k3s.cattle.io/enablelb": os.environ.get("MOCK_INGRESS", "true")}
+        if os.environ.get('MOCK_HA'):
+            labels['node.bm-cluster.io/exposure'] = 'local'
+        if os.environ.get('MOCK_WORKER'):
+            labels.pop('node-role.kubernetes.io/control-plane')
         print(json.dumps({"metadata": {"labels": labels}}))
     elif args[:2] == ["get", "nodes"]:
         print("worker-01 Ready worker 1d v1.36.4+k3s1\nworker-02 Ready worker 1d v1.36.4+k3s1")
@@ -77,7 +89,8 @@ def exercise(case):
         scripts.mkdir()
         commands.mkdir()
         (scripts / "lib").mkdir()
-        for name in ("render-cluster-config.sh", "render-security-images.py", "configure-local-tls.sh", "lib/tls.sh"):
+        for name in ("render-cluster-config.sh", "render-security-images.py", "render-platform-ha.py",
+                     "resolve-ha-profile.py", "configure-local-tls.sh", "lib/tls.sh"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
         for source in (ROOT / "scripts").glob("*.sh"):
             if not (scripts / source.name).exists():
@@ -119,6 +132,11 @@ def exercise(case):
         elif case == "cloudflare":
             variables.update(configure_cloudflare=True, server_exposure="internet")
             env.update(CLOUDFLARE_API_TOKEN=SECRET, CLOUDFLARE_ENABLE_ACCESS="false")
+        elif case == "ha":
+            # Omitted HIGH_AVAILABILITY_ENABLED must inherit the durable HA
+            # mode and may reconcile from a surviving private control plane.
+            env.update(MOCK_HA="true", MOCK_INGRESS="false", CLOUDFLARE_API_TOKEN=SECRET,
+                       CLOUDFLARE_ENABLE_ACCESS="false")
         elif case == "odoo_dependencies":
             variables.update(deploy_platform_services=False, deploy_data_stores=False, install_vault_stack=False)
         elif case == "infra_only":
@@ -126,10 +144,12 @@ def exercise(case):
                              install_vault_stack=False, install_descheduler=False, install_argocd=False)
             env["CONFIGURE_REPOSITORY_SYNC"] = "false"
             env.pop("KEYCLOAK_SSO_BOOTSTRAP_PASSWORD")
-        elif case in ("missing_k3s", "private_server", "missing_replication", "helm_failure", "check_mode"):
+        elif case in ("missing_k3s", "private_server", "worker_server", "missing_replication", "helm_failure", "check_mode"):
             expected_success = False
             if case == "missing_k3s":
                 env["MOCK_NO_K3S"] = "true"
+            elif case == "worker_server":
+                env["MOCK_WORKER"] = "true"
             elif case == "private_server":
                 env["MOCK_INGRESS"] = "false"
             elif case == "missing_replication":
@@ -190,10 +210,18 @@ def exercise(case):
                 assert names.index(transport) < names.index("configure-k3s-control-plane-network.sh") < names.index("configure-node-security.sh")
                 security = next(call for call in calls if call["tool"] == "configure-node-security.sh")
                 assert security["env"]["K3S_PRIVATE_INTERFACE"] == ("tailscale0" if case == "tailscale" else "eno2")
-            if case == "cloudflare":
+            if case in ("cloudflare", "ha"):
                 cf = [call for call in calls if call["tool"] == "configure-cloudflare.sh"]
                 assert len(cf) == 2 and all(call["env"]["CLOUDFLARE_ENABLE_ACCESS"] == "false" for call in cf)
                 assert not list(tls.iterdir())
+                if case == 'ha':
+                    assert all(call['env']['CLOUDFLARE_PUBLISH_NODE_DNS'] == 'false' for call in cf)
+                    ingress = next(call for call in calls if call['tool'] == 'configure-ingress.sh')
+                    assert ingress['env']['HIGH_AVAILABILITY_ENABLED'] == 'true'
+                    assert 'configure-vault-ha.sh' in names and 'sync-vault-recovery.sh' in names
+                    assert names.index('configure-ha-control-planes.sh') < names.index('configure-ingress.sh')
+                    security = next(call for call in calls if call['tool'] == 'configure-node-security.sh')
+                    assert security['args'][security['args'].index('--server-exposure') + 1] == 'local'
             else:
                 assert sorted(p.name for p in tls.iterdir()) == (["infra"] if case == "infra_only" else ["apps", "corp", "infra"])
                 # Rerunning the shared TLS helper must reuse certificates.
@@ -218,8 +246,8 @@ def exercise(case):
 
 if __name__ == "__main__":
     cases = sys.argv[1:] or [
-        "default", "tailscale", "vrack", "cloudflare", "odoo_dependencies", "infra_only",
-        "missing_k3s", "private_server", "missing_replication", "helm_failure", "check_mode",
+        "default", "tailscale", "vrack", "cloudflare", "ha", "odoo_dependencies", "infra_only",
+        "missing_k3s", "private_server", "worker_server", "missing_replication", "helm_failure", "check_mode",
         "install", "install_failure", "install_check",
     ]
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:

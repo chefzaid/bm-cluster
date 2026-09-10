@@ -65,7 +65,7 @@ err() { error "$@"; }
 
 # Verify API/etcd isolation, secondary CP private ingress, and SSH proof.
 (
-    for function_name in private_node_policy configure_ufw validate_worker_private_ssh_before_firewall; do
+    for function_name in private_node_policy configure_ufw validate_worker_private_ssh_before_firewall allow_control_plane_ssh; do
         load_function "$SCRIPT_DIR/configure-node-security.sh" "$function_name"
     done
     ensure_packages() { :; }
@@ -87,6 +87,7 @@ err() { error "$@"; }
     PRIVATE_CONTROL_PLANE=false
     SERVER_EXPOSURE=local
     CONTROL_PLANE_IP=10.40.0.1
+    CONTROL_PLANE_SSH_IPS=10.40.0.1
     K3S_NODE_NETWORK_CIDR=10.40.0.0/24
     HARDENED_SSH_PORT=22
     CLOUDFLARE_PROXY_ONLY=false
@@ -96,7 +97,7 @@ err() { error "$@"; }
     PRIVATE_CONTROL_PLANE=true
     configure_ufw
     grep -Fxq 'ufw allow in on eno2 from 10.40.0.0/24 to any port 6443 proto tcp' "$TEST_DIR/ufw"
-    grep -Fxq 'ufw allow in on eno2 from 10.40.0.1 to any port 22 proto tcp comment SSH from control plane only' "$TEST_DIR/ufw"
+    grep -Fxq 'ufw allow in on eno2 from 10.40.0.1 to any port 22 proto tcp comment BM control-plane SSH' "$TEST_DIR/ufw"
     if grep -Eq '^ufw allow (22|80|443)/tcp$' "$TEST_DIR/ufw"; then
         error 'Private control plane opened public ingress'
     fi
@@ -120,6 +121,99 @@ err() { error "$@"; }
     if grep -Fq 'ufw --force reset' "$TEST_DIR/ufw"; then
         error 'Firewall reset before rejecting public CIDR'
     fi
+)
+
+# A later local reconciliation inherits the enrolled private-server policy,
+# including when the caller supplies the installer's default internet mode.
+(
+    for function_name in inherit_private_control_plane_policy private_node_policy prepare_control_plane_ssh_policy configure_ufw validate_worker_private_ssh_before_firewall allow_control_plane_ssh persist_control_plane_ssh_policy; do
+        load_function "$SCRIPT_DIR/configure-node-security.sh" "$function_name"
+    done
+    PRIVATE_NETWORK_CONFIG="$TEST_DIR/private-network.yaml"
+    PRIVATE_NETWORK_CIDR_STATE="$TEST_DIR/private-network-cidr"
+    CONTROL_PLANE_SSH_STATE="$TEST_DIR/private-sources"
+    cat > "$PRIVATE_NETWORK_CONFIG" <<'EOF'
+# Managed by scripts/configure-k3s-control-plane-network.sh
+# exposure: private-only
+node-ip: "10.40.0.2"
+flannel-iface: "eno2"
+EOF
+    printf '%s\n' 10.40.0.1 10.40.0.2 10.40.0.3 > "$CONTROL_PLANE_SSH_STATE"
+    printf '%s\n' 10.40.0.0/24 > "$PRIVATE_NETWORK_CIDR_STATE"
+    ensure_packages() { :; }
+    configure_worker_forwarding_guard() { :; }
+    tailscale_transport_selected() { return 1; }
+    interface_owning_ip() { [[ "$1" == 10.40.0.2 ]] && printf 'eno2\n'; }
+    ip() {
+        case "$*" in
+            '-4 route get 10.40.0.1') printf '10.40.0.1 dev eno2 src 10.40.0.2\n' ;;
+            '-4 route show default') printf 'default via 203.0.113.1 dev eno1\n' ;;
+            '-4 -o address show scope global') printf '2: eno1 inet 203.0.113.2/24\n3: eno2 inet 10.40.0.2/24\n' ;;
+            '-6 -o address show scope global') : ;;
+            *) return 1 ;;
+        esac
+    }
+    sudo() {
+        case "$1" in
+            test) [[ "$3" == "$TEST_DIR/"* && -f "$3" ]] ;;
+            cat) cat "$2" ;;
+            install) cp "${@: -2:1}" "${@: -1}" ;;
+            *) printf '%s\n' "$*" >> "$TEST_DIR/inherited-ufw" ;;
+        esac
+    }
+    NODE_ROLE=control-plane
+    PRIVATE_CONTROL_PLANE=false
+    INHERITED_PRIVATE_CONTROL_PLANE=false
+    SERVER_EXPOSURE=internet
+    CONTROL_PLANE_IP=''
+    CONTROL_PLANE_SSH_IPS=''
+    K3S_NODE_NETWORK_CIDR=''
+    K3S_PRIVATE_ADDRESS=''
+    HARDENED_SSH_PORT=22
+    CLOUDFLARE_PROXY_ONLY=false
+    SSH_CONNECTION='10.40.0.1 50000 10.40.0.2 22'
+    inherit_private_control_plane_policy
+    [[ "$PRIVATE_CONTROL_PLANE" == true && "$SERVER_EXPOSURE" == local ]]
+    [[ "$K3S_NODE_NETWORK_CIDR" == 10.40.0.0/24 && "$CONTROL_PLANE_IP" == 10.40.0.1 ]]
+    prepare_control_plane_ssh_policy
+    validate_worker_private_ssh_before_firewall
+    configure_ufw
+    persist_control_plane_ssh_policy
+    grep -Fxq 'ufw allow in on eno2 from 10.40.0.1 to any port 22 proto tcp comment BM control-plane SSH' "$TEST_DIR/inherited-ufw"
+    grep -Fq 'ufw route deny in on eno1' "$TEST_DIR/inherited-ufw"
+    if grep -Eq '^ufw allow (22|80|443)/tcp$' "$TEST_DIR/inherited-ufw"; then
+        error 'Inherited private policy opened public ingress'
+    fi
+    # Existing policy permits a local console run without weakening new joins.
+    SSH_CONNECTION=''
+    CONTROL_PLANE_IP=''
+    inherit_private_control_plane_policy
+    validate_worker_private_ssh_before_firewall
+    [[ "$CONTROL_PLANE_IP" == 10.40.0.1 ]]
+    : > "$TEST_DIR/inherited-ufw"
+    if (SSH_CONNECTION='203.0.113.1 50000 203.0.113.2 22'; inherit_private_control_plane_policy) 2>/dev/null; then
+        error 'Inherited policy accepted an untrusted SSH source'
+    fi
+    if (K3S_PRIVATE_ADDRESS=10.40.0.99; inherit_private_control_plane_policy) 2>/dev/null; then
+        error 'Inherited policy accepted a conflicting private address'
+    fi
+    if (K3S_NODE_NETWORK_CIDR=10.99.0.0/24; inherit_private_control_plane_policy) 2>/dev/null; then
+        error 'Inherited policy silently changed its private network'
+    fi
+    rm "$PRIVATE_NETWORK_CIDR_STATE"
+    if (K3S_NODE_NETWORK_CIDR=''; inherit_private_control_plane_policy) 2>/dev/null; then
+        error 'Inherited policy accepted an unknown private CIDR'
+    fi
+    # Hosts enrolled before CIDR persistence retain the explicit validated input.
+    K3S_NODE_NETWORK_CIDR=10.40.0.0/24
+    inherit_private_control_plane_policy
+    persist_control_plane_ssh_policy
+    [[ "$(cat "$PRIVATE_NETWORK_CIDR_STATE")" == 10.40.0.0/24 ]]
+    rm "$PRIVATE_NETWORK_CONFIG"
+    if (PRIVATE_CONTROL_PLANE=false; inherit_private_control_plane_policy) 2>/dev/null; then
+        error 'Existing private policy fell back to public mode without its marker'
+    fi
+    [[ ! -s "$TEST_DIR/inherited-ufw" ]]
 )
 
 # Execute the real network configurator, intercepting all privileged writes.

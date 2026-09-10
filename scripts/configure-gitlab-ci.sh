@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set +x
 umask 077
 
 NAMESPACE="${NAMESPACE:-infra}"
@@ -17,7 +18,7 @@ RETENTION_TOKEN_LIFETIME_DAYS="${RETENTION_TOKEN_LIFETIME_DAYS:-364}"
 # Bound a single job artifact archive so a malformed path or unexpectedly large
 # report cannot exhaust the self-hosted GitLab data volume in one upload.
 MAX_ARTIFACTS_SIZE_MB="${MAX_ARTIFACTS_SIZE_MB:-512}"
-VAULT_POD="${VAULT_POD:-vault-0}"
+VAULT_POD="${VAULT_POD:-}"
 VAULT_TOKEN_FILE="${VAULT_BOOTSTRAP_TOKEN_FILE:-/var/lib/bm-cluster/vault-bootstrap-token}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -36,6 +37,9 @@ done
 [[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
 source "$GITLAB_TOKEN_LIBRARY"
+# shellcheck source=lib/vault-access.sh
+source "$SCRIPT_DIR/lib/vault-access.sh"
+[[ -n "$VAULT_POD" ]] || VAULT_POD="$(vault_runtime_pod "$NAMESPACE")"
 
 if [[ -z "$GITLAB_URL" ]]; then
   gitlab_service_ip="$(kubectl get service gitlab -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}')"

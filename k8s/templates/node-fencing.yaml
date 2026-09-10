@@ -1,0 +1,144 @@
+{{- $fencing := .Values.nodeFencing | default dict }}
+{{- if and .Values.highAvailabilityEnabled $fencing.enabled }}
+{{- $secret := required "nodeFencing.inventorySecret is required" $fencing.inventorySecret }}
+{{- $nodes := required "nodeFencing.nodeNames must explicitly allow the fencing targets" $fencing.nodeNames }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $secret) }}
+{{- fail "nodeFencing.inventorySecret must be a valid Secret name" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: node-fencing
+  namespace: infra
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bm-node-fencing
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [nodes]
+    resourceNames: {{ toJson $nodes }}
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bm-node-fencing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bm-node-fencing
+subjects:
+  - kind: ServiceAccount
+    name: node-fencing
+    namespace: infra
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bm-node-fencing-leases
+  namespace: kube-node-lease
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bm-node-fencing-leases
+  namespace: kube-node-lease
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bm-node-fencing-leases
+subjects:
+  - kind: ServiceAccount
+    name: node-fencing
+    namespace: infra
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-fencing-script
+  namespace: infra
+data:
+  fence-unresponsive-nodes.py: |
+{{ .Files.Get "scripts/fence-unresponsive-nodes.py" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: node-fencing
+  namespace: infra
+spec:
+  schedule: "* * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 30
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: node-fencing
+        spec:
+          serviceAccountName: node-fencing
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: fencing
+              image: docker.io/library/python:3.14-alpine@sha256:c6ead215bfd31f1e433d968853b7a769989117115b728874824e6c0a27cb96fc
+              command: [python3, -B, /scripts/fence-unresponsive-nodes.py]
+              args:
+                - --apply
+                - --allowed-nodes
+                - {{ join "," $nodes | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests: {cpu: 25m, memory: 32Mi}
+                limits: {cpu: 250m, memory: 128Mi}
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+                - name: inventory
+                  mountPath: /etc/node-fencing
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: node-fencing-script
+                defaultMode: 0444
+            - name: inventory
+              secret:
+                secretName: {{ $secret | quote }}
+                defaultMode: 0440
+{{- end }}

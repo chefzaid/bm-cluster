@@ -10,6 +10,7 @@ spec:
     targetRevision: main
     path: k8s
     helm:
+      valuesObject: __HA_VALUES_OBJECT__
       valueFiles:
         - profiles/security-images-__SECURITY_IMAGE_PROFILE__.values
       parameters:
