@@ -16,12 +16,9 @@ live state with Git. Its container requests 256 MiB and has a 1 GiB memory limit
 the container limit, leaving 256 MiB for non-Go allocations and transient work.
 The limit applies only to the application controller.
 
-This setting addresses repeated `OOMKilled` restarts observed with no Go memory
-limit. A September 10, 2026 sample showed approximately 421 MiB of live Go heap
-but 970 MiB of process resident memory; the preceding 24 hours reached 1023.7 MiB
-of container working memory and recorded approximately 46 restarts. These
-observations justify starting with more headroom than Argo CD's usual 80–90%
-recommendation. See the [Argo CD memory guidance](https://argo-cd.readthedocs.io/en/stable/operator-manual/high_availability/#mitigating-oomkilled-events-from-memory-spikes).
+This headroom addresses repeated `OOMKilled` restarts when process memory
+approached the container limit despite a smaller live Go heap. See the
+[Argo CD memory guidance](https://argo-cd.readthedocs.io/en/stable/operator-manual/high_availability/#mitigating-oomkilled-events-from-memory-spikes).
 
 `GOMEMLIMIT` uses Go units such as `MiB`, while Kubernetes resource quantities
 use `Mi`. It is a soft limit on memory managed by Go, not a reservation or a hard

@@ -67,7 +67,6 @@ K3S_APPARMOR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-apparmor.sh"
 LONGHORN_HOST_SCRIPT="$SCRIPT_DIR/scripts/configure-longhorn-host.sh"
 CLUSTER_TOPOLOGY_SCRIPT="$SCRIPT_DIR/scripts/reconcile-cluster-topology.sh"
 K3S_NETWORK_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-control-plane-network.sh"
-LEGACY_RECONCILIATION_SCRIPT="$SCRIPT_DIR/scripts/reconcile-legacy-resources.sh"
 TAILSCALE_SCRIPT="$SCRIPT_DIR/scripts/configure-tailscale.sh"
 OVH_VRACK_SCRIPT="$SCRIPT_DIR/scripts/configure-ovh-vrack.sh"
 AUTO_APPROVE=false
@@ -1053,8 +1052,6 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
         --expected-control-plane-count "$CONTROL_PLANE_COUNT" \
         --expected-node-count "$CLUSTER_NODE_COUNT"
-    [[ -x "$LEGACY_RECONCILIATION_SCRIPT" ]] || error "Legacy-state reconciler is not executable: $LEGACY_RECONCILIATION_SCRIPT"
-    "$LEGACY_RECONCILIATION_SCRIPT"
     if [[ "$INSTALL_APPS" == "true" ]]; then
         step "Creating the shared application namespace..."
         kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
@@ -1218,8 +1215,6 @@ EOF
             kubectl apply -f "$K8S_DIR/$manifest"
         done
         "$SCRIPT_DIR/scripts/reconcile-system-hardening.sh"
-        kubectl delete role/bm-cluster-gitops-read rolebinding/bm-cluster-gitops-read \
-            -n infra --ignore-not-found >/dev/null
 
         for app in "${PLATFORM_WAIT_APP_ARRAY[@]}"; do
             kubectl wait --for=condition=ready pod -l "app=$app" -n infra \

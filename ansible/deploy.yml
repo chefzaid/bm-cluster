@@ -739,13 +739,6 @@
       ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-system-hardening.sh"
       when: platform_services_enabled
 
-    - name: Reconcile superseded RBAC, jobs, and unmounted legacy storage
-      ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-legacy-resources.sh"
-      environment:
-        NAMESPACE: "{{ infra_namespace }}"
-        DELETE_LEGACY_PVCS: "true"
-      when: platform_services_enabled
-
     - name: Wait for platform pods
       ansible.builtin.command: >-
         kubectl wait --for=condition=ready pod -l app={{ item }}

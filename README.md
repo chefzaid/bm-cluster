@@ -665,8 +665,8 @@ and copies the Kubernetes `app` label to a keyword field. Kibana provisions an
 tails `/var/log/lynis-report.dat` on the control plane, Logstash parses its
 key/value and warning/suggestion fields, and Kibana provisions a **Lynis
 Security Audits** dashboard with a hardening-index trend and finding details.
-The [Trivy remediation record](docs/security-remediation.md) lists verified
-image fixes, remaining upstream findings and rollout requirements.
+The [security image guide](docs/security-images.md) covers current build inputs,
+bootstrap profiles, validation and when to retire version-specific patches.
 
 Trivy Operator runs in `infra`, scans current workload revisions across all
 namespaces, and refreshes image/SBOM, configuration, RBAC, exposed-secret,
@@ -752,6 +752,9 @@ Both Ansible entry points run locally from the first control-plane checkout.
 `install.yml` requires Ansible, Python, Git and a non-root user with passwordless
 sudo; `deploy.yml` additionally requires local K3s, its kubeconfig, kubectl,
 Helm, jq and OpenSSL. Node enrollment uses the shared SSH workflow.
+Routine installation and reconciliation no longer run the retired PostgreSQL/
+ZooKeeper storage and RBAC cleanup migration. Inspect any old resources and
+their data separately before retiring them on an older cluster.
 
 ```bash
 # Supply identity, topology and secret inputs as documented below.

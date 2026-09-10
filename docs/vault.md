@@ -28,6 +28,34 @@ still read their configured paths. Confirm the server security context has
 Use the fresh report for the running StatefulSet when assessing configuration
 findings.
 
+## Upgrade and recovery verification
+
+Before changing the deployed image, test the candidate and the currently
+deployed image with disposable Raft data:
+
+```sh
+python3 scripts/test-vault-image.py "$CANDIDATE_IMAGE" \
+  --previous-image "$CURRENT_IMAGE" --logs "$PRIVATE_LOG_DIRECTORY"
+```
+
+The Docker fixture checks existing-volume upgrade, KV versions, access controls,
+authentication, transit decryption, UI assets, audit-log rotation and restart.
+It also restores the snapshot into a separate volume using the previous image.
+Keep its logs outside Git.
+
+Save a fresh production Raft snapshot and verify its archive checksums before
+the Helm update. Restore it into an isolated, network-disabled instance with
+the original unseal key and bootstrap token. Compare stored-secret hashes,
+policies, authentication methods and audit devices with the private inventory
+captured before the snapshot. Keep snapshots, keys, tokens and inventories
+outside Git; a successful snapshot command alone does not verify recovery.
+
+After rollout, confirm readiness, unsealed status, preserved data and settings,
+the host unseal service's result, and every ExternalSecret's Ready condition.
+Compare the actual running image digest with its fresh vulnerability, secret
+and configuration reports. Retain the previous image and verified backup for
+recovery; do not start an older binary against upgraded Raft data.
+
 ## Host unseal service
 
 `bm-vault-unseal.timer` runs the root-owned `bm-vault-unseal.service` every
