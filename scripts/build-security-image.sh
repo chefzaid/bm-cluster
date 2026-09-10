@@ -27,7 +27,7 @@ else
   build_memory=2g
   case "$component" in
     gitlab|prometheus) build_memory=3g ;;
-    vault) build_memory=4g ;;
+    vault|external-secrets) build_memory=4g ;;
   esac
   DOCKER_BUILDKIT=0 docker build --pull --no-cache --memory="$build_memory" --memory-swap="$build_memory" --cpu-quota=100000 \
     -f "$root/images/security/$component.Dockerfile" -t "$image" "$root/images/security"

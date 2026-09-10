@@ -128,7 +128,7 @@ Configuration stays in the existing ConfigMap and writable caches remain bounded
 
 ### Vault source build and recovery
 
-The September 10 candidate upgrades Vault from **2.0.4 to 2.1.0**, builds the
+The deployed September 10 update upgrades Vault from **2.0.4 to 2.1.0**, builds the
 verified upstream commit with Go 1.26.7, and updates Apache Thrift to 0.24.0,
 gRPC to 1.83.2 and `golang.org/x/crypto` to 0.56.0. Available Alpine package
 updates are included. Comparing the exact old and candidate images against the
@@ -160,6 +160,58 @@ actual backup recovery in a network-disabled instance with the original unseal
 key and bootstrap token, and compare policies, authentication, audit devices
 and stored-secret hashes. Keep all snapshots, keys and raw inventories outside
 Git. See [Vault operations](vault.md) for the shared installation settings.
+
+The live replacement is healthy and its current report contains one Unknown
+and zero secrets. The host timer unsealed it successfully. All 22 stored-secret
+hashes, policies, authentication and audit configuration were preserved, and all
+43 ExternalSecrets remained Ready. The server root is now read-only, with a
+bounded writable `/tmp`; four Low UID/GID findings remain visible.
+
+### Prepared candidates awaiting deployment
+
+The following work was completed before the September 10 pause. These are
+**local candidates, not deployed fixes**. Their figures must not replace the
+live counts in the scan summary. No image catalog or Helm version was changed
+for these candidates.
+
+- **CoreDNS 1.14.7:** the maintained recipe updates gRPC to 1.83.2 and fetches
+  the verified release tag. The source DNS-server, health and Kubernetes plugin
+  tests passed. `scripts/test-coredns-image.py` checks the exact plugin inventory,
+  UDP/TCP A, AAAA, SRV and NXDOMAIN responses, health/readiness, zone reload and
+  restart under restricted runtime permissions. The local candidate reports
+  one Unknown and zero secrets; the running image still reports one High plus
+  one Unknown. Local validation used the pinned host compiler and equivalent
+  final Docker stage, not an end-to-end multi-stage Docker build. Before
+  rollout, validate cluster service discovery and ensure the single resolver
+  stays available with `maxUnavailable: 0` and `maxSurge: 1`.
+- **Argo CD 3.5.2:** `images/security/argocd.Dockerfile` removes only the unused
+  inherited Pebble binary. The maintained image test confirms all 8,176 other
+  files retain their bytes and metadata, and all five local application
+  renders remain identical. Findings decrease from 370 to 337 (5 Critical,
+  87 High, 216 Medium, 19 Low, 10 Unknown), with zero secrets. Restricted
+  runtime checks cover the Argo commands, Git/LFS and GPG. The existing vendor
+  image lacks a passwd entry for the deployed UID 10001, preventing SSH client
+  use at that UID; this recipe preserves that limitation. A separate private
+  locked-account preview passed an isolated SSH handshake, but that account
+  change is not included in the maintained recipe.
+- **PostgreSQL 18.6:** a private minimal-runtime experiment reduces the current
+  347 findings to 273 (2 Critical, 44 High, 108 Medium, 119 Low, zero Unknown),
+  with zero secrets. It removes Perl and the package/OS installation tools
+  that depend on it together, preserving native PostgreSQL tools, extensions,
+  libc/ICU/locale data and truthful metadata for all 115 retained packages.
+  Every retained finding remains unchanged. All seven saved production
+  databases and globals restored successfully, including catalog, collation,
+  index and role checks. This experiment is outside Git and has no maintained
+  build recipe or published pin yet. Debian cluster-management commands and
+  wrapper conveniences would be lost; that compatibility change still needs
+  review before adoption. The file audit covers the enumerated runtime trees,
+  not every path in the image.
+
+The prepared External Secrets Operator recipe and its source, chart and
+isolated runtime checks are documented in
+[its build notes](../images/security/external-secrets/README.md). Promotion
+requires a coordinated chart/CRD/image update and live reconciliation checks.
+The running ESO release remains unchanged.
 
 ### SonarQube runtime and libraries
 
