@@ -66,6 +66,11 @@ global:
   imagePullSecrets:
   - name: platform-registry-auth
 controller:
+  # Collect garbage before the 1Gi container limit; retain headroom for
+  # non-Go allocations and reconciliation subprocesses. See docs/argocd.md.
+  env:
+    - name: GOMEMLIMIT
+      value: 768MiB
   resources:
     requests:
       cpu: 250m
