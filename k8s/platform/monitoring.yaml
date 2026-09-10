@@ -111,7 +111,13 @@ rules:
     resources: ["storageclasses", "volumeattachments"]
     verbs: ["list", "watch"]
   - apiGroups: ["admissionregistration.k8s.io"]
-    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    resources:
+      - mutatingadmissionpolicies
+      - mutatingadmissionpolicybindings
+      - mutatingwebhookconfigurations
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+      - validatingwebhookconfigurations
     verbs: ["list", "watch"]
   - apiGroups: ["certificates.k8s.io"]
     resources: ["certificatesigningrequests"]
@@ -196,13 +202,13 @@ spec:
               containerPort: 8081
           readinessProbe:
             httpGet:
-              path: /metrics
-              port: metrics
+              path: /readyz
+              port: telemetry
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /healthz
               port: metrics
             initialDelaySeconds: 15
             periodSeconds: 20
