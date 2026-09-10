@@ -67,7 +67,7 @@ global:
   - name: platform-registry-auth
 controller:
   # Collect garbage before the 1Gi container limit; retain headroom for
-  # non-Go allocations and reconciliation subprocesses. See docs/argocd.md.
+  # non-Go allocations and reconciliation subprocesses. See docs/delivery.md.
   env:
     - name: GOMEMLIMIT
       value: 768MiB

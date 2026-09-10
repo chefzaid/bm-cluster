@@ -1,83 +1,46 @@
 # Platform themes
 
-## SonarQube
+SonarQube and Vault default to dark mode. Their bottom-right **Dark / Light**
+buttons save the choice in the current browser. Odoo's **Dark Mode** user-menu
+switch saves an account preference; bootstrap enables it once for the managed
+administrator. These preferences survive application restarts.
 
-The installed Community Build does not expose a supported dark-mode preference.
-The deployment therefore serves a custom theme using the
-[Dark Reader website API](https://github.com/darkreader/darkreader#using-dark-reader-on-a-website),
-version 4.9.130, vendored with its MIT license into the
-`sonarqube-dark-theme` ConfigMap in `k8s/platform/sonarqube.yaml`.
-Its npm archive integrity is recorded in the ConfigMap annotation.
+## SonarQube and Vault
 
-One small upstream adjustment calls `injectProxy` directly from the external
-script instead of generating an inline script. The website API already runs in
-the page context. This preserves Sonar's Content Security Policy while tracking
-its dynamically inserted React styles. The result is minified with esbuild;
-the served library is about 110 KiB. Images are excluded from theme analysis,
-and the theme's fetch method accepts only the current origin.
+Both themes use vendored Dark Reader assets with their license and provenance
+in the source manifests. Their local adaptation runs the style proxy from an
+external script, preserving the application's Content Security Policy. Theme
+requests stay on the current origin.
 
-A short init container using the existing Sonar image copies its original HTML
-entry point into a 1 MiB memory-backed volume and adds same-origin theme assets.
-The original application bundles, context placeholders and inline-script hash
-remain intact. The main container mounts the entry point and theme files
-read-only. No additional service, image, PVC or startup download is needed.
+- [SonarQube](../k8s/platform/sonarqube.yaml) uses an init container to add
+  same-origin theme files to a copy of its HTML entry point. The server mounts
+  these files read-only; its application bundles and scanner APIs are unchanged.
+- [Vault](../k8s/platform/vault-ui-theme.yaml) uses a separate NGINX helper for
+  `/ui` only. The original Ingress routes API requests directly to Vault. The
+  helper permits UI GET/HEAD requests, strips forwarded request credentials,
+  has no Vault token, and is restricted by network policy. It does not cache
+  responses or write access logs.
 
-Dark mode is the default. The **Dark / Light** button at the bottom right stores
-an opt-out in this browser's local storage (`swirlit.sonar.theme`). It does not
-change account credentials, API calls, projects or scanner behavior. Theme
-updates require bumping both the pod's theme revision and the asset `?v=` values
-in `head.html`, because these assets can be cached.
+Keep asset versions and integrity annotations in those manifests. After updating
+assets, bump the pod revision and HTML asset query versions. After a theme or
+application upgrade, check authenticated navigation, browser console/CSP errors,
+both toggle states and reload persistence. For Vault, also check that API health
+matches the direct service and the helper rejects API paths.
 
-After Sonar or Dark Reader upgrades, check project lists, project overview,
-issues/code and account screens with browser console/CSP checks. Exercise both
-toggle states and reload persistence. This is a custom presentation layer and
-should be reviewed when Sonar changes its frontend. Removing the theme mounts,
-init container, volumes and ConfigMap restores the upstream interface.
+To restore Sonar's original interface, remove its theme ConfigMap, init
+container, volumes and mounts together. Removing the Vault theme Ingress restores
+the original `/ui` route; retire the remaining helper resources in the same
+change. Neither removal requires changing authentication or application data.
 
 ## Odoo
 
-The Odoo Community 19 deployment includes OCA's `web_dark_mode` 19.0.1.0.0,
-pinned to [OCA/web revision b96307a8953f3bae075b8f7d94f40f00c2e63d1f](https://github.com/OCA/web/tree/b96307a8953f3bae075b8f7d94f40f00c2e63d1f/web_dark_mode).
-Its unmodified source, translations, tests, attribution and AGPL-3 license are
-vendored into the `odoo-dark-mode-addon` ConfigMap in `k8s/corp/odoo.yaml`.
-ConfigMap items preserve the upstream directory layout. Both database bootstrap
-and the application mount it read-only at `/mnt/extra-addons/web_dark_mode`.
-No startup downloads, image builds or additional PVCs are required.
+[The Odoo manifest](../k8s/corp/odoo.yaml) vendors OCA's `web_dark_mode` module,
+including its source, translations, tests and AGPL license. Bootstrap and the
+application mount it read-only under `/mnt/extra-addons`; no startup download is
+needed. Other users choose dark mode or the device preference themselves.
 
-Bootstrap installs the module and enables dark mode for the managed administrator
-once, recording `bm_cluster.dark_mode_initialized` in Odoo's configuration.
-Later changes through the user menu's **Dark Mode** switch survive pod restarts.
-Other users choose their own preference; the add-on also supports matching the
-device theme in user preferences. This changes the authenticated Odoo backend.
-
-After changing the vendored module, update its upstream annotation and the
-Deployment's configuration revision, then validate the repository and test an
-authenticated `/odoo` page. Confirm the dark CSS bundle loads successfully and
-the user-menu switch works in both directions. Review the upstream module for
-compatibility before upgrading Odoo's major version. To disable dark mode, use
-the switch. Before removing the add-on files, uninstall the module from Odoo.
-
-## Vault
-
-Vault's embedded UI has no supported dark-mode preference. The
-`vault-ui-theme` Deployment applies the same pinned Dark Reader site API and
-CSP adjustment used for Sonar. Its independent ConfigMap contains the assets,
-license and NGINX configuration. It reuses the platform's existing NGINX image,
-requests 16 MiB of memory, and has only an 8 MiB memory-backed temporary volume.
-
-A separate Ingress routes only `/ui` to this helper. NGINX inserts the local
-theme scripts into HTML and serves the four explicitly allowed theme files.
-The original `vault-ingress` continues to send `/v1` and other paths directly to
-Vault. The helper accepts only GET/HEAD for UI assets, strips request headers and
-bodies before forwarding, and has no Vault credentials or service-account token.
-It neither caches responses nor writes access logs. Network policy allows ingress
-from NGINX and egress only to Vault and cluster DNS. Vault itself is not restarted.
-
-Dark mode is the default; the bottom-right **Dark / Light** button saves the
-choice in this browser under `swirlit.vault.theme`. Vault's existing CSP is
-preserved. Test login, dashboard and navigation with a temporary token, revoke
-the token afterward, and confirm dark/light reload persistence. Also verify that
-the public `/v1/sys/health` response matches Vault directly and that the helper
-rejects API paths. Removing `vault-ui-theme`'s Ingress restores the original UI
-route immediately. The helper is included in the platform install inventory and
-GitOps; no Vault Helm release change is needed.
+When updating the module, check Odoo compatibility, update its provenance and
+Deployment revision, then validate the repository and test an authenticated
+`/odoo` page. Confirm that the dark CSS loads and the switch works both ways.
+Use the switch to disable the theme for an account. Uninstall the module from
+Odoo before removing its files.
