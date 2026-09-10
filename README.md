@@ -7,6 +7,8 @@ identity, databases, delivery, observability, security, and Odoo.
 Application repositories own their runtime manifests, pipelines, secrets
 contracts and Argo CD Applications. The platform discovers supported workloads
 through Kubernetes metadata; it has no application repository inventory.
+Use [`add-repos.sh`](docs/repository-replication.md) to import repositories and
+configure selected applications from their own onboarding declarations.
 
 ## Topology
 
@@ -104,7 +106,8 @@ role and exposure.
 | Prepare and activate availability across hosts | [High availability](docs/high-availability.md) |
 | Install or reconcile through Ansible | [Ansible](docs/ansible.md) |
 | Understand CI, registries, and GitOps | [Delivery](docs/delivery.md) |
-| Import and synchronize GitHub repositories | [Repository replication](docs/repository-replication.md) |
+| Add, synchronize and deploy repositories | [Repository onboarding](docs/repository-replication.md) |
+| Author an app's setup declaration | [Onboarding contract](docs/application-onboarding.md) |
 | Configure automatic and manual source analysis | [Sonar discovery](docs/sonar-discovery.md) |
 | Monitor, maintain storage, back up, or validate changes | [Operations](docs/operations.md) |
 | Manage host policy, SSO, and credentials | [Security and identity](docs/security.md) |

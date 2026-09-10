@@ -485,7 +485,6 @@
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/apps-namespace.yaml
       register: apps_namespace_apply
       changed_when: "'created' in apps_namespace_apply.stdout or 'configured' in apps_namespace_apply.stdout"
-      when: apps_enabled
 
     - name: Ensure the corporate application namespace exists
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/base/corp-namespace.yaml
@@ -763,6 +762,12 @@
       changed_when: "'created' in vault_resources_apply.stdout or 'configured' in vault_resources_apply.stdout"
       when: vault_stack_effective
 
+    - name: Reconcile shared application access to platform bootstrap images
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/security-image-registry.yaml
+      register: apps_registry_apply
+      changed_when: "'created' in apps_registry_apply.stdout or 'configured' in apps_registry_apply.stdout"
+      when: vault_stack_effective
+
     - name: Wait for Vault
       ansible.builtin.command: >-
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0
@@ -951,7 +956,7 @@
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/sonar-apps-discovery.yaml
       register: sonar_discovery_apply
       changed_when: "'created' in sonar_discovery_apply.stdout or 'configured' in sonar_discovery_apply.stdout"
-      when: apps_enabled and platform_services_enabled
+      when: platform_services_enabled
 
     - name: Deploy Odoo and its ingress
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/corp/odoo.yaml
@@ -1000,7 +1005,7 @@
     - name: Import repositories, configure two-way sync, and deploy selected applications
       ansible.builtin.command:
         argv:
-          - "{{ repository_root }}/replicate-repo.sh"
+          - "{{ repository_root }}/add-repos.sh"
           - --yes
       environment:
         PLATFORM_DOMAIN: "{{ platform_domain }}"
@@ -1011,6 +1016,11 @@
         GITHUB_USERNAME: "{{ github_username }}"
         GITHUB_REPOSITORIES: "{{ github_repositories }}"
         DEPLOY_REPOSITORIES: "{{ deploy_repositories }}"
+        INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
+        CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
+        REPOSITORY_INPUTS_FILE: "{{ lookup('ansible.builtin.env', 'REPOSITORY_INPUTS_FILE') }}"
+        REPOSITORY_STATE_DIR: "{{ lookup('ansible.builtin.env', 'REPOSITORY_STATE_DIR') }}"
+        ONBOARDING_TIMEOUT: "{{ lookup('ansible.builtin.env', 'ONBOARDING_TIMEOUT') | default('3600', true) }}"
       no_log: true
       when: repository_sync_enabled
 

@@ -2,6 +2,7 @@ publicDomain: ""
 internalDnsZone: ""
 gitopsRepositoryURL: ""
 cloudflareAccessTeamName: ""
+# Controls centrally managed corporate workloads; the apps foundation is always included.
 appsEnabled: false
 deschedulerEnabled: true
 securityImagesEnabled: true

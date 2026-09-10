@@ -184,10 +184,12 @@ setup; interactive setup pauses with the required registrar values.
 
 ### Application DNS ownership
 
-Each application provisions and removes its own DNS records with its deployment
-lifecycle. In the default layout, use proxied records targeting the public ingress
-host supplied by the operator. No platform repository change is needed when an
-application is added or removed.
+Each application declares its own DNS records and owns their lifecycle.
+[`add-repos.sh`](repository-replication.md) can provision or reconcile those exact
+hosts from `infra/onboarding.json`, without adding names to this repository.
+Direct ingress uses proxied A records targeting its unique public IPv4.
+Changing a hostname does not delete the old record; retire old hosts explicitly
+after verifying the replacement route.
 
 After HA activation, use proxied CNAME records targeting
 `<publishedTunnelID>.cfargotunnel.com`. The platform publishes its nonsecret
@@ -198,9 +200,12 @@ kubectl -n infra get configmap bm-cluster-public-ingress -o json
 ```
 
 An application must wait until `data.mode=tunnel`, `data.publishedTunnelID` is
-nonempty and equals `data.tunnelID` before switching DNS. A prepared tunnel is
-not an activated endpoint. Keep any existing records until those checks pass;
-application release automation owns the cutover and its own public-path checks.
+nonempty and equals `data.tunnelID`, and `data.domain` matches its zone before
+switching DNS. A prepared tunnel is not an activated endpoint. Repository
+onboarding checks these conditions before publication; rerun it for the app's
+DNS cutover after platform HA activation. Conflicting address records or another
+application's Ingress ownership stop reconciliation. Unrelated MX/TXT records
+are preserved. App-owned checks still verify the public route and failover.
 
 The tunnel accepts the configured zone apex and wildcard subdomains and forwards
 them to local NGINX; Kubernetes Ingress resources select the application. This

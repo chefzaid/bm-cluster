@@ -14,6 +14,9 @@ REPOSITORY_NAME="${REPOSITORY_NAME:-$(basename "$REPOSITORY_ROOT")}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-swirlit/$REPOSITORY_NAME}"
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
 GITLAB_URL="${GITLAB_URL:-${PLATFORM_DOMAIN:+https://gitlab.$PLATFORM_DOMAIN}}"
+# Only operator API traffic uses this temporary/private origin. Persisted sync
+# variables below must continue to use the public GitLab URL.
+GITLAB_API_BASE_URL="${GITLAB_API_BASE_URL:-$GITLAB_URL}"
 GITHUB_OWNER="${GITHUB_OWNER:-}"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-$REPOSITORY_NAME}"
 GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
@@ -33,6 +36,13 @@ for command_name in curl date git jq python3; do
 done
 
 [[ "$GITLAB_URL" == https://* ]] || fail "Set GITLAB_URL to the public HTTPS GitLab URL."
+python3 - "$GITLAB_API_BASE_URL" <<'PY' || fail "GITLAB_API_BASE_URL must be an HTTP(S) origin without credentials or a path."
+import sys
+from urllib.parse import urlparse
+url = urlparse(sys.argv[1])
+if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.path or url.query or url.fragment:
+    raise SystemExit(1)
+PY
 [[ "$INITIALIZE_REPOSITORY_SYNC" =~ ^(true|false)$ ]] || fail "INITIALIZE_REPOSITORY_SYNC must be true or false"
 [[ -r "$GITLAB_TOKEN_LIBRARY" ]] || fail "GitLab token helper is missing: $GITLAB_TOKEN_LIBRARY"
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
@@ -76,7 +86,7 @@ printf 'silent\nshow-error\nheader = "Authorization: Bearer %s"\nheader = "Accep
 gitlab_api() {
   local method="$1" path="$2"
   shift 2
-  curl --config "$gitlab_config" --fail-with-body --request "$method"     "$GITLAB_URL/api/v4/$path" "$@"
+  curl --config "$gitlab_config" --fail-with-body --request "$method"     "$GITLAB_API_BASE_URL/api/v4/$path" "$@"
 }
 
 github_api() {

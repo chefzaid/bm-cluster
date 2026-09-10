@@ -13,7 +13,7 @@ from the first control plane to every new Debian/Ubuntu host.
 | --- | --- |
 | `./install-control-plane.sh` | Guided cluster installation, including planned nodes and platform services |
 | `./add-node.sh` | Add control planes or workers to an existing cluster |
-| `./replicate-repo.sh` | Import GitHub repositories into GitLab, configure two-way sync and select deployments |
+| `./add-repos.sh` | Import/synchronize repositories, configure selected applications and wait for their deployment |
 | `ansible/install.yml` | Run the full installer unattended through Ansible |
 | `ansible/deploy.yml` | Reconcile an installed platform through Ansible |
 
@@ -28,7 +28,11 @@ platform components, recovery destination, public access and administrator
 credentials. The recommended bundle installs the shared platform; declining it
 lets you select components individually. `infra + apps` adds centrally managed
 Odoo in `corp`. External applications remain in their own repositories and
-are onboarded through [repository replication](repository-replication.md).
+are onboarded through [repository onboarding](repository-replication.md).
+`./replicate-repo.sh` remains a compatibility wrapper for `./add-repos.sh`.
+The `apps` namespace, its baseline networking, shared credentials and TLS
+foundation remain available with `INSTALL_SCOPE=infra`; Odoo does not need
+to be enabled for external applications.
 
 Prepare a domain for public deployment and an accessible GitOps repository URL.
 For multiple nodes, choose one [private transport](networking.md#private-node-network)
@@ -121,8 +125,12 @@ default; they are not a K3s upgrade procedure. Use
   `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` and `BACKUP_REPOSITORY_PASSWORD`.
   Keep the repository password outside the cluster for recovery.
 - **Repository import and deployment:** set `CONFIGURE_REPOSITORY_SYNC=true`
-  with the inputs in [repository replication](repository-replication.md).
-  This runs after the platform and Argo CD are ready.
+  with the inputs in [repository onboarding](repository-replication.md).
+  The installer calls `add-repos.sh` after the platform and Argo CD are ready.
+  Export `REPOSITORY_INPUTS_FILE`, `REPOSITORY_STATE_DIR` and
+  `ONBOARDING_TIMEOUT` when customizing unattended app setup or resuming it.
+  Selecting deployment includes app-owned public configuration commits,
+  requested service/DNS setup and waiting for CI and application readiness.
 
 Supply secrets through hidden prompts, process environment or encrypted
 [Ansible variables](ansible.md#complete-installation). Never commit credentials

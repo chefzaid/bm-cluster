@@ -1,145 +1,243 @@
-# Import, synchronize and deploy repositories
+# Add, synchronize and deploy repositories
 
-Run `./replicate-repo.sh` from a `bm-cluster` checkout on the control plane to
-import GitHub repositories into GitLab and select which to deploy. The installer
-can call this same entry point after platform and Argo CD setup. Shared CI,
-registry and GitOps responsibilities are described in [delivery](delivery.md).
+Run `./add-repos.sh` from this checkout on a configured control-plane host. It
+imports GitHub repositories into GitLab, configures two-way synchronization,
+and sets up the repositories selected for deployment. Run it again to add more
+repositories, change saved settings, or resume an interrupted deployment.
+`./replicate-repo.sh` is a compatibility wrapper for the same command.
+
+The installer calls this helper after platform and Argo CD setup when repository
+onboarding is selected. [Ansible](ansible.md#optional-host-and-account-changes)
+uses the same helper and unattended inputs. Application declarations stay in
+their repositories; `bm-cluster` has no application inventory.
 
 ## Guided flow
 
 1. Enter your GitHub username, a hidden personal access token, and comma-separated
-   repository names such as `web,api,org/mobile`. Bare names belong to your user;
-   `owner/name` supports organizations.
+   repositories such as `catalog,org/api`. Bare names belong to your user.
 2. Confirm the public GitLab HTTPS URL and destination group. The URL defaults
-   from `PLATFORM_DOMAIN` or the installed GitLab Ingress; the group defaults to
+   from the platform domain or installed GitLab Ingress; the group defaults to
    `swirlit` and may be nested. Each source keeps its repository name.
-3. The assistant creates missing private groups/projects, commits the managed
-   `.github/workflows/sync-gitlab.yml` to each GitHub default branch, configures
-   Actions secrets/variables and GitLab push/tag webhooks, and waits for the
-   initial synchronization to succeed. An unrelated workflow at that path is
-   reported instead of overwritten. Failures are reported per repository.
-4. After import, the deployment prompt is prefilled with all successful names.
-   Press Enter for all, choose a comma-separated subset, or enter `none`.
-5. Each selection is checked against the deployment contract below. Valid
-   selections get Argo CD repository credentials and an Application, then a
-   default-branch GitLab pipeline. Invalid selections produce
-   `[CANNOT DEPLOY] <repository>: <reason>` and remain imported and synchronized.
+3. Missing groups/projects are created privately. The managed GitHub sync workflow,
+   encrypted Actions secrets/variables and GitLab push/tag webhook are reconciled,
+   then initial synchronization is verified. An unrelated workflow at the managed
+   path is reported instead of overwritten.
+4. The deployment answer is prefilled with all successful repository names.
+   Accept all, enter a comma-separated subset, or enter `none`.
+5. The helper reads each selected repository's `infra/onboarding.json`, asks for
+   its declared inputs, and validates configuration and service prerequisites.
+   Previous public settings are offered as defaults.
+6. Public configuration is committed to the app's default branch with `[skip ci]`.
+   Requested registry/Vault/identity resources and bootstrap prerequisites are
+   reconciled, followed by application-owned DNS.
+7. An API pipeline receives the expected source SHA and a unique run ID. Its release job publishes
+   images and applies the application-owned Argo CD Application. The helper waits
+   for required jobs, the release's exact `Synced`/`Healthy` revision and declared
+   Deployment rollouts.
+
+Selecting deployment authorizes these configuration commits and service changes.
+The helper uses platform-owned operations, not downloaded setup scripts. It
+reports `[READY]` only after delivery and readiness succeed. Missing contracts,
+prerequisites or required jobs produce `[CANNOT DEPLOY]`; imports remain available
+for correction and retry, and failures make the command exit nonzero.
+
+```mermaid
+flowchart TB
+    accTitle: Repeatable repository onboarding
+    accDescr: App selection validates a repository-owned declaration, commits public settings, provisions shared-service prerequisites and DNS, then waits for app CI and Kubernetes readiness.
+    Select["Select repositories"] --> Sync["Import and verify GitHub / GitLab sync"]
+    Sync --> Choose["Select deployments and app inputs"]
+    Choose --> Validate["Validate declaration and prerequisites"]
+    Validate --> Settings["Commit public settings<br/>Pause existing autosync when settings change"]
+    Settings --> Setup["Registry, Vault, optional identity<br/>Bootstrap prerequisites and owned DNS"]
+    Setup --> CI["API pipeline pinned to configured source"]
+    CI --> Release["App publishes images and desired state<br/>Applies its Argo CD Application"]
+    Release --> Ready["Required jobs succeed<br/>Application and Deployments ready"]
+    Setup -.-> State["Private local progress journal"]
+    CI -.-> State
+    State -.->|"Rerun after resolving a failure"| Validate
+```
 
 New projects have CI disabled during import; selecting a valid deployment enables
 CI and the shared runner. Skipped new projects keep CI disabled. Existing projects
-retain their CI setting during import, so synchronized commits can start their
-normal pipelines and deployments.
+retain their CI setting, so ordinary synchronized source commits can still start
+existing pipelines.
 
-The platform's `GITOPS_REPOSITORY_URL` is an independent installer choice and must
-already be accessible. Replicating `bm-cluster` copies its source; its platform
-Application and centrally owned Odoo remain the installer's responsibility.
+When public configuration changes, an existing automatically synced Application
+is paused before the settings commit is published. Workloads remain running.
+The app's release job reapplies its committed Application after publishing images,
+restoring its sync policy. First deployment is also owned by that release job;
+onboarding does not start application workloads ahead of it.
+
+Repository onboarding does not add nodes, activate HA or change an app's selected
+deployment path. Follow the [HA guide](high-availability.md) and application-owned
+migration instructions when sufficient physical hosts exist. The shared `apps`
+namespace and its platform foundation do not depend on enabling Odoo in `corp`.
 
 ## Prerequisites and credentials
 
-The host needs Bash, Git, curl, jq, GNU date, Python 3.9+, PyYAML and libsodium.
-The installer supplies `python3-yaml` and `libsodium23` on Ubuntu/Debian.
-Deployment additionally requires `kubectl`, the control-plane kubeconfig,
-Argo CD in `infra`, and the platform GitLab instance runner.
+The host needs Bash, Git, curl, jq, GNU date, Python, PyYAML and libsodium. The
+installer supplies the Ubuntu/Debian packages. Deployment also needs the
+control-plane kubeconfig, `kubectl`, Argo CD in `infra`, the instance runner and
+requested shared services. Local Helm charts require Helm. Vault must be unsealed
+with its KV-v2 `secret/` mount; External Secrets and public ingress/TLS must work.
+Before publishing configuration, onboarding checks the shared `apps` foundation,
+the AppProject's repository/destination permissions and certificate coverage for
+the declared hosts. Repository credentials must complete a fresh successful
+ExternalSecret refresh before delivery starts.
 
 Use a GitHub [fine-grained PAT](https://github.com/settings/personal-access-tokens/new),
-not an account password. The selected repositories need **Administration, Actions,
-Contents, Secrets, Variables and Workflows: read/write**. The user must administer
-them; organization rules must permit the token and Actions, and branch protection
-must permit workflow installation and sync pushes. The assistant reports rejected
-operations and leaves protection rules unchanged. Empty or archived sources are
-unsupported.
+not an account password. Selected repositories require **Administration, Actions,
+Contents, Secrets, Variables and Workflows: read/write**. Organization rules must
+permit the token and Actions. Branch protection must permit workflow installation,
+configuration commits, synchronization and release pushes. Rejected operations
+are reported; the helper does not relax protection. Empty or archived sources
+are unsupported.
 
-| Credential | Storage and renewal |
-| --- | --- |
+| Credential | Scope and handling |
+|---|---|
 | GitHub PAT | Encrypted Actions secret `REPOSITORY_SYNC_ADMIN_TOKEN` and GitLab webhook Authorization header; rerun with a replacement before expiry. |
-| GitLab sync project token | `write_repository` and `self_rotate` scopes; the monthly GitHub schedule rotates it near expiry. Rerunning re-enables a managed workflow disabled through inactivity. |
-| GitLab setup administrator token | Created locally through `gitlab-rails` with a short lifetime and revoked on exit. An explicit `GITLAB_ADMIN_TOKEN` with `api` scope is supported and is not revoked. |
-| Argo CD project deploy token | Non-expiring `read_repository` token in a Kubernetes `repository-<hash>` Secret, reused on reruns. Revoke it when removing the repository; if externally revoked, delete its managed Secret and rerun to replace it. |
+| GitLab sync project token | `write_repository` and `self_rotate`; the monthly GitHub workflow rotates it near expiry. |
+| GitLab setup administrator token | Issued locally through `gitlab-rails` and revoked on exit. An explicit `GITLAB_ADMIN_TOKEN` with `api` scope is accepted and retained. |
+| App registry deploy token | `read_registry` and `read_repository`, stored at the app-declared Vault path; valid credentials are verified and reused. |
+| Argo CD repository access | A generic `infra/repository-<hash>` ExternalSecret projects the verified app registry/repository credential from Vault; no separate unmanaged password is copied into Git. |
+| Cloudflare API token | **Zone Read** and **DNS Edit** for the selected zone; environment or hidden prompt. Onboarding uses an existing HA Tunnel rather than creating one. |
+| Vault setup access | Private `VAULT_BOOTSTRAP_TOKEN_FILE`, default `/var/lib/bm-cluster/vault-bootstrap-token`; access through a local port-forward. Declared paths need read/create/update and KV metadata-read access. |
+| Optional Keycloak setup access | Uses the platform administrator Secret and a local port-forward; no client credentials are committed. |
 
-Setup credentials are not written into either repository. GitHub Actions must
-reach public GitLab API/Git routes, and GitLab must reach `api.github.com` for
-webhook dispatch. Browser-only Cloudflare Access must not intercept these requests.
-`GITLAB_URL` can override the assistant's control-plane API route; synchronization
-uses `GITLAB_PUBLIC_URL`. Argo CD uses `gitlab.<INTERNAL_DNS_ZONE>`, defaulting to
-`internal.<domain>` derived from the public GitLab hostname. Set
-`INTERNAL_DNS_ZONE` explicitly if the cluster uses another private zone.
+Secrets stay in memory or private temporary credential files during setup, outside
+Git and the progress journal. Declared secret inputs use hidden prompts. Keep
+unattended inputs outside repositories with mode `0600`; operator-supplied files
+are not automatically deleted.
+
+Setup normally reaches GitLab through a temporary loopback `kubectl port-forward`
+for API requests, cloning and registry authentication. This avoids depending on
+the operator host's DNS or browser authentication. An explicit `GITLAB_URL`
+overrides that control route; when the GitLab Service is unavailable, imports
+fall back to public GitLab. Deployment still requires access to the cluster.
+
+Synchronization uses `GITLAB_PUBLIC_URL`: GitHub Actions must reach public GitLab
+API/Git routes, and GitLab must reach `api.github.com`. Browser-only Cloudflare
+Access must not intercept those synchronization requests. Argo CD and app CI use
+the installed private service zone; temporary loopback addresses are never saved
+as application endpoints. See [installed context discovery](application-onboarding.md#public-rendering-context)
+for defaults and explicit overrides.
 
 ## Deployment contract
 
-Each selected repository must contain these files on its imported default branch:
+The default branch must contain `infra/onboarding.json`, a valid `.gitlab-ci.yml`,
+and one Application at `infra/argocd/application.yaml` or `argocd/application.yaml`.
+Its source must be a local Kustomize directory or Helm chart following the default
+branch, targeting `apps` on `https://kubernetes.default.svc`. Its AppProject must
+already allow that source/destination. External charts and multi-source
+Applications are unsupported.
+Use repository-owned configuration rather than custom Argo CD source overrides;
+unsupported Helm/Kustomize source options are rejected so validation and deployment
+render the same resources.
 
-- A nonempty `.gitlab-ci.yml` accepted by GitLab's project CI Lint API, including
-  referenced configuration. Workflow rules must allow API-triggered default-branch
-  pipelines.
-- Exactly one bootstrap at `infra/argocd/application.yaml` or
-  `argocd/application.yaml`, containing one `argoproj.io/v1alpha1` Application
-  with a name and `spec.project`.
-- One `spec.source` identifying the imported repository, with a nonempty
-  repository directory in `source.path` at `targetRevision`. Repository-local
-  Helm charts and Kustomize directories are supported; external charts and
-  multi-source Applications are not.
-- Destination server `https://kubernetes.default.svc` and an explicit namespace.
-  The Application belongs in `infra`; its AppProject must already exist and
-  permit the source and destination.
+The [version-1 contract reference](application-onboarding.md) provides a generic
+example, fields and rendering context. Applications declare public/secret inputs,
+explicit public files and mappings, registry/Vault/optional identity setup, exact
+DNS hosts, bootstrap resources, required pipeline jobs and Deployment names.
 
-The assistant rewrites only the source repository URL to the private GitLab alias
-and the Application namespace. It retains revision, path, destination, rendering
-settings and sync policy. It rejects Application names belonging to another
-repository and performs a server-side dry run before applying. CI lint failures
-restore the project's previous CI setting.
+Public choices and replacement bindings are committed in
+`infra/onboarding-values.json` alongside rendered configuration. Reruns replace
+previous rendered values so changed domains/groups survive later releases. The
+helper normalizes the Application's GitLab URL, default-branch revision and `infra`
+namespace while preserving its source path/profile. App release jobs must honor
+these settings and validate `ONBOARDING_EXPECTED_SHA` before publication/deployment.
 
-Follow the app repository's bootstrap for registry pull credentials, database
-secrets, DNS and build variables before deploying. The assistant does not generate
-missing files, execute repository shell scripts/playbooks, or rewrite app-specific
-hostnames, images, Vault paths and CI variables. Keep source URLs consistent in
-app-owned automation that later reapplies the Application.
+Vault setup fills missing values with defaults or generated secrets using
+version-checked writes. Existing values win; a different supplied credential
+fails instead of rotating it. Deleted versions require recovery. Optional fields
+can remain empty until the operator enables their integration. Invalid registry
+credentials can be replaced, retaining prior tokens until consumers refresh.
 
-Success means the Application was registered and the pipeline started, not that
-the asynchronous rollout finished. Follow the printed pipeline link and
-`kubectl -n infra get applications`; manual sync policies still require a sync.
-A later failure can leave an already-applied Application in place. Correct the
-reported problem and rerun.
+DNS changes affect only declared hosts in the selected zone. Direct ingress uses
+proxied A records to its unique public IPv4. HA uses proxied CNAME records only
+when the same-zone `publishedTunnelID` equals `tunnelID` in
+`infra/bm-cluster-public-ingress`. Conflicting address records or another app's
+Ingress ownership stop setup. Unrelated MX/TXT records are preserved. A hostname
+change does not delete old records; retire them explicitly after verifying the
+new route. See [DNS ownership](networking.md#application-dns-ownership).
 
 ## Automation and reruns
 
-`--yes` never prompts and requires an explicit deployment selection:
+`--yes` never prompts. Supply `DEPLOY_REPOSITORIES=all`, `none`, or a comma-separated
+subset, plus required app inputs. A private JSON file is keyed by GitHub slug:
+
+```json
+{
+  "alice/catalog": {"APP_SUBDOMAIN": "catalog"},
+  "org/api": {"APP_SUBDOMAIN": "api"}
+}
+```
 
 ```bash
+chmod 600 /secure/repository-inputs.json
 read -rsp 'GitHub personal access token: ' GITHUB_ADMIN_TOKEN; echo
-export GITHUB_ADMIN_TOKEN
+read -rsp 'Cloudflare DNS token: ' CLOUDFLARE_API_TOKEN; echo
+export GITHUB_ADMIN_TOKEN CLOUDFLARE_API_TOKEN
 GITHUB_USERNAME=alice \
-GITHUB_REPOSITORIES='web,org/api' \
+GITHUB_REPOSITORIES='catalog,org/api' \
 GITLAB_PUBLIC_URL=https://gitlab.example.com \
 GITLAB_GROUP_PATH=team \
 DEPLOY_REPOSITORIES=all \
-  ./replicate-repo.sh --yes
-unset GITHUB_ADMIN_TOKEN
+  ./add-repos.sh --yes --inputs /secure/repository-inputs.json \
+    --state-dir /secure/repository-state
+unset GITHUB_ADMIN_TOKEN CLOUDFLARE_API_TOKEN
 ```
 
-Use `DEPLOY_REPOSITORIES=none` or a comma-separated subset as needed. Export these
-inputs with `CONFIGURE_REPOSITORY_SYNC=true` for `./install-control-plane.sh --yes`.
-[Ansible](ansible.md#optional-host-and-account-changes) accepts the same
-unattended contract after platform CI and Argo CD setup. Run once per destination
-group; two sources with the same name cannot target one group.
+`--inputs` and `--state-dir` also work interactively. Their environment equivalents
+are `REPOSITORY_INPUTS_FILE` and `REPOSITORY_STATE_DIR`. Unknown app input names
+fail validation. The state directory is created privately and must have mode
+`0700` if it exists.
 
-Reruns reuse projects, reconcile managed workflows/hooks/secrets, verify sync and
-offer deployment again. Existing visibility is preserved; private GitHub sources
-require private GitLab destinations.
+Export these inputs with `CONFIGURE_REPOSITORY_SYNC=true` for the installer or
+Ansible. `ONBOARDING_TIMEOUT` controls the required-job wait in seconds: default
+`3600`, range `30`–`43200`. Application synchronization waits up to 15 minutes
+within that setting, then checks declared Deployment rollouts.
 
-GitHub pushes and GitLab push/tag webhooks invoke the same workflow reconciler.
-It fast-forwards the lagging side and merges non-conflicting divergence without
-force pushing. Merge conflicts and conflicting tag objects fail visibly; resolve
-them manually before retrying. A branch or tag deleted on only one side is restored.
-Only Git history, branches and tags are synchronized; issues, pull requests,
-releases, packages, Git LFS objects and hosting metadata need separate migration.
+Progress defaults to `~/.local/state/bm-cluster/repositories`. Each locked journal
+records project/cluster identity, configuration and pipeline progress without
+credentials. Rerun from the same host/state directory to resume a recorded
+pipeline or retry failed jobs. An active earlier pipeline must finish before
+settings change. Missing or manual required jobs cannot count as deployment
+success; inspect the reported pipeline and correct its cause before rerunning.
 
-The exit status is nonzero if an import or selected deployment fails. Successful
-imports are retained, other repositories continue, and there is no automatic
-repository deletion or rollback.
+Pipeline creation intent is journaled before the API request. If its response is
+lost, rerunning looks for the matching source SHA and `ONBOARDING_RUN_ID` instead
+of immediately creating another pipeline. An unresolved request stops recovery.
+Check GitLab before removing only `pipeline_intent` from the private journal,
+and do so only after confirming that request created no pipeline. An ambiguous
+HTTP timeout cannot guarantee exactly one pipeline without that confirmation.
 
-## Validation
+Failures can leave configuration commits, credentials, DNS or a paused Application
+in place. Completed setup is retained; there is no automatic repository deletion
+or data rollback. After configuration is published, the corrected release
+restores the Application's policy. If publication never happened, a rerun can
+restore the prior policy after verifying the source is unchanged. Other selected
+repositories continue, and any
+failure makes the command exit nonzero. A new host can recover public choices
+from Git; transferring the private journal is necessary to resume its recorded
+pipeline rather than start a new operation.
 
-`./scripts/test-repository-replication.sh` checks onboarding, credentials cleanup,
-deployment validation and partial failures, and exercises branch/tag convergence
-and conflict refusal with local Git repositories. See
-[repository validation](operations.md#validation) for the full check suite.
+## Synchronization and validation
+
+Reruns preserve visibility; private GitHub sources require private GitLab
+projects. Sync fast-forwards the lagging side and merges compatible divergence
+without force pushes. Resolve merge conflicts and conflicting tags before
+retrying. Deletion on only one side is restored. Issues, pull requests, releases,
+packages, Git LFS objects and hosting metadata require separate migration.
+
+The platform GitOps URL is an independent installer choice. Importing this
+repository copies source; it does not replace platform installation or Odoo setup.
+
+```bash
+./scripts/test-repository-replication.sh
+python3 scripts/test-repository-onboarding.py
+python3 scripts/test-onboarding-services.py
+```
+
+These use local repositories and mocked services. See
+[repository validation](operations.md#validation) for the full suite.

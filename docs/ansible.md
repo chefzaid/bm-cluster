@@ -34,7 +34,7 @@ ansible-playbook -i ansible/inventory ansible/install.yml
 
 Complete [transport and Cloudflare prerequisites](networking.md) before an
 unattended run. All installer options also apply here, including offsite backups
-and [repository replication](repository-replication.md).
+and [repository onboarding](repository-replication.md).
 
 An optional `installer_environment` mapping overrides selected environment
 inputs for the installation task. For example, an encrypted extra-vars file can
@@ -114,6 +114,8 @@ needed: Odoo requires platform services, platform services require data stores,
 data stores require Vault/External Secrets, and Cloudflare requires ingress.
 Disabling a switch does not uninstall an existing component; Argo CD continues
 reconciling its configured scope. App-owned deployments stay in their repositories.
+The shared `apps` namespace, baseline networking, credentials and TLS foundation
+remain available when `install_apps=false`; this switch controls Odoo/`corp`.
 
 ### Optional host and account changes
 
@@ -138,8 +140,14 @@ with the OVH account inputs. Without transport reconciliation, provide
 Cloudflare reconciliation requires its documented environment inputs and
 `-e configure_cloudflare=true`. Offsite recovery and repository imports use the
 [optional installer inputs](installation.md#optional-integrations).
-Unattended replication requires `DEPLOY_REPOSITORIES=all`, `none`, or selected
-comma-separated names; the playbook invokes `replicate-repo.sh --yes` after Argo CD.
+Unattended repository onboarding requires `DEPLOY_REPOSITORIES=all`, `none`, or
+selected comma-separated names; the playbook invokes `add-repos.sh --yes` after
+Argo CD. Export `REPOSITORY_INPUTS_FILE` for per-repository JSON choices,
+`REPOSITORY_STATE_DIR` for private resumable journals, and `ONBOARDING_TIMEOUT`
+when the default delivery wait is insufficient. These are the same inputs used
+by the shell entrypoint. The task uses `no_log` and waits for required app jobs
+and deployment readiness; a failed setup stops the play. Run `add-repos.sh` with
+the same inputs/state directory for visible diagnostics and recovery.
 
 Local infrastructure password alignment is also explicit:
 

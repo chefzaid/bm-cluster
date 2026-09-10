@@ -25,7 +25,9 @@ spec.loader.exec_module(replication)
 
 ENV = {"GITHUB_USERNAME": "alice", "GITHUB_ADMIN_TOKEN": "fixture-github",
        "GITHUB_REPOSITORIES": "web, org/api", "GITLAB_GROUP_PATH": "team",
-       "GITLAB_ADMIN_TOKEN": "fixture-gitlab", "GITLAB_PUBLIC_URL": "https://gitlab.example.com"}
+       "GITLAB_ADMIN_TOKEN": "fixture-gitlab", "GITLAB_PUBLIC_URL": "https://gitlab.example.com",
+       "PLATFORM_DOMAIN": "example.com", "INTERNAL_DNS_ZONE": "services.internal", "KEYCLOAK_REALM": "people",
+       "PLATFORM_SECURITY_PROJECT_PATH": "platform/infrastructure/security"}
 PROJECT = {"id": 7, "path_with_namespace": "team/web", "default_branch": "main",
            "builds_access_level": "disabled", "visibility": "private"}
 APP = {"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
@@ -40,9 +42,12 @@ class ReplicationTests(unittest.TestCase):
         self.environment = patch.dict(os.environ, ENV, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        route = patch.object(replication, "gitlab_control_route", side_effect=contextlib.nullcontext)
+        route.start()
+        self.addCleanup(route.stop)
         self.runner = replication.Replicator("team", ENV["GITLAB_PUBLIC_URL"])
         self.runner.github = Mock()
-        self.runner.gitlab = Mock()
+        self.runner.gitlab = Mock(url=ENV["GITLAB_PUBLIC_URL"] + "/api/v4")
 
     def files(self, app=APP, ci="build:\n  script: echo test\n", tree=None):
         documents = {".gitlab-ci.yml": ci, "infra/argocd/application.yaml": yaml.safe_dump(app)}
@@ -95,7 +100,17 @@ class ReplicationTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(put[2]["content"]), (ROOT / replication.WORKFLOW).read_bytes())
         self.assertEqual(run.call_args.kwargs["env"]["INITIALIZE_REPOSITORY_SYNC"], "true")
         self.assertEqual(run.call_args.kwargs["env"]["GITLAB_PROJECT_PATH"], "team/web")
+        self.assertEqual(run.call_args.kwargs["env"]["GITLAB_URL"], ENV["GITLAB_PUBLIC_URL"])
+        self.assertEqual(run.call_args.kwargs["env"]["GITLAB_API_BASE_URL"], ENV["GITLAB_PUBLIC_URL"])
         self.assertTrue(run.call_args.kwargs["check"])
+
+    @patch.object(replication.subprocess, "run")
+    def test_import_passes_private_api_origin_without_replacing_public_sync_url(self, run):
+        self.runner.gitlab.url = "http://127.0.0.1:43210/api/v4"
+        self.prepare_import()
+        self.runner.import_repository("alice/web", 3)
+        self.assertEqual(run.call_args.kwargs["env"]["GITLAB_API_BASE_URL"], "http://127.0.0.1:43210")
+        self.assertEqual(run.call_args.kwargs["env"]["GITLAB_URL"], ENV["GITLAB_PUBLIC_URL"])
 
     @patch.object(replication.subprocess, "run")
     def test_rerun_reuses_existing_workflow_and_preserves_visibility(self, run):
@@ -117,95 +132,18 @@ class ReplicationTests(unittest.TestCase):
         with self.assertRaisesRegex(replication.ReplicationError, "unmanaged workflow"):
             self.runner.import_repository("alice/web", 3)
 
-    def test_application_rewrites_only_bootstrap_repository_and_preserves_revision(self):
-        documents = self.files()
-        original = documents["infra/argocd/application.yaml"]
-        _, app = self.runner.application("alice/web", PROJECT)
-        self.assertEqual(app["spec"]["source"]["repoURL"], "http://gitlab.internal.example.com/team/web.git")
-        self.assertEqual(app["spec"]["source"]["targetRevision"], "main")
-        self.assertEqual(documents["infra/argocd/application.yaml"], original)
-
-    def test_missing_ci_and_source_path_are_not_deployable(self):
-        self.files(ci=None)
-        with self.assertRaisesRegex(replication.ReplicationError, "gitlab-ci"):
-            self.runner.application("alice/web", PROJECT)
-        self.files(tree=[])
-        with self.assertRaisesRegex(replication.ReplicationError, "missing or empty"):
-            self.runner.application("alice/web", PROJECT)
-
-    def test_gitlab_reference_tags_are_left_for_server_lint(self):
-        ci = "job:\n  script: !reference [.template, script]\n"
-        self.files(ci=ci)
-        actual_ci, _ = self.runner.application("alice/web", PROJECT)
-        self.assertEqual(actual_ci, ci)
-
-    def test_missing_and_ambiguous_argo_bootstrap_are_not_deployable(self):
-        documents = self.files()
-        del documents["infra/argocd/application.yaml"]
-        with self.assertRaisesRegex(replication.ReplicationError, "exactly one"):
-            self.runner.application("alice/web", PROJECT)
-        documents = self.files()
-        documents["argocd/application.yaml"] = documents["infra/argocd/application.yaml"]
-        with self.assertRaisesRegex(replication.ReplicationError, "exactly one"):
-            self.runner.application("alice/web", PROJECT)
-
-    def test_malformed_and_unrelated_applications_are_rejected(self):
-        for field, value in [("source", None), ("source", {"path": "../outside"}),
-                             ("destination", {"server": "https://other.cluster", "namespace": "apps"})]:
-            app = copy.deepcopy(APP)
-            app["spec"][field] = value
-            self.files(app=app)
-            with self.subTest(field=field), self.assertRaises(replication.ReplicationError):
-                self.runner.application("alice/web", PROJECT)
-        app = copy.deepcopy(APP)
-        app["spec"]["source"]["repoURL"] = "https://github.com/someone/else.git"
-        self.files(app=app)
-        with self.assertRaisesRegex(replication.ReplicationError, "does not identify"):
-            self.runner.application("alice/web", PROJECT)
-
-    def test_ci_lint_failure_restores_disabled_ci_without_applying(self):
-        self.files()
-        _, app = self.runner.application("alice/web", PROJECT)
-        self.runner.application = Mock(return_value=("build: {}", app))
-        self.runner.kubectl = Mock(return_value=None)
-        self.runner.repository_credentials = Mock()
-        self.runner.gitlab.call.side_effect = [None, {"valid": False}, None]
-        with self.assertRaisesRegex(replication.ReplicationError, "lint rejected"):
+    def test_deployment_delegates_to_generic_onboarding(self):
+        with patch.object(replication, "Onboarding") as onboarding:
             self.runner.deploy("alice/web", PROJECT)
-        self.runner.repository_credentials.assert_not_called()
-        self.assertEqual(self.runner.gitlab.call.call_args.args, ("PUT", "projects/7", {"builds_access_level": "disabled"}))
-        self.assertFalse(any(call.args == ("apply", "-f", "-") for call in self.runner.kubectl.call_args_list))
+        onboarding.assert_called_once_with(self.runner)
+        onboarding.return_value.run.assert_called_once_with("alice/web", PROJECT)
 
-    def test_valid_deployment_lints_applies_and_starts_pipeline(self):
-        self.files()
-        _, app = self.runner.application("alice/web", PROJECT)
-        self.runner.application = Mock(return_value=("build: {}", app))
-        self.runner.kubectl = Mock(return_value=None)
-        self.runner.repository_credentials = Mock()
-        self.runner.gitlab.call.side_effect = [None, {"valid": True}, None, {"web_url": "https://gitlab.example.com/pipeline/1"}]
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.runner.deploy("alice/web", PROJECT)
-        self.runner.repository_credentials.assert_called_once()
-        self.assertEqual(self.runner.gitlab.call.call_args.args, ("POST", "projects/7/pipeline", {"ref": "main"}))
-        self.runner.kubectl.assert_called_with("apply", "-f", "-", resource=app)
-
-    def test_name_collision_does_not_take_over_existing_application(self):
-        self.files()
-        _, app = self.runner.application("alice/web", PROJECT)
-        self.runner.application = Mock(return_value=("build: {}", app))
-        self.runner.kubectl = Mock(side_effect=[{}, {}, {"spec": {"source": {"repoURL": "http://gitlab/other/app.git"}}}])
-        self.runner.gitlab.reset_mock()
-        with self.assertRaisesRegex(replication.ReplicationError, "another repository"):
-            self.runner.deploy("alice/web", PROJECT)
+    def test_onboarding_failure_is_reported_without_a_second_deployment_path(self):
+        with patch.object(replication, "Onboarding") as onboarding:
+            onboarding.return_value.run.side_effect = replication.OnboardingError("missing contract")
+            with self.assertRaisesRegex(replication.OnboardingError, "missing contract"):
+                self.runner.deploy("alice/web", PROJECT)
         self.runner.gitlab.call.assert_not_called()
-
-    def test_failed_secret_apply_revokes_new_read_only_token(self):
-        self.runner.kubectl = Mock(side_effect=[None, replication.ReplicationError("apply failed")])
-        self.runner.gitlab.call.return_value = {"id": 20, "username": "reader", "token": "fixture"}
-        with self.assertRaises(replication.ReplicationError):
-            self.runner.repository_credentials(7, "http://gitlab/team/web.git")
-        self.assertEqual(self.runner.gitlab.call.call_args_list[0].args[2]["scopes"], ["read_repository"])
-        self.assertEqual(self.runner.gitlab.call.call_args.args, ("DELETE", "projects/7/deploy_tokens/20"))
 
     def test_batch_continues_after_failed_import_and_deployment(self):
         self.runner.github.call.return_value = {"login": "alice"}
@@ -242,6 +180,176 @@ class ReplicationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Set DEPLOY_REPOSITORIES", result.stderr)
         self.assertNotIn(ENV["GITHUB_ADMIN_TOKEN"], result.stdout + result.stderr)
+
+
+class GitLabControlRouteTests(unittest.TestCase):
+    def test_main_uses_a_private_route_and_restores_the_environment_after_failure(self):
+        for previous in (None, ""):
+            environment = {**ENV}
+            if previous is not None:
+                environment["GITLAB_URL"] = previous
+
+            def operation(*args):
+                self.assertEqual(os.environ["GITLAB_URL"], "http://127.0.0.1:43210")
+                self.assertEqual(os.environ["GITLAB_PUBLIC_URL"], ENV["GITLAB_PUBLIC_URL"])
+                runner = replication.Replicator("engineering", ENV["GITLAB_PUBLIC_URL"])
+                self.assertEqual(runner.gitlab.url, "http://127.0.0.1:43210/api/v4")
+                raise replication.ReplicationError("fixture failure")
+
+            service = subprocess.CompletedProcess([], 0, '{"metadata":{"name":"gitlab"}}', "")
+            with self.subTest(previous=previous), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(replication.subprocess, "run", return_value=service), \
+                    patch.object(replication, "forward", return_value=contextlib.nullcontext("http://127.0.0.1:43210")) as forward, \
+                    patch.object(replication, "replicate", side_effect=operation):
+                with self.assertRaisesRegex(replication.ReplicationError, "fixture failure"):
+                    replication.main()
+                forward.assert_called_once_with("service/gitlab", 80)
+                self.assertEqual(os.environ.get("GITLAB_URL"), previous)
+
+    def test_explicit_control_url_wins_without_cluster_access(self):
+        with patch.dict(os.environ, {**ENV, "GITLAB_URL": "http://explicit.internal:8080"}, clear=True), \
+                patch.object(replication.subprocess, "run") as run, patch.object(replication, "forward") as forward:
+            with replication.gitlab_control_route():
+                self.assertEqual(os.environ["GITLAB_URL"], "http://explicit.internal:8080")
+            run.assert_not_called()
+            forward.assert_not_called()
+            self.assertEqual(os.environ["GITLAB_URL"], "http://explicit.internal:8080")
+
+    def test_import_outside_cluster_keeps_public_access(self):
+        with patch.dict(os.environ, ENV, clear=True), patch.object(replication.subprocess, "run", side_effect=FileNotFoundError), \
+                patch.object(replication, "forward") as forward:
+            with replication.gitlab_control_route():
+                runner = replication.Replicator("engineering", ENV["GITLAB_PUBLIC_URL"])
+                self.assertEqual(runner.gitlab.url, ENV["GITLAB_PUBLIC_URL"] + "/api/v4")
+            forward.assert_not_called()
+            self.assertNotIn("GITLAB_URL", os.environ)
+
+
+class PlatformContextTests(unittest.TestCase):
+    def discovery(self, resources, environment=None, required=True):
+        def get(command, **kwargs):
+            self.assertEqual(command[:3], ["kubectl", "--request-timeout=10s", "get"])
+            self.assertNotIn("secret", command)
+            resource = resources.get((command[3], command[4]), {})
+            return subprocess.CompletedProcess(command, 0, json.dumps(resource), "")
+        with patch.dict(os.environ, environment or {}, clear=True), patch.object(replication.subprocess, "run", side_effect=get):
+            return replication.platform_context(required=required)
+
+    def test_helm_parameter_precedence_and_live_issuer(self):
+        resources = {
+            ("application", "bm-cluster"): {"spec": {"source": {"helm": {
+                "values": "publicDomain: inline.invalid\ninternalDnsZone: inline.internal\n",
+                "valuesObject": {"publicDomain": "object.invalid", "internalDnsZone": "object.internal"},
+                "parameters": [{"name": "publicDomain", "value": "example.com"},
+                               {"name": "internalDnsZone", "value": "services.internal"}]}}}},
+            ("deployment", "oauth2-proxy"): {"spec": {"template": {"spec": {"containers": [
+                {"args": ["--oidc-issuer-url=https://keycloak.example.com/auth/realms/people"]}]}}}},
+            ("ingress", "gitlab-ingress"): {"spec": {"rules": [{"host": "source.example.com"}]}}}
+        result = self.discovery(resources)
+        self.assertEqual(result, {"PLATFORM_DOMAIN": "example.com", "INTERNAL_DNS_ZONE": "services.internal",
+                                  "KEYCLOAK_REALM": "people", "GITLAB_PUBLIC_URL": "https://source.example.com"})
+
+    def test_legacy_coredns_and_issuer_discovery_does_not_invent_a_zone(self):
+        resources = {
+            ("configmap", "coredns-custom"): {"data": {"aliases.override":
+                "rewrite stop name suffix .services.internal. .infra.svc.cluster.local. answer auto\n"}},
+            ("deployment", "oauth2-proxy"): {"spec": {"template": {"spec": {"containers": [
+                {"args": ["--oidc-issuer-url=https://keycloak.example.com/auth/realms/people"]}]}}}}}
+        self.assertEqual(self.discovery(resources)["INTERNAL_DNS_ZONE"], "services.internal")
+        del resources[("configmap", "coredns-custom")]
+        with self.assertRaisesRegex(replication.ReplicationError, "INTERNAL_DNS_ZONE.*no internal DNS zone is guessed"):
+            self.discovery(resources)
+        self.assertNotIn("INTERNAL_DNS_ZONE", self.discovery(resources, required=False))
+
+    def test_explicit_settings_do_not_need_cluster_access(self):
+        environment = {name: ENV[name] for name in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_PUBLIC_URL", "PLATFORM_SECURITY_PROJECT_PATH")}
+        with patch.dict(os.environ, environment, clear=True), patch.object(replication.subprocess, "run") as run:
+            self.assertEqual(replication.platform_context(required=True), environment)
+            run.assert_not_called()
+
+    def test_security_images_follow_platform_project_when_app_group_differs(self):
+        environment = {**ENV, "GITLAB_GROUP_PATH": "engineering"}
+        environment.pop("PLATFORM_SECURITY_PROJECT_PATH")
+        resources = {("application", "bm-cluster"): {"spec": {"source": {
+            "repoURL": "http://gitlab.services.internal/platform/infrastructure.git"}}}}
+        context = self.discovery(resources, environment)
+        self.assertEqual(context["PLATFORM_SECURITY_PROJECT_PATH"], "platform/infrastructure/security")
+        self.assertNotIn("engineering", context["PLATFORM_SECURITY_PROJECT_PATH"])
+        context = self.discovery(resources, {**environment, "PLATFORM_SECURITY_PROJECT_PATH": "images/shared/helpers"})
+        self.assertEqual(context["PLATFORM_SECURITY_PROJECT_PATH"], "images/shared/helpers")
+        # Import-only flows remain available without an installed platform chart.
+        self.assertNotIn("PLATFORM_SECURITY_PROJECT_PATH", self.discovery({}, environment, required=False))
+
+    def test_ambiguous_coredns_and_invalid_explicit_values_fail(self):
+        resources = {("configmap", "coredns-custom"): {"data": {"aliases.override":
+            "rewrite stop name suffix .first.internal. .infra.svc.cluster.local. answer auto\n"
+            "rewrite stop name suffix .second.internal. .infra.svc.cluster.local. answer auto\n"}}}
+        with self.assertRaisesRegex(replication.ReplicationError, "INTERNAL_DNS_ZONE"):
+            self.discovery(resources, {"PLATFORM_DOMAIN": "example.com", "KEYCLOAK_REALM": "people", "GITLAB_PUBLIC_URL": "https://gitlab.example.com"})
+        for value in ("https://services.internal", "services.internal; bad", "example.com"):
+            with self.subTest(value=value), self.assertRaises(replication.ReplicationError):
+                self.discovery({}, {**ENV, "INTERNAL_DNS_ZONE": value})
+
+
+class SyncBootstrapTests(unittest.TestCase):
+    def test_admin_api_uses_private_origin_but_github_variables_keep_public_urls(self):
+        with tempfile.TemporaryDirectory(prefix="sync-bootstrap-test.") as directory:
+            root = Path(directory)
+            log = root / "requests.jsonl"
+            curl = root / "curl"
+            curl.write_text('''#!/usr/bin/env python3
+import base64, json, os, pathlib, sys
+from urllib.parse import urlparse
+args = sys.argv[1:]
+url = next(value for value in args if value.startswith(("https://", "http://")))
+path = urlparse(url).path
+method = args[args.index("--request") + 1] if "--request" in args else "GET"
+request = {"url": url, "method": method}
+if "/actions/variables" in path and "--data-binary" in args:
+    request["body"] = json.loads(pathlib.Path(args[args.index("--data-binary") + 1][1:]).read_text())
+with open(os.environ["MOCK_REQUESTS"], "a") as output:
+    output.write(json.dumps(request) + "\\n")
+result = {}
+status = "200"
+if path == "/api/v4/projects/team%2Fweb": result = {"id": 7}
+elif path == "/repos/alice/web": result = {"default_branch": "main"}
+elif path == "/repos/alice/web/actions/secrets":
+    result = {"secrets": [{"name": value} for value in ("GITLAB_SYNC_USERNAME", "GITLAB_SYNC_TOKEN", "REPOSITORY_SYNC_ADMIN_TOKEN")]}
+elif path.endswith("/actions/secrets/public-key"):
+    result = {"key_id": "fixture", "key": base64.b64encode(bytes([9]) + bytes(31)).decode()}
+elif path == "/api/v4/projects/7/access_tokens":
+    result = [{"id": 20, "name": "github-actions-sync", "active": True, "revoked": False,
+               "scopes": ["write_repository", "self_rotate"], "expires_at": "2099-01-01"}]
+elif "/actions/variables/" in path and method == "GET": status = "404"
+elif path == "/api/v4/projects/7/hooks": result = [] if method == "GET" else {"id": 11}
+elif path == "/api/v4/projects/7/hooks/11" and method == "GET":
+    result = {"url": "https://api.github.com/repos/alice/web/dispatches", "push_events": True,
+              "tag_push_events": True, "enable_ssl_verification": True, "custom_webhook_template": "fixture",
+              "custom_headers": [{"key": key} for key in ("Accept", "Authorization", "X-GitHub-Api-Version")]}
+if "--output" in args:
+    pathlib.Path(args[args.index("--output") + 1]).write_text(json.dumps(result))
+else: print(json.dumps(result), end="")
+if "--write-out" in args: print(status, end="")
+''')
+            curl.chmod(0o755)
+            environment = {**os.environ, **ENV, "PATH": str(root) + os.pathsep + os.environ["PATH"],
+                           "GITHUB_OWNER": "alice", "GITHUB_REPOSITORY": "web", "GITLAB_PROJECT_PATH": "team/web",
+                           "GITLAB_URL": "https://gitlab.example.com", "GITLAB_API_BASE_URL": "http://127.0.0.1:43210",
+                           "INITIALIZE_REPOSITORY_SYNC": "false", "MOCK_REQUESTS": str(log)}
+            result = subprocess.run(["bash", str(ROOT / "scripts/configure-repository-sync.sh")],
+                                    cwd=ROOT, env=environment, text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for key in ("GITHUB_ADMIN_TOKEN", "GITLAB_ADMIN_TOKEN"):
+                self.assertNotIn(ENV[key], result.stdout + result.stderr + log.read_text())
+            requests = [json.loads(line) for line in log.read_text().splitlines()]
+            api_urls = [item["url"] for item in requests if "/api/v4/" in item["url"]]
+            self.assertGreaterEqual(len(api_urls), 6)
+            self.assertTrue(all(url.startswith("http://127.0.0.1:43210/api/v4/") for url in api_urls))
+            variables = {item["body"]["name"]: item["body"]["value"] for item in requests if "body" in item}
+            self.assertEqual(variables["GITLAB_API_URL"], "https://gitlab.example.com/api/v4")
+            self.assertEqual(variables["GITLAB_HOST"], "gitlab.example.com")
+            self.assertEqual(variables["GITLAB_REPOSITORY"], "https://gitlab.example.com/team/web.git")
+            self.assertNotIn("127.0.0.1", json.dumps(variables))
 
 
 class SyncWorkflowTests(unittest.TestCase):

@@ -41,7 +41,7 @@
 {{- end -}}
 
 {{- range $path, $_ := .Files.Glob "base/*.yaml" }}
-{{- if or $.Values.appsEnabled (and (ne $path "base/apps-namespace.yaml") (ne $path "base/corp-namespace.yaml")) }}
+{{- if or $.Values.appsEnabled (ne $path "base/corp-namespace.yaml") }}
 {{ include "bm-cluster.render" (list $ $path) }}
 {{- end }}
 {{- end }}
@@ -106,10 +106,9 @@
 {{ include "bm-cluster.render" (list $ $path) }}
 {{- end }}
 {{- end }}
-{{- if .Values.appsEnabled }}
+{{- /* Application namespaces and shared discovery belong to the platform in every scope. */}}
 {{- range $path, $_ := .Files.Glob "apps/*.yaml" }}
 {{ include "bm-cluster.render" (list $ $path) }}
-{{- end }}
 {{- end }}
 {{- if .Values.appsEnabled }}
 {{- range $path, $_ := .Files.Glob "corp/*.yaml" }}

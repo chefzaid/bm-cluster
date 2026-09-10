@@ -59,7 +59,7 @@ NODE_ENROLLMENT_SCRIPT="$SCRIPT_DIR/add-node.sh"
 K3S_HA_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-ha.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
-REPLICATE_REPO_SCRIPT="$SCRIPT_DIR/replicate-repo.sh"
+REPLICATE_REPO_SCRIPT="$SCRIPT_DIR/add-repos.sh"
 GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/scripts/lib/gitlab-admin-token.sh"
 LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT="$SCRIPT_DIR/scripts/rotate-local-admin-passwords.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-registry-mirror.sh"
@@ -1108,9 +1108,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
             --node-network-cidr "$K3S_NODE_NETWORK_CIDR" \
             --control-plane-ip "$K3S_PRIVATE_ADDRESS"
     fi
+    step "Creating the shared application namespace..."
+    kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
     if [[ "$INSTALL_APPS" == "true" ]]; then
-        step "Creating the shared application namespace..."
-        kubectl apply -f "$K8S_DIR/base/apps-namespace.yaml" >/dev/null
         kubectl apply -f "$K8S_DIR/base/corp-namespace.yaml" >/dev/null
     fi
     step "Configuring the cluster-only $INTERNAL_DNS_ZONE service aliases..."
@@ -1127,8 +1127,8 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
         step "Ensuring HTTPS TLS secret..."
         tls_domains=("$CLOUDFLARE_ZONE" "*.$CLOUDFLARE_ZONE")
         ensure_tls_secret infra swirlit-dev-tls "${tls_domains[@]}"
+        ensure_tls_secret apps swirlit-dev-tls "${tls_domains[@]}"
         if [[ "$INSTALL_APPS" == "true" ]]; then
-            ensure_tls_secret apps swirlit-dev-tls "${tls_domains[@]}"
             ensure_tls_secret corp swirlit-dev-tls "${tls_domains[@]}"
         fi
     fi
@@ -1237,6 +1237,7 @@ EOF
 
         step "Applying unified Vault manifests (ingress, RBAC, and secret sync)..."
         kubectl apply -f "$K8S_DIR/platform/vault.yaml"
+        kubectl apply -f "$K8S_DIR/apps/security-image-registry.yaml"
 
         kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout="$VAULT_WAIT_TIMEOUT"
         kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout="$VAULT_WAIT_TIMEOUT"
@@ -1330,7 +1331,7 @@ EOF
         gitlab_revoke_ephemeral_admin_token
     fi
 
-    if [[ "$INSTALL_APPS" == "true" && "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
+    if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
         kubectl apply -f "$K8S_DIR/apps/sonar-apps-discovery.yaml"
     fi
 

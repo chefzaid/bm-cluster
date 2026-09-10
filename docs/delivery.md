@@ -18,6 +18,7 @@ Each application's deployment guide owns its database, Vault, registry and CI
 inputs, bootstrap procedure and recovery steps. Changes to its runtime resources
 and Argo CD Application belong in that repository. Public records follow the
 [application DNS contract](networking.md#application-dns-ownership).
+The shared `apps` foundation remains installed when Odoo/`corp` is disabled.
 
 The installer and [Ansible](ansible.md) run
 [`configure-gitlab-ci.sh`](../scripts/configure-gitlab-ci.sh) to reconcile the
@@ -27,9 +28,14 @@ administrator token through `gitlab-rails` and revokes it on exit; no manually
 created token is required. Credentials are not committed.
 
 To import GitHub repositories, configure two-way synchronization and select
-deployments, run `./replicate-repo.sh`. The installer can invoke the same
-assistant after platform setup. See [repository replication](repository-replication.md)
-for permissions, deployment checks and unattended inputs.
+deployments, run `./add-repos.sh`. The installer and Ansible invoke the same
+helper after platform setup. It consumes the app-owned
+[`infra/onboarding.json` contract](application-onboarding.md), commits public
+settings, provisions declared prerequisites/DNS and requests an API pipeline
+pinned to that configuration. The app's release job owns first Application
+creation and restores any paused sync policy. Success requires declared jobs
+and app readiness, rather than merely pipeline creation. See
+[repository onboarding](repository-replication.md) for inputs and recovery.
 
 ## Pipelines and outputs
 

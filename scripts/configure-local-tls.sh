@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reuse existing TLS secrets or create local certificates for the selected scope.
+# Reuse TLS for shared infra/apps; optionally include centrally managed corp.
 set -euo pipefail
 umask 077
 
@@ -22,7 +22,7 @@ if [[ ! "${PLATFORM_DOMAIN:-}" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ 
 fi
 
 ensure_tls_secret infra swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
+ensure_tls_secret apps swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
 if [[ "$apps_enabled" == true ]]; then
-    ensure_tls_secret apps swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
     ensure_tls_secret corp swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
 fi

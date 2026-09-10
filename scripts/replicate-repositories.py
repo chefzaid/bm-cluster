@@ -2,11 +2,10 @@
 """Repository import and declarative deployment orchestration for replicate-repo.sh."""
 
 import base64
-import copy
-import hashlib
+from contextlib import contextmanager
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -17,13 +16,140 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts/lib"))
+from repository_onboarding import Onboarding, OnboardingError, ServiceError
+from onboarding_services import forward
 WORKFLOW = ".github/workflows/sync-gitlab.yml"
-APPLICATION_PATHS = ("infra/argocd/application.yaml", "argocd/application.yaml")
 NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
 
 class ReplicationError(Exception):
     pass
+
+
+@contextmanager
+def gitlab_control_route():
+    """Keep operator Git/API traffic on a temporary loopback route when available."""
+    previous = os.environ.get("GITLAB_URL")
+    if previous:
+        yield
+        return
+    try:
+        result = subprocess.run(
+            ["kubectl", "--request-timeout=10s", "get", "service", "gitlab", "-n", "infra",
+             "--ignore-not-found", "-o", "json"],
+            text=True, capture_output=True, timeout=15, check=False)
+        available = result.returncode == 0 and bool(json.loads(result.stdout or "{}"))
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        available = False
+    if not available:
+        # Import-only use from outside the cluster can still use public GitLab.
+        yield
+        return
+    with forward("service/gitlab", 80) as url:
+        os.environ["GITLAB_URL"] = url
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("GITLAB_URL", None)
+            else:
+                os.environ["GITLAB_URL"] = previous
+
+
+def platform_context(*, required=False):
+    """Read public installed settings; explicit operator environment always wins."""
+    keys = ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_PUBLIC_URL")
+    context = {key: os.environ[key] for key in (*keys, "PLATFORM_SECURITY_PROJECT_PATH") if os.environ.get(key)}
+
+    def resource(kind, name, namespace):
+        try:
+            result = subprocess.run(
+                ["kubectl", "--request-timeout=10s", "get", kind, name, "-n", namespace,
+                 "--ignore-not-found", "-o", "json"],
+                text=True, capture_output=True, timeout=15, check=False)
+            return json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else {}
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return {}
+
+    namespace = os.environ.get("GITLAB_NAMESPACE", "infra")
+    if not all(context.get(key) for key in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "PLATFORM_SECURITY_PROJECT_PATH")):
+        application = resource("application", "bm-cluster", "infra")
+        source = application.get("spec", {}).get("source", {})
+        repository = urlparse(source.get("repoURL", ""))
+        project_path = repository.path.strip("/").removesuffix(".git")
+        if ("PLATFORM_SECURITY_PROJECT_PATH" not in context and repository.scheme in ("http", "https", "ssh")
+                and repository.hostname and len(project_path.split("/")) >= 2
+                and all(NAME.fullmatch(part) for part in project_path.split("/"))):
+            context["PLATFORM_SECURITY_PROJECT_PATH"] = project_path + "/security"
+        helm = source.get("helm", {})
+        try:
+            inline = yaml.safe_load(helm.get("values", "")) or {}
+        except yaml.YAMLError:
+            inline = {}
+        values = dict(inline) if isinstance(inline, dict) else {}
+        values.update(helm.get("valuesObject") or {})
+        values.update({item["name"]: item.get("value") for item in helm.get("parameters", []) if "name" in item})
+        for key, name in (("PLATFORM_DOMAIN", "publicDomain"), ("INTERNAL_DNS_ZONE", "internalDnsZone")):
+            if key not in context and values.get(name):
+                context[key] = values[name]
+
+    if "INTERNAL_DNS_ZONE" not in context:
+        config = resource("configmap", "coredns-custom", "kube-system")
+        zones = set()
+        for value in config.get("data", {}).values():
+            zones.update(re.findall(
+                r"(?m)^\s*rewrite\s+stop\s+name\s+suffix\s+\.([^\s]+)\.\s+\.infra\.svc\.cluster\.local\.\s+answer\s+auto\s*$",
+                value))
+        if len(zones) == 1:
+            context["INTERNAL_DNS_ZONE"] = zones.pop()
+
+    if "KEYCLOAK_REALM" not in context or "PLATFORM_DOMAIN" not in context:
+        deployment = resource("deployment", "oauth2-proxy", "infra")
+        issuers = set()
+        for container in deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", []):
+            for argument in container.get("args", []):
+                if argument.startswith("--oidc-issuer-url="):
+                    issuers.add(argument.split("=", 1)[1])
+        if len(issuers) == 1:
+            issuer = urlparse(issuers.pop())
+            match = re.fullmatch(r"/auth/realms/([A-Za-z0-9_.-]+)", issuer.path)
+            if issuer.scheme == "https" and issuer.hostname and not issuer.username and not issuer.password and match:
+                context.setdefault("KEYCLOAK_REALM", match[1])
+                if issuer.hostname.startswith("keycloak."):
+                    context.setdefault("PLATFORM_DOMAIN", issuer.hostname.removeprefix("keycloak."))
+
+    if "GITLAB_PUBLIC_URL" not in context:
+        ingress = resource("ingress", "gitlab-ingress", namespace)
+        hosts = {item["host"] for item in ingress.get("spec", {}).get("rules", []) if item.get("host")}
+        if len(hosts) == 1:
+            context["GITLAB_PUBLIC_URL"] = "https://" + hosts.pop()
+        elif context.get("PLATFORM_DOMAIN"):
+            context["GITLAB_PUBLIC_URL"] = "https://gitlab." + context["PLATFORM_DOMAIN"]
+
+    if "PLATFORM_DOMAIN" not in context and context.get("GITLAB_PUBLIC_URL"):
+        host = urlparse(context["GITLAB_PUBLIC_URL"]).hostname or ""
+        if host.startswith("gitlab."):
+            context["PLATFORM_DOMAIN"] = host.removeprefix("gitlab.")
+    for key in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE"):
+        if key in context and (not isinstance(context[key], str) or not re.fullmatch(
+                r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}", context[key])):
+            raise ReplicationError(f"{key} must be a DNS zone; set its explicit environment override.")
+    if context.get("PLATFORM_DOMAIN") and context.get("INTERNAL_DNS_ZONE") == context["PLATFORM_DOMAIN"]:
+        raise ReplicationError("INTERNAL_DNS_ZONE must differ from PLATFORM_DOMAIN.")
+    if "KEYCLOAK_REALM" in context and (not isinstance(context["KEYCLOAK_REALM"], str) or
+            not re.fullmatch(r"[A-Za-z0-9_.-]+", context["KEYCLOAK_REALM"]) or context["KEYCLOAK_REALM"] == "master"):
+        raise ReplicationError("KEYCLOAK_REALM must name the existing application realm.")
+    security_path = context.get("PLATFORM_SECURITY_PROJECT_PATH")
+    if security_path is not None and (not isinstance(security_path, str) or len(security_path.split("/")) < 2
+            or any(not NAME.fullmatch(part) for part in security_path.split("/"))):
+        raise ReplicationError("PLATFORM_SECURITY_PROJECT_PATH must be the installed platform's registry project path.")
+    if required:
+        missing = [key for key in keys if key not in context]
+        if missing:
+            raise ReplicationError("Unable to discover installed platform settings: " + ", ".join(missing) +
+                                   ". Set these environment variables explicitly; no internal DNS zone is guessed.")
+    return context
 
 
 def names(value):
@@ -114,8 +240,7 @@ class Replicator:
         self.group = group
         self.public_url = public_url
         self.namespace = os.environ.get("GITLAB_NAMESPACE", "infra")
-        self.internal_zone = os.environ.get("INTERNAL_DNS_ZONE") or (
-            "internal." + urlparse(public_url).hostname.removeprefix("gitlab."))
+        self.internal_zone = os.environ.get("INTERNAL_DNS_ZONE", "")
         self.github = API("https://api.github.com", {
             "Authorization": f"Bearer {os.environ['GITHUB_ADMIN_TOKEN']}",
             "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
@@ -174,7 +299,8 @@ class Replicator:
         self.github.call("PUT", f"repos/{slug}/actions/workflows/sync-gitlab.yml/enable")
         environment = {**os.environ, "GITHUB_OWNER": slug.split("/")[0],
                        "GITHUB_REPOSITORY": slug.split("/")[1], "GITLAB_PROJECT_PATH": path,
-                       "GITLAB_URL": self.public_url, "INITIALIZE_REPOSITORY_SYNC": "true"}
+                       "GITLAB_URL": self.public_url, "GITLAB_API_BASE_URL": self.gitlab.url.removesuffix("/api/v4"),
+                       "INITIALIZE_REPOSITORY_SYNC": "true"}
         subprocess.run([str(ROOT / "scripts/configure-repository-sync.sh")], env=environment, check=True)
         project = self.gitlab.call("GET", f"projects/{project['id']}")
         if not project.get("default_branch"):
@@ -188,118 +314,33 @@ class Replicator:
             return None
         return base64.b64decode(value["content"]).decode()
 
-    def application(self, slug, project):
-        project_id, branch = project["id"], project["default_branch"]
-        ci = self.file(project_id, ".gitlab-ci.yml", branch)
-        # GitLab owns semantic validation, including its custom !reference tag.
-        if not ci or not isinstance(yaml.load(ci, Loader=yaml.BaseLoader), dict):
-            raise ReplicationError("missing or invalid .gitlab-ci.yml")
-        candidates = [(path, self.file(project_id, path, branch)) for path in APPLICATION_PATHS]
-        candidates = [(path, content) for path, content in candidates if content]
-        if len(candidates) != 1:
-            raise ReplicationError("expected exactly one Argo CD Application at " + " or ".join(APPLICATION_PATHS))
-        documents = list(yaml.safe_load_all(candidates[0][1]))
-        if len(documents) != 1 or not isinstance(documents[0], dict):
-            raise ReplicationError("Argo CD bootstrap must contain one Application")
-        app = copy.deepcopy(documents[0])
-        if app.get("apiVersion") != "argoproj.io/v1alpha1" or app.get("kind") != "Application":
-            raise ReplicationError("Argo CD bootstrap must be an argoproj.io/v1alpha1 Application")
-        metadata, spec = app.get("metadata"), app.get("spec")
-        if not isinstance(metadata, dict) or not isinstance(spec, dict):
-            raise ReplicationError("Application metadata and spec must be mappings")
-        if not metadata.get("name") or metadata.get("namespace", self.namespace) != self.namespace:
-            raise ReplicationError(f"Application needs a name and namespace {self.namespace}")
-        source = spec.get("source")
-        if (not isinstance(source, dict) or spec.get("sources") or
-                not isinstance(source.get("path"), str) or not source["path"] or source.get("chart")):
-            raise ReplicationError("Application needs one repository source with a local manifest path")
-        source_path = PurePosixPath(source["path"])
-        if source_path.is_absolute() or ".." in source_path.parts:
-            raise ReplicationError("Application source.path must stay inside the imported repository")
-        revision = source.get("targetRevision", "HEAD")
-        if not isinstance(revision, str) or not revision:
-            raise ReplicationError("Application targetRevision must be a branch, tag, or commit")
-        tree = self.gitlab.call("GET", f"projects/{project_id}/repository/tree?" + urlencode({
-            "path": str(source_path), "ref": branch if revision == "HEAD" else revision, "per_page": 1}), missing=True)
-        if not tree:
-            raise ReplicationError(f"Application source path {source_path} is missing or empty at {revision}")
-        destination = spec.get("destination")
-        if (not isinstance(destination, dict) or destination.get("server") != "https://kubernetes.default.svc"
-                or not destination.get("namespace")):
-            raise ReplicationError("Application must target a namespace in the local Kubernetes cluster")
-        if not isinstance(source.get("repoURL"), str):
-            raise ReplicationError("Application repoURL must identify the imported repository")
-        original_path = urlparse(source["repoURL"]).path.removeprefix("/").removesuffix(".git")
-        if original_path not in (slug, project["path_with_namespace"]):
-            raise ReplicationError("Application repoURL does not identify this GitHub/GitLab repository")
-        source["repoURL"] = f"http://gitlab.{self.internal_zone}/{project['path_with_namespace']}.git"
-        metadata["namespace"] = self.namespace
-        if not spec.get("project"):
-            raise ReplicationError("Application spec.project is required")
-        return ci, app
-
     def kubectl(self, *args, resource=None):
-        result = subprocess.run(["kubectl", *args], input=None if resource is None else json.dumps(resource),
-                                text=True, capture_output=True)
+        result = subprocess.run(["kubectl", "--request-timeout=30s", *args], input=None if resource is None else json.dumps(resource),
+                                text=True, capture_output=True, timeout=180)
         if result.returncode:
             # Secret manifests and echoed API responses must not reach logs.
             raise ReplicationError("kubectl " + " ".join(args) + " failed; check cluster access, Argo CD, and resource permissions")
         return json.loads(result.stdout) if result.stdout.strip().startswith("{") else None
 
     def deploy(self, slug, project):
-        ci, app = self.application(slug, project)
-        self.kubectl("get", "crd", "applications.argoproj.io", "-o", "json")
-        self.kubectl("get", "appproject", app["spec"]["project"], "-n", self.namespace, "-o", "json")
-        existing = self.kubectl("get", "application", app["metadata"]["name"], "-n", self.namespace,
-                                "--ignore-not-found", "-o", "json")
-        if existing:
-            existing_path = urlparse(existing.get("spec", {}).get("source", {}).get("repoURL", "")).path
-            if existing_path != urlparse(app["spec"]["source"]["repoURL"]).path:
-                raise ReplicationError("an Application with this name already manages another repository")
-        self.kubectl("apply", "--dry-run=server", "-f", "-", resource=app)
-        project_id = project["id"]
-        previous_builds = project.get("builds_access_level", "enabled")
-        self.gitlab.call("PUT", f"projects/{project_id}", {"builds_access_level": "enabled"})
-        try:
-            lint = self.gitlab.call("POST", f"projects/{project_id}/ci/lint", {
-                "content": ci, "ref": project["default_branch"]})
-            if not lint.get("valid"):
-                raise ReplicationError("GitLab CI lint rejected .gitlab-ci.yml; inspect it in GitLab's Pipeline Editor")
-            self.repository_credentials(project_id, app["spec"]["source"]["repoURL"])
-            self.gitlab.call("PUT", f"projects/{project_id}", {
-                "shared_runners_enabled": True, "ci_config_path": ".gitlab-ci.yml"})
-            self.kubectl("apply", "-f", "-", resource=app)
-            pipeline = self.gitlab.call("POST", f"projects/{project_id}/pipeline", {"ref": project["default_branch"]})
-        except (ReplicationError, OSError):
-            self.gitlab.call("PUT", f"projects/{project_id}", {"builds_access_level": previous_builds})
-            raise
-        print(f"[DEPLOY] {slug}: Application {app['metadata']['name']} applied; pipeline {pipeline['web_url']}", flush=True)
-
-    def repository_credentials(self, project_id, url):
-        name = "repository-" + hashlib.sha256(url.encode()).hexdigest()[:16]
-        existing = self.kubectl("get", "secret", name, "-n", self.namespace, "--ignore-not-found", "-o", "json")
-        if existing:
-            data = existing.get("data", {})
-            if base64.b64decode(data.get("url", "")).decode() != url or not data.get("password"):
-                raise ReplicationError(f"Argo CD repository credential Secret {name} is inconsistent")
-            return
-        token = self.gitlab.call("POST", f"projects/{project_id}/deploy_tokens", {
-            "name": "bm-cluster-argocd", "scopes": ["read_repository"]})
-        secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-                  "metadata": {"name": name, "namespace": self.namespace,
-                               "labels": {"argocd.argoproj.io/secret-type": "repository"}},
-                  "stringData": {"type": "git", "url": url, "username": token["username"], "password": token["token"]}}
-        try:
-            self.kubectl("apply", "-f", "-", resource=secret)
-        except ReplicationError:
-            self.gitlab.call("DELETE", f"projects/{project_id}/deploy_tokens/{token['id']}")
-            raise
+        context = platform_context(required=True)
+        os.environ.update(context)
+        self.internal_zone = context["INTERNAL_DNS_ZONE"]
+        Onboarding(self).run(slug, project)
 
 
 def main():
+    if "--platform-context" in sys.argv:
+        print(json.dumps(platform_context()))
+        return 0
     repositories, group, public_url = inputs()
     if "--check-inputs" in sys.argv:
         return 0
+    with gitlab_control_route():
+        return replicate(repositories, group, public_url)
+
+
+def replicate(repositories, group, public_url):
     replicator = Replicator(group, public_url)
     user = replicator.github.call("GET", "user")
     if user["login"].lower() != os.environ["GITHUB_USERNAME"].lower():
@@ -330,7 +371,7 @@ def main():
             continue
         try:
             replicator.deploy(slug, imported[slug])
-        except (ReplicationError, yaml.YAMLError, OSError, UnicodeError) as error:
+        except (ReplicationError, OnboardingError, ServiceError, yaml.YAMLError, OSError, UnicodeError, subprocess.SubprocessError) as error:
             print(f"[CANNOT DEPLOY] {slug}: {error}. Repository remains imported and synchronized.", file=sys.stderr, flush=True)
             failures.append(slug)
     print(f"[INFO] Imported and synchronized {len(imported)} repository/repositories; {len(set(failures))} need attention.")
@@ -341,6 +382,6 @@ if __name__ == "__main__":
     os.umask(0o077)
     try:
         sys.exit(main())
-    except (ReplicationError, EOFError, KeyboardInterrupt) as error:
+    except (ReplicationError, OnboardingError, ServiceError, EOFError, KeyboardInterrupt) as error:
         print(f"[ERROR] {error}", file=sys.stderr)
         sys.exit(1)

@@ -74,7 +74,7 @@ elif name == "configure-tailscale.sh":
     print("100.100.10.1")
 elif name == "configure-ovh-vrack.sh":
     print("eno2")
-elif name in ("replicate-repo.sh", "install-control-plane.sh"):
+elif name in ("add-repos.sh", "install-control-plane.sh"):
     # Even helpers that accidentally echo a credential must stay censored.
     print(os.environ.get("GITHUB_ADMIN_TOKEN", ""))
 '''
@@ -97,7 +97,7 @@ def exercise(case):
                 (scripts / source.name).write_text(MOCK)
                 (scripts / source.name).chmod(0o700)
         for target in [commands / name for name in ("kubectl", "helm", "sudo", "systemctl")] + [
-            fixture / "replicate-repo.sh", fixture / "install-control-plane.sh"
+            fixture / "add-repos.sh", fixture / "install-control-plane.sh"
         ]:
             target.write_text(MOCK)
             target.chmod(0o700)
@@ -139,6 +139,8 @@ def exercise(case):
                        CLOUDFLARE_ENABLE_ACCESS="false")
         elif case == "odoo_dependencies":
             variables.update(deploy_platform_services=False, deploy_data_stores=False, install_vault_stack=False)
+        elif case == "platform_infra_only":
+            variables.update(install_apps=False)
         elif case == "infra_only":
             variables.update(install_apps=False, deploy_platform_services=False, deploy_data_stores=False,
                              install_vault_stack=False, install_descheduler=False, install_argocd=False)
@@ -193,18 +195,18 @@ def exercise(case):
                 assert install["env"]["CONTROL_PLANE_COUNT"] == "3"
                 assert install["env"]["K3S_WORKER_IPS"] == "10.40.0.20"
         elif not expected_success:
-            assert "replicate-repo.sh" not in names
+            assert "add-repos.sh" not in names
             if case != "helm_failure":
                 assert "configure-node-security.sh" not in names and "helm" not in names
         else:
             if case != "infra_only":
-                assert names.index("configure-gitlab-ci.sh") < names.index("replicate-repo.sh")
+                assert names.index("configure-gitlab-ci.sh") < names.index("add-repos.sh")
                 gitlab = next(call for call in calls if call["tool"] == "configure-gitlab-ci.sh")
                 assert gitlab["env"]["CONFIGURE_REPOSITORY_SYNC"] == "false"
-                replica = next(call for call in calls if call["tool"] == "replicate-repo.sh")
+                replica = next(call for call in calls if call["tool"] == "add-repos.sh")
                 assert replica["args"] == ["--yes"] and replica["env"]["DEPLOY_REPOSITORIES"] == "none"
                 argo = next(i for i, call in enumerate(calls) if call["tool"] == "helm" and "argocd" in call["args"] and "--install" in call["args"])
-                assert argo < names.index("replicate-repo.sh")
+                assert argo < names.index("add-repos.sh")
             if case in ("tailscale", "vrack"):
                 transport = "configure-tailscale.sh" if case == "tailscale" else "configure-ovh-vrack.sh"
                 assert names.index(transport) < names.index("configure-k3s-control-plane-network.sh") < names.index("configure-node-security.sh")
@@ -223,11 +225,11 @@ def exercise(case):
                     security = next(call for call in calls if call['tool'] == 'configure-node-security.sh')
                     assert security['args'][security['args'].index('--server-exposure') + 1] == 'local'
             else:
-                assert sorted(p.name for p in tls.iterdir()) == (["infra"] if case == "infra_only" else ["apps", "corp", "infra"])
+                assert sorted(p.name for p in tls.iterdir()) == (["apps", "infra"] if case in ("infra_only", "platform_infra_only") else ["apps", "corp", "infra"])
                 # Rerunning the shared TLS helper must reuse certificates.
                 before = log.read_text()
                 subprocess.run([str(scripts / "configure-local-tls.sh"), "--apps-enabled",
-                                "false" if case == "infra_only" else "true"], env=env, check=True, capture_output=True)
+                                "false" if case in ("infra_only", "platform_infra_only") else "true"], env=env, check=True, capture_output=True)
                 extra_calls = log.read_text()[len(before):]
                 assert '"create", "secret"' not in extra_calls
                 for call in calls:
@@ -239,6 +241,14 @@ def exercise(case):
                     assert call["args"][1] == "node/cp-01", "Reconciliation may relabel additional servers"
             if case == "odoo_dependencies":
                 assert "configure-vault.sh" in names and "configure-gitlab-ci.sh" in names
+            applied = {call["args"][call["args"].index("-f") + 1]
+                       for call in calls if call["tool"] == "kubectl" and call["args"][:1] == ["apply"] and "-f" in call["args"]}
+            assert any(path.endswith("/base/apps-namespace.yaml") for path in applied)
+            if case in ("infra_only", "platform_infra_only"):
+                assert not any(path.endswith("/base/corp-namespace.yaml") or path.endswith("/corp/odoo.yaml") for path in applied)
+            if case != "infra_only":
+                assert any(path.endswith("/apps/security-image-registry.yaml") for path in applied)
+                assert any(path.endswith("/apps/sonar-apps-discovery.yaml") for path in applied)
             if case == "infra_only":
                 assert "configure-vault.sh" not in names and "configure-gitlab-ci.sh" not in names
         return case
@@ -246,7 +256,7 @@ def exercise(case):
 
 if __name__ == "__main__":
     cases = sys.argv[1:] or [
-        "default", "tailscale", "vrack", "cloudflare", "ha", "odoo_dependencies", "infra_only",
+        "default", "tailscale", "vrack", "cloudflare", "ha", "odoo_dependencies", "infra_only", "platform_infra_only",
         "missing_k3s", "private_server", "worker_server", "missing_replication", "helm_failure", "check_mode",
         "install", "install_failure", "install_check",
     ]

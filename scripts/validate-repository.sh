@@ -129,7 +129,7 @@ prompt_consumers_ok=true
 for prompt_consumer in \
     install-control-plane.sh \
     add-node.sh \
-    replicate-repo.sh \
+    add-repos.sh \
     scripts/add-k3s-workers.sh \
     scripts/install-k3s-worker.sh; do
     grep -Fq 'source "$PROMPT_LIBRARY"' "$REPOSITORY_ROOT/$prompt_consumer" || \
@@ -565,6 +565,13 @@ if command -v node >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; 
 fi
 
 if python3 -c 'import yaml' >/dev/null 2>&1; then
+    for suite in test-repository-onboarding.py test-onboarding-services.py test-apps-foundation.py; do
+        if python3 "$SCRIPT_DIR/$suite"; then
+            pass "$suite"
+        else
+            fail "$suite"
+        fi
+    done
     if "$SCRIPT_DIR/test-repository-replication.sh"; then
         pass "repository import, deployment selection, privacy, and bidirectional Git reconciliation"
     else
