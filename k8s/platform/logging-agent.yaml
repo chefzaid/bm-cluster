@@ -183,7 +183,7 @@ data:
             }
           },
           "delete": {
-            "min_age": "7d",
+            "min_age": "3d",
             "actions": {
               "delete": {}
             }
@@ -211,7 +211,7 @@ spec:
       labels:
         app: fluent-bit
       annotations:
-        bm-cluster.__PUBLIC_DOMAIN__/config-version: "3"
+        bm-cluster.__PUBLIC_DOMAIN__/config-version: "4"
         prometheus.io/scrape: "true"
         prometheus.io/path: /api/v2/metrics/prometheus
         prometheus.io/port: "2020"

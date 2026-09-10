@@ -685,9 +685,16 @@ failed-Job, released-volume, pending-claim, and scrape-target rules. Alertmanage
 deduplicates those alerts and sends firing and resolved events to the
 `swirlit/bm-cluster` project's **Monitor > Alerts** page in GitLab using a
 Vault-backed, reconciled Prometheus integration credential.
-The logging bootstrap applies a seven-day lifecycle policy to container and
+The logging bootstrap applies a three-day lifecycle policy to container and
 application logs and a separate 365-day policy to monthly `lynis-audits-*`
-indices. Elasticsearch security is enabled: Kibana uses its reserved system
+indices. Its existing `bm-cluster-logs-7d` policy identifier is retained so
+retention updates apply in place to already managed indices. GitLab's embedded
+Prometheus also retains three days of metrics; it still collects internal
+exporters that the shared Prometheus does not scrape. GitLab applies the
+`prometheus['flags']` setting during its normal GitOps rollout, and Prometheus
+expires its own TSDB blocks. Remove only closed rotated GitLab
+logs older than three days during disk maintenance; preserve current logs and
+audit logs. Elasticsearch security is enabled: Kibana uses its reserved system
 account, ingestion and Grafana use dedicated least-privilege users, and
 dashboard import hooks use a dedicated account with the `kibana_admin` role.
 Interactive requests use the individual identities synchronized from the

@@ -208,6 +208,7 @@ spec:
             # eight ~1 GiB Puma workers, leaving too little memory for CI.
             puma['worker_processes'] = 2
             sidekiq['concurrency'] = 10
+            prometheus['flags'] = { 'storage.tsdb.retention.time' => '3d' }
             # No GitLab Kubernetes agents are registered. Disable KAS so the
             # single-node instance does not continuously probe an unused API.
             gitlab_rails['gitlab_kas_enabled'] = false
