@@ -41,14 +41,14 @@
   },
   "gitaly": {
     "repository": "https://gitlab.com/gitlab-org/gitaly.git",
-    "commit": "4d1b8a69ddfbf20f83811fc5537dc0fe1cf62bc3",
+    "commit": "d9491fcd0d572ae4e95fc9eccdcda88e84cfc806",
     "module": ".",
     "commands": [
       {
         "binary": "gitaly",
         "package": "./cmd/gitaly",
         "target": "opt/gitlab/embedded/bin/gitaly",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "continuous_profiler_stackdriver",
         "cgo": "1"
       },
@@ -56,7 +56,7 @@
         "binary": "gitaly-backup",
         "package": "./cmd/gitaly-backup",
         "target": "opt/gitlab/embedded/bin/gitaly-backup",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "",
         "cgo": "1"
       },
@@ -64,7 +64,7 @@
         "binary": "gitaly-blackbox",
         "package": "./cmd/gitaly-blackbox",
         "target": "opt/gitlab/embedded/bin/gitaly-blackbox",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "",
         "cgo": "1"
       },
@@ -72,7 +72,7 @@
         "binary": "gitaly-debug",
         "package": "./cmd/gitaly-debug",
         "target": "opt/gitlab/embedded/bin/gitaly-debug",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "",
         "cgo": "1"
       },
@@ -80,7 +80,7 @@
         "binary": "gitaly-wrapper",
         "package": "./cmd/gitaly-wrapper",
         "target": "opt/gitlab/embedded/bin/gitaly-wrapper",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "",
         "cgo": "1"
       },
@@ -88,7 +88,7 @@
         "binary": "praefect",
         "package": "./cmd/praefect",
         "target": "opt/gitlab/embedded/bin/praefect",
-        "flags": "-B gobuildid -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.0",
+        "flags": "-s -w -X gitlab.com/gitlab-org/gitaly/v18/internal/version.version=19.3.1",
         "tags": "continuous_profiler_stackdriver",
         "cgo": "1"
       }
@@ -101,14 +101,14 @@
   },
   "gitlab-kas": {
     "repository": "https://gitlab.com/gitlab-org/cluster-integration/gitlab-agent.git",
-    "commit": "25304d832a72c67d699bc5b1ddeae89afb42c1c5",
+    "commit": "d491c4b5c02869c3770035dfb5e2202a87458576",
     "module": ".",
     "commands": [
       {
         "binary": "gitlab-kas",
         "package": "./cmd/kas",
         "target": "opt/gitlab/embedded/bin/gitlab-kas",
-        "flags": "-X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.Version=v19.3.0\" -X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.GitRef=v19.3.0\"",
+        "flags": "-X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.Version=v19.3.1\" -X \"gitlab.com/gitlab-org/cluster-integration/gitlab-agent/v19/internal/cmd.GitRef=v19.3.1\"",
         "tags": "",
         "cgo": "1"
       }
@@ -120,14 +120,14 @@
   },
   "gitlab-pages": {
     "repository": "https://gitlab.com/gitlab-org/gitlab-pages.git",
-    "commit": "80421286f333777f747e3d894668b41d68236128",
+    "commit": "39ac5155a79d40931df89c524c394c23429071d5",
     "module": ".",
     "commands": [
       {
         "binary": "gitlab-pages",
         "package": ".",
         "target": "opt/gitlab/embedded/bin/gitlab-pages",
-        "flags": "-X main.VERSION=19.3.0 -X main.REVISION=80421286 -B gobuildid",
+        "flags": "-X main.VERSION=19.3.1 -X main.REVISION=39ac5155 -s -w",
         "tags": "continuous_profiler_stackdriver",
         "cgo": "1"
       }
@@ -141,14 +141,14 @@
   },
   "workhorse": {
     "repository": "https://gitlab.com/gitlab-org/gitlab-foss.git",
-    "commit": "2c30df7828b86f8ac1fca26e96385fe712b0669f",
+    "commit": "668508315ee5b5a59aa018424f741c27e81bafe1",
     "module": "workhorse",
     "commands": [
       {
         "binary": "gitlab-resize-image",
         "package": "./cmd/gitlab-resize-image",
         "target": "opt/gitlab/embedded/bin/gitlab-resize-image",
-        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "flags": "-X main.Version=v19.3.1-g668508315 -X main.BuildTime=20260825.085823 -s -w",
         "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
         "cgo": "1"
       },
@@ -156,7 +156,7 @@
         "binary": "gitlab-workhorse",
         "package": "./cmd/gitlab-workhorse",
         "target": "opt/gitlab/embedded/bin/gitlab-workhorse",
-        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "flags": "-X main.Version=v19.3.1-g668508315 -X main.BuildTime=20260825.085823 -s -w",
         "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
         "cgo": "1"
       },
@@ -164,7 +164,7 @@
         "binary": "gitlab-zip-cat",
         "package": "./cmd/gitlab-zip-cat",
         "target": "opt/gitlab/embedded/bin/gitlab-zip-cat",
-        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "flags": "-X main.Version=v19.3.1-g668508315 -X main.BuildTime=20260825.085823 -s -w",
         "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
         "cgo": "1"
       },
@@ -172,7 +172,7 @@
         "binary": "gitlab-zip-metadata",
         "package": "./cmd/gitlab-zip-metadata",
         "target": "opt/gitlab/embedded/bin/gitlab-zip-metadata",
-        "flags": "-X main.Version=v19.3.0-g2c30df782 -X main.BuildTime=20260820.013419 -B gobuildid",
+        "flags": "-X main.Version=v19.3.1-g668508315 -X main.BuildTime=20260825.085823 -s -w",
         "tags": "tracer_static,tracer_static_jaeger,continuous_profiler_stackdriver",
         "cgo": "1"
       }

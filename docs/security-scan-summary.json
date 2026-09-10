@@ -243,7 +243,7 @@
         "secrets": 22
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260909.1@sha256:2e760e52b48cbadc2fe91409174a688e2fa3978155c84081f3fe1f834d7e0891",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260909.2@sha256:17d03a47cbe3c7da7f5f29f9bcc824e0a7dec8142e9813b3b7387b2de6337945",
         "vulnerabilities": {
           "CRITICAL": 3,
           "HIGH": 19,

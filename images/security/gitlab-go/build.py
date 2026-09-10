@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the pinned Omnibus Go components without changing GitLab's schema."""
+"""Build the Go components matching the pinned Omnibus release."""
 import argparse
 import json
 import os
@@ -84,10 +84,15 @@ def build(name, spec, sources, output, native_git):
     if name == 'gitaly':
         # These three suites need Omnibus's Git and native libraries. Compile
         # them here; run them in the vendor runtime before promoting the image.
-        tests = ['./internal/backoff/...', './internal/stream/...']
+        native_packages = ('client', 'middleware/customfieldshandler', 'middleware/housekeeping')
+        grpc_packages = subprocess.check_output(['go', 'list', './internal/grpc/...'],
+                                                cwd=module, env=env, text=True).splitlines()
+        tests = ['./internal/backoff/...', './internal/stream/...'] + [
+            package for package in grpc_packages
+            if not any(package.endswith('/internal/grpc/' + native) for native in native_packages)]
         native_tests = output.parent / 'gitaly-tests'
         native_tests.mkdir(exist_ok=True)
-        for package in ('client', 'middleware/customfieldshandler', 'middleware/housekeeping'):
+        for package in native_packages:
             run(['go', 'test', '-c', '-p', parallel, '-o',
                  str(native_tests / (package.replace('/', '-') + '.test')),
                  './internal/grpc/' + package], module, env)

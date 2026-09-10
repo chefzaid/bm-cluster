@@ -33,7 +33,33 @@ def request(url, method='GET', data=None, headers=None):
         return response.status, dict(response.headers), response.read()
 
 
-def check_registry(url, root_url, token):
+def wait_ready(name, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            # Monitoring endpoints intentionally reject Docker's bridge gateway.
+            body = command(['docker', 'exec', name, 'curl', '--fail',
+                            '--silent', '--show-error', '--max-time', '5',
+                            'http://127.0.0.1/-/readiness?all=1'])
+            if json.loads(body)['status'] == 'ok':
+                return
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+        if command(['docker', 'inspect', '-f', '{{.State.Running}}', name]).strip() != b'true':
+            raise RuntimeError('Fixture container exited during startup')
+        time.sleep(5)
+    raise TimeoutError('GitLab did not become ready')
+
+
+def check_version(root_url, headers, expected):
+    _, _, body = request(root_url + '/api/v4/version', headers=headers)
+    version = json.loads(body)['version']
+    if expected and version != expected:
+        raise RuntimeError(f'Expected GitLab {expected}, found {version}')
+    return version
+
+
+def check_registry(url, root_url, token, *, upload=True):
     repository = 'root/security-fixture/image'
     authorization = base64.b64encode(('root:' + token).encode()).decode()
     query = urllib.parse.urlencode({'service': 'container_registry',
@@ -46,26 +72,27 @@ def check_registry(url, root_url, token):
                          'rootfs': {'type': 'layers', 'diff_ids': []},
                          'config': {}}, separators=(',', ':')).encode()
     digest = 'sha256:' + hashlib.sha256(config).hexdigest()
-    status, response_headers, _ = request(url + f'/v2/{repository}/blobs/uploads/',
+    if upload:
+        status, response_headers, _ = request(url + f'/v2/{repository}/blobs/uploads/',
                                           'POST', data=b'', headers=headers)
-    assert status == 202
-    location = next(v for k, v in response_headers.items() if k.lower() == 'location')
-    parsed = urllib.parse.urlsplit(location)
-    # Container-generated locations use its internal listener; retain only the
-    # path and query when accessing the fixture's loopback publication.
-    upload = url + parsed.path + '?' + parsed.query
-    upload += ('&' if parsed.query else '') + urllib.parse.urlencode({'digest': digest})
-    status, _, _ = request(upload, 'PUT', config,
+        assert status == 202
+        location = next(v for k, v in response_headers.items() if k.lower() == 'location')
+        parsed = urllib.parse.urlsplit(location)
+        # Retain the upload path, using the fixture's loopback publication.
+        upload_url = url + parsed.path + '?' + parsed.query
+        upload_url += ('&' if parsed.query else '') + urllib.parse.urlencode({'digest': digest})
+        status, _, _ = request(upload_url, 'PUT', config,
                            {**headers, 'Content-Type': 'application/octet-stream'})
-    assert status == 201
+        assert status == 201
     manifest = json.dumps({'schemaVersion': 2,
         'mediaType': 'application/vnd.oci.image.manifest.v1+json',
         'config': {'mediaType': 'application/vnd.oci.image.config.v1+json',
                    'digest': digest, 'size': len(config)}, 'layers': []}).encode()
     manifest_url = url + f'/v2/{repository}/manifests/check'
-    status, _, _ = request(manifest_url, 'PUT', manifest,
+    if upload:
+        status, _, _ = request(manifest_url, 'PUT', manifest,
         {**headers, 'Content-Type': 'application/vnd.oci.image.manifest.v1+json'})
-    assert status == 201
+        assert status == 201
     _, _, downloaded = request(manifest_url,
         headers={**headers, 'Accept': 'application/vnd.oci.image.manifest.v1+json'})
     assert json.loads(downloaded)['config']['digest'] == digest
@@ -76,6 +103,8 @@ def check_registry(url, root_url, token):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image')
+    parser.add_argument('--previous-image', help='Initialize data with this image, then upgrade it')
+    parser.add_argument('--expected-version', help='Require this application version from the candidate API')
     parser.add_argument('--logs', required=True, type=Path)
     parser.add_argument('--timeout', type=int, default=1200)
     args = parser.parse_args()
@@ -124,27 +153,10 @@ registry_nginx['listen_https'] = false
             for volume, path in zip(volumes, ('/etc/gitlab', '/var/log/gitlab', '/var/opt/gitlab')):
                 command(['docker', 'volume', 'create', volume])
                 run += ['-v', volume + ':' + path]
-            run += ['-v', str(config) + ':/etc/gitlab/gitlab.rb:ro', args.image]
+            run += ['-v', str(config) + ':/etc/gitlab/gitlab.rb:ro', args.previous_image or args.image]
             command(run)
             created = True
-            deadline = time.monotonic() + args.timeout
-            while time.monotonic() < deadline:
-                try:
-                    # GitLab hides monitoring endpoints from Docker's bridge
-                    # gateway. Check them inside the container, preserving its
-                    # production monitoring allow-list.
-                    body = command(['docker', 'exec', name, 'curl', '--fail',
-                                    '--silent', '--show-error', '--max-time', '5',
-                                    'http://127.0.0.1/-/readiness?all=1'])
-                    if json.loads(body)['status'] == 'ok':
-                        break
-                except (OSError, ValueError, subprocess.CalledProcessError):
-                    pass
-                if command(['docker', 'inspect', '-f', '{{.State.Running}}', name]).strip() != b'true':
-                    raise RuntimeError('Candidate container exited during startup')
-                time.sleep(5)
-            else:
-                raise TimeoutError('GitLab did not become ready')
+            wait_ready(name, args.timeout)
             print('GitLab reconfigure and readiness passed', flush=True)
             phase = 'authentication and API'
             ruby = """u=User.find_by_username!('root');
@@ -167,6 +179,8 @@ puts t.token"""
             if not token.startswith('glpat-'):
                 raise RuntimeError('Fixture token was not returned')
             api_headers = {'PRIVATE-TOKEN': token, 'Content-Type': 'application/json'}
+            version = check_version(root_url, api_headers,
+                                    None if args.previous_image else args.expected_version)
             _, _, body = request(root_url + '/api/v4/user', headers=api_headers)
             assert json.loads(body)['username'] == 'root'
             _, _, body = request(root_url + '/api/graphql', 'POST',
@@ -215,6 +229,44 @@ puts t.token"""
             phase = 'registry'
             check_registry(registry_url, root_url, token)
             print('Authenticated OCI manifest and blob upload/download passed', flush=True)
+            if args.previous_image:
+                phase = 'upgrade and preserved data'
+                command(['docker', 'stop', '--time', '120', name])
+                with (args.logs / 'previous-container.log').open('wb') as log:
+                    subprocess.run(['docker', 'logs', name], stdout=log,
+                                   stderr=subprocess.STDOUT, check=True)
+                command(['docker', 'rm', name])
+                created = False
+                run[-1] = args.image
+                command(run)
+                created = True
+                wait_ready(name, args.timeout)
+                version = check_version(root_url, api_headers, args.expected_version)
+                _, _, body = request(root_url + '/api/v4/user', headers=api_headers)
+                assert json.loads(body)['username'] == 'root'
+                _, _, body = request(root_url + '/api/graphql', 'POST',
+                    json.dumps({'query': '{ currentUser { username } }'}).encode(), api_headers)
+                assert json.loads(body)['data']['currentUser']['username'] == 'root'
+                # Read before writing: recreating a missing blob would conceal data loss.
+                check_registry(registry_url, root_url, token, upload=False)
+                _, _, body = request(root_url + f'/api/v4/projects/{project["id"]}/repository/files/security-test.txt/raw?ref=HEAD',
+                                     headers=api_headers)
+                assert body == b'SSH commit fixture\n'
+                command(['git', 'fetch', 'origin'], cwd=checkout, env=git_env)
+                remote = command(['git', 'ls-remote', ssh_url, 'HEAD'],
+                                 env={**git_env, 'GIT_SSH_COMMAND': ssh}).split()[0]
+                assert remote == command(['git', 'rev-parse', 'HEAD'], cwd=checkout).strip()
+                (checkout / 'upgrade-test.txt').write_text('Upgrade write fixture\n')
+                command(['git', '-c', 'user.name=Image Test', '-c', 'user.email=test@example.invalid',
+                         'add', 'upgrade-test.txt'], cwd=checkout)
+                command(['git', '-c', 'user.name=Image Test', '-c', 'user.email=test@example.invalid',
+                         'commit', '-m', 'Exercise repository write after upgrade'], cwd=checkout)
+                command(['git', 'push', ssh_url, 'HEAD'], cwd=checkout,
+                        env={**git_env, 'GIT_SSH_COMMAND': ssh})
+                _, _, body = request(root_url + f'/api/v4/projects/{project["id"]}/repository/files/upgrade-test.txt/raw?ref=HEAD',
+                                     headers=api_headers)
+                assert body == b'Upgrade write fixture\n'
+                print('Upgrade preserved API credentials, Git history, SSH keys and OCI data; new push passed', flush=True)
             phase = 'restart'
             command(['docker', 'restart', '--time', '120', name])
             deadline = time.monotonic() + 300
@@ -229,8 +281,11 @@ puts t.token"""
                 time.sleep(5)
             else:
                 raise TimeoutError('Saved repository unavailable after restart')
+            check_registry(registry_url, root_url, token, upload=False)
+            check_version(root_url, api_headers, args.expected_version)
             print('Restart and persisted repository readback passed', flush=True)
-            (args.logs / 'result.json').write_text(json.dumps({'image': args.image, 'status': 'passed'}, indent=2) + '\n')
+            (args.logs / 'result.json').write_text(json.dumps({'image': args.image,
+                'previousImage': args.previous_image, 'version': version, 'status': 'passed'}, indent=2) + '\n')
     except Exception as error:
         # Logs are private: vendor startup can contain generated credentials.
         (args.logs / 'failure.txt').write_text(str(error) + '\n')

@@ -1,9 +1,11 @@
-# Trivy remediation — updated 2026-09-09
+# Trivy remediation — updated 2026-09-10
 
 The target is zero vulnerabilities, exposed secrets, and unsafe configurations
 at **every severity**, including Low and Unknown. The platform has not reached
-that target. All eight distinct application runtime images currently scan clean;
-shared platform images still have findings. No severity filters, ignore rules,
+that target. All eight distinct application runtime images scanned clean in the
+September 9 baseline. The September 10 recheck found eight new findings in
+Thoughty's server image and two in Homepage; follow-up fixes are underway.
+Shared platform images still have findings. No severity filters, ignore rules,
 or vulnerability suppressions were added to obtain these results.
 
 ## Evidence and scope
@@ -23,8 +25,8 @@ the Grafana dashboard and reports for the current workload digest provide the
 ongoing view.
 
 DevApp's user, order and web images, Indezy's server and web images, Thoughty's
-server/worker and web images, and Website's image each report **zero
-vulnerabilities and zero exposed secrets**. The current PostgreSQL client,
+server/worker and web images, and Website's image each reported **zero
+vulnerabilities and zero exposed secrets** in that baseline. The current PostgreSQL client,
 Redis, Homepage, NGINX authentication helper, curl helpers, and new Node and
 dashboard-sidecar images also scan clean.
 
@@ -54,8 +56,8 @@ remaining findings are exploitable.
 
 The maintained build recipes are under `images/security/`. They pin their
 upstream sources and runtime bases. Go services use Go 1.26.7 and patched
-compatible dependencies. MongoDB retains 7.0.40 and GitLab retains Omnibus
-19.3.0 while updating available OS packages. PostgreSQL retains its major
+compatible dependencies. MongoDB retains 7.0.40 and GitLab upgrades Omnibus
+from 19.3.0 to 19.3.1 while updating available OS packages. PostgreSQL retains its major
 version, Debian/glibc, ICU, and volume ownership to preserve existing collation
 and extension behavior. Elastic uses the official 9.4.6 Wolfi variants.
 
@@ -181,12 +183,19 @@ Critical matches identify the bundled VS Code Handlebars extension as the
 unrelated npm package. Reports remain unsuppressed. The Ruby portion decreases
 from 55 to eight findings; 22 vendor secret examples remain visible.
 
-The expanded `gitlab.Dockerfile` retains Omnibus 19.3.0, its PostgreSQL major,
-Ruby 3.3.12, and the GitLab database schema. The inherited image tags use a
-`19.3.1-*` prefix, but both previous and rebuilt filesystems contain package
-`gitlab-ce 19.3.0-ce.0` and Rails revision `2c30df7828b`. Package inventory,
-Rails `VERSION`/`REVISION` files and the live API verify that the application
-version is unchanged; the tag prefix is not version evidence.
+The expanded `gitlab.Dockerfile` pins the actual Omnibus **19.3.1** release,
+retaining PostgreSQL 17 and Ruby 3.3.12. The previous image's `19.3.1-*` tag
+contained package `gitlab-ce 19.3.0-ce.0` and Rails revision `2c30df7828b`.
+The replacement contains `19.3.1-ce.0` and revision `668508315ee`, verified
+against its package inventory, application files and API. Tag names alone are
+not version evidence.
+
+This is an application upgrade, including regular and post-deploy database
+migrations. [GitLab's 19.3.1 release notes](https://docs.gitlab.com/releases/patches/patch-release-gitlab-19-3-1-released/)
+describe the import-processing denial-of-service fix and the required downtime
+for a single-node installation. The dependency fixes described below are
+retained across the upgrade; Gitaly, KAS, Pages and Workhorse use the source
+commits matching the new vendor release.
 
 `gitlab-go/components.json` pins
 fourteen source repositories/modules and the build flags and installation paths
@@ -233,13 +242,20 @@ the complete candidate with disposable volumes:
 ```bash
 scripts/build-security-image.sh gitlab gitlab-security:review
 python3 scripts/test-gitlab-image.py gitlab-security:review \
+  --previous-image "${GITLAB_PREVIOUS_IMAGE:?Set the currently deployed image reference}" \
+  --expected-version 19.3.1 \
   --logs /path/to/private/gitlab-test-logs
 ```
 
 The integration test needs Docker, Git and OpenSSH on the host. It bounds the
 test container to 5 GiB and two CPUs, binds ports only to loopback, and verifies
 reconfiguration, password checks, REST/GraphQL, HTTP and SSH repository pushes,
-authenticated OCI uploads/downloads, and persisted data after restart. It
+authenticated OCI uploads/downloads, and persisted data after restart. With
+`--previous-image`, it initializes all fixture data with the old image and
+upgrades the same volumes to the candidate. It verifies existing API credentials,
+SSH keys, Git history and registry blobs before writing new data, checks a new
+push, and then restarts the candidate. `--expected-version` rejects a mislabeled
+application version. Omitting `--previous-image` tests fresh initialization. It
 removes its containers and volumes on exit. Keep its logs outside Git because
 vendor startup can log generated fixture credentials.
 

@@ -1,4 +1,4 @@
-FROM docker.io/gitlab/gitlab-ce@sha256:f7e453ff51d1910235365085fe836e4589716d26b44d99a8aa3e2c41377f034f AS vendor
+FROM docker.io/gitlab/gitlab-ce@sha256:b431dcb56dbc1387182717c75fd8b581c2cbb09062cc6290098bbafd85343573 AS vendor
 FROM vendor AS native-git
 COPY gitlab-go/extract-native-git.sh /tmp/extract-native-git.sh
 RUN sh /tmp/extract-native-git.sh
@@ -63,7 +63,7 @@ COPY --from=gitlab-ruby-build /opt/gitlab/embedded/service/gitlab-rails/lib/gitl
 COPY --from=gitlab-ruby-build /opt/gitlab/embedded/service/omnibus-gitlab/Gemfile* /opt/gitlab/embedded/service/omnibus-gitlab/
 COPY --from=gitlab-go-build /build/runtime/ /
 COPY gitlab-go/update-manifest.rb /tmp/update-manifest.rb
-# Keep Omnibus and its database/application migration version unchanged.
+# Preserve the pinned vendor release while updating its OS packages.
 RUN /opt/gitlab/embedded/bin/ruby /tmp/update-manifest.rb && rm /tmp/update-manifest.rb \
     && apt-mark hold gitlab-ce \
     && apt-get update && apt-get upgrade -y \
