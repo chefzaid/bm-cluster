@@ -1075,7 +1075,7 @@ spec:
         runAsGroup: 10001
       containers:
         - name: grafana
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/grafana:13.2.1-20260908.1@sha256:8abe006a83e4812cb32d390fd2fd9819e2aa0ffccf16ae10e0b1d3e5f02c6ea6
+          image: docker.io/grafana/grafana:13.2.1-distroless@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

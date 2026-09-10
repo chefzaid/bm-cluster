@@ -12,6 +12,19 @@ helpers until no remaining build uses them. Git history preserves retired
 versions and experiments; the maintained tree does not need abandoned candidates
 or dated scan exports.
 
+Longhorn's CSI node registrar and liveness probe use official Kubernetes CSI
+images in both profiles. Their upstream releases include the dependency fixes,
+so their custom builds are retired. Their image policy lives with the foundation
+hardening in `k8s/base/system-workload-hardening.yaml`, applied before Longhorn
+by the installer and Ansible, including installations without platform services.
+It preserves the pins when Longhorn recreates its DaemonSet. The socket
+permissions and other runtime hardening still apply.
+
+Grafana uses the official full distroless image, which replaces the Alpine OS
+upgrade recipe while preserving bundled plugins. It retains the existing data
+UID and writable mounts. Use `grafana cli` directly for maintenance; this image
+has no shell. Application dependency findings still need upstream fixes.
+
 ## What needs to remain
 
 - Dependency patches and library locks record the checked versions and checksums

@@ -38,6 +38,18 @@ def images(documents):
 
 
 class SecurityImagesTest(unittest.TestCase):
+    def assert_public_longhorn_sidecars(self, documents):
+        policies = [d for d in documents if d and d.get('kind') == 'MutatingAdmissionPolicy'
+                    and d['metadata']['name'] == 'bm-longhorn-csi-plugin-security-image']
+        self.assertEqual(len(policies), 1)
+        mutations = policies[0]['spec']['mutations']
+        self.assertNotIn('imagePullSecrets', json.dumps(mutations))
+        selected = dict(re.findall(r"name: '([^']+)',\s*image: '([^']+)'",
+                                   mutations[0]['applyConfiguration']['expression']))
+        self.assertEqual(set(selected), {'node-driver-registrar', 'longhorn-liveness-probe'})
+        for image in selected.values():
+            self.assertRegex(image, r'^registry\.k8s\.io/sig-storage/[^:]+:v[^@]+@sha256:[a-f0-9]{64}$')
+
     def assert_private_image_credentials(self, documents):
         def visit(value):
             if isinstance(value, dict):
@@ -90,6 +102,8 @@ class SecurityImagesTest(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), directory)
                 root = Path(directory)
+                self.assert_public_longhorn_sidecars(list(yaml.safe_load_all(
+                    (root / 'k8s/base/system-workload-hardening.yaml').read_text())))
                 sonar_docs = list(yaml.safe_load_all((root / 'k8s/platform/sonarqube.yaml').read_text()))
                 self.assert_sonar_permissions(next(d for d in sonar_docs if d and d['kind'] == 'Deployment'), enabled)
                 keycloak_docs = list(yaml.safe_load_all((root / 'k8s/platform/keycloak.yaml').read_text()))
@@ -153,6 +167,7 @@ class SecurityImagesTest(unittest.TestCase):
                 ], capture_output=True, text=True, check=True)
                 self.assertNotIn('__SECURITY_', result.stdout)
                 documents = list(yaml.safe_load_all(result.stdout))
+                self.assert_public_longhorn_sidecars(documents)
                 self.assert_private_image_credentials(documents)
                 resources = {document.get('kind', '') + '/' + document.get('metadata', {}).get('name', ''): document for document in documents if document}
                 self.assert_sonar_permissions(resources['Deployment/sonarqube'], enabled)

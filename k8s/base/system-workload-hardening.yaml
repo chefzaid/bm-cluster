@@ -411,3 +411,52 @@ metadata:
     argocd.argoproj.io/sync-wave: "-9"
 spec:
   policyName: bm-longhorn-csi-sidecar-hardening
+---
+# Keep the tested upstream sidecars when Longhorn recreates its DaemonSet.
+# Both image profiles use these public images; no registry credentials are needed.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: bm-longhorn-csi-plugin-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: IfNeeded
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [daemonsets]
+  matchConditions:
+    - name: longhorn-csi-plugin-only
+      expression: object.metadata.namespace == 'longhorn-system' && object.metadata.name == 'longhorn-csi-plugin'
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              template: Object.spec.template{
+                spec: Object.spec.template.spec{
+                  containers: [Object.spec.template.spec.containers{
+                    name: 'node-driver-registrar',
+                    image: 'registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0'
+                  }, Object.spec.template.spec.containers{
+                    name: 'longhorn-liveness-probe',
+                    image: 'registry.k8s.io/sig-storage/livenessprobe:v2.20.0@sha256:19f2cf2f40e1987c7943945deca5f65cd4e4bf5cc0657fc78a5df131861578e8'
+                  }]
+                }
+              }
+            }
+          }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: bm-longhorn-csi-plugin-security-image
+  annotations:
+    argocd.argoproj.io/sync-wave: "-9"
+spec:
+  policyName: bm-longhorn-csi-plugin-security-image
