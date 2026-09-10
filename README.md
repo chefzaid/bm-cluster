@@ -83,10 +83,11 @@ inventory so DNS and edge configuration are reproducible from this repository.
 Open `https://dashboard.<your-domain>` for the complete categorized service
 catalog. The zone apex, `https://<your-domain>` (`https://swirlit.dev` in the
 deployed cluster), serves the public site from the separate `website` repository.
-That repository owns the website workload and apex Ingress in `apps`, together
-with its CI/CD pipeline and Argo CD Application. This repository maintains the
-apex DNS record and shared ingress infrastructure. Cloudflare Access protects the
-administrative host inventory in `config/platform.env` through Keycloak SSO
+That repository owns the website workload and Ingress in `apps`, including the
+`www` redirect to the apex, together with its CI/CD pipeline and Argo CD
+Application. This repository publishes proxied DNS records for both the apex
+and `www` and maintains shared ingress infrastructure. Cloudflare Access protects
+the administrative host inventory in `config/platform.env` through Keycloak SSO
 with a 24-hour session.
 The Applications row uses app-owned Homepage weights to show Swirl IT, DevApp,
 Thoughty, then Indezy. Odoo is under Corporate. Security & Identity links Trivy
