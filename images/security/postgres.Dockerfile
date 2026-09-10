@@ -2,6 +2,12 @@ FROM docker.io/library/postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fb
 USER root
 # Keep Debian/glibc, PostgreSQL and ICU unchanged: existing indexes depend on their collations.
 RUN apt-get update && apt-get install -y --no-install-recommends --only-upgrade libpcre2-8-0 \
+    # GnuPG is used to verify packages while building the upstream image. The
+    # database, its extensions and backup tools do not use it or its SQLite
+    # dependency. Keep gpgv for apt, and do not autoremove runtime libraries.
+    && apt-get purge -y dirmngr gnupg gnupg-l10n gnupg-utils gpg gpg-agent \
+        gpg-wks-client gpg-wks-server gpgconf gpgsm libsqlite3-0 \
+    && apt-get check \
     && rm -rf /var/lib/apt/lists/* /usr/local/bin/gosu /etc/ssl/private/ssl-cert-snakeoil.key /etc/ssl/certs/ssl-cert-snakeoil.pem
 # Copy the patched filesystem into a new image so the unused private key cannot
 # be recovered from a parent layer. Preserve the pinned upstream runtime config.

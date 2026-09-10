@@ -5,8 +5,8 @@ at **every severity**, including Low and Unknown. The platform has not reached
 that target. All eight distinct application runtime images scanned clean in the
 September 9 baseline. The September 10 recheck found eight new findings in
 Thoughty's server image and two in Homepage. Thoughty 1.2.11 is now deployed
-and scans clean; the rebuilt Homepage image also scans clean and passes its
-runtime checks.
+and scans clean. Homepage is also deployed with zero vulnerability, secret and
+configuration findings; both replicas and the delivery pipeline are healthy.
 Shared platform images still have findings. No severity filters, ignore rules,
 or vulnerability suppressions were added to obtain these results.
 
@@ -51,7 +51,7 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Trivy Operator | 0 / 3 / 6 / 12 / 3 | 0 / 0 / 0 / 0 / 1 |
 | OAuth2 Proxy | 0 / 1 / 0 / 0 / 3 | 0 / 0 / 0 / 0 / 1 |
 | MongoDB | 9 / 263 / 184 / 33 / 33 | 0 / 0 / 0 / 0 / 8 |
-| PostgreSQL | 16 / 92 / 185 / 155 / 14 | 15 / 71 / 164 / 153 / 8 |
+| PostgreSQL | 16 / 92 / 185 / 155 / 14 | 14 / 70 / 145 / 132 / 0 |
 | DBGate | 5 / 62 / 99 / 117 / 5 | 0 / 0 / 0 / 0 / 0 |
 | Grafana | 3 / 159 / 32 / 13 / 36 | 3 / 157 / 26 / 1 / 16 |
 | Dashboard sidecar | 0 / 8 / 10 / 12 / 0 | 0 / 0 / 0 / 0 / 0 |
@@ -61,7 +61,7 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Kibana | 0 / 9 / 135 / 86 / 0 | 0 / 5 / 15 / 4 / 0 |
 | Logstash | 0 / 15 / 85 / 65 / 0 | 0 / 7 / 15 / 1 / 0 |
 
-Across these thirteen images, findings decrease from 2,938 to 860. This is an
+Across these thirteen images, findings decrease from 2,938 to 810. This is an
 image comparison, not a sum of Kubernetes reports or a statement that all
 remaining findings are exploitable.
 
@@ -85,6 +85,30 @@ GitLab generates installation-specific SSH keys on its persistent configuration
 volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
 The remaining GitLab matches are vendor examples/test fixtures and stay visible.
 No production credentials were copied into these images.
+
+### PostgreSQL runtime tooling
+
+The September 10 update keeps **PostgreSQL 18.6**, Debian 12.15, glibc 2.36,
+ICU 72.1 and database ownership unchanged. It removes eleven unused GnuPG and
+SQLite packages without automatic dependency removal. `gpgv`, `libgpg-error`,
+Perl and Debian's PostgreSQL command wrappers remain available. A fresh image
+comparison drops **411 findings to 361**, including one Critical finding; the
+image still reports zero exposed secrets. This is not a complete PostgreSQL
+remediation: fourteen Critical findings remain, mostly in Perl packages.
+
+`scripts/test-postgres-image.py IMAGE --previous-image PREVIOUS --logs PRIVATE_DIRECTORY`
+verifies 1,656 retained runtime, extension, locale and entrypoint files byte for
+byte, including all 46 available extensions. It exercises compressed database
+initialization, SQL XML/XSLT, JIT, SCRAM authentication, maintenance tools,
+same-volume replacement, restart and a separate-volume dump/restore. Existing
+collation versions and index semantics must stay unchanged.
+
+Before replacing the production pod, back up every application database and
+globals/roles into a private directory. Validate each archive with `pg_restore`,
+then restore it into an isolated candidate and compare catalogs, extensions,
+collations and indexes, including `amcheck`. The September 10 batch completed
+these checks for all seven non-template databases. Credentials, database dumps
+and raw comparison records remain outside Git.
 
 ### Homepage dependencies and runtime
 
