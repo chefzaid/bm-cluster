@@ -20,7 +20,8 @@ import time
 
 REMOVED_PACKAGES = {'dirmngr', 'gnupg', 'gnupg-l10n', 'gnupg-utils', 'gpg',
                     'gpg-agent', 'gpg-wks-client', 'gpg-wks-server', 'gpgconf',
-                    'gpgsm', 'libsqlite3-0'}
+                    'gpgsm', 'libsqlite3-0', 'mount', 'pinentry-curses',
+                    'libncursesw6', 'libassuan0', 'libksba8', 'libnpth0'}
 
 
 def command(args, *, data=None, timeout=120):
@@ -101,7 +102,8 @@ sha256sum /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-ensure-initd
         self.candidate, new_files, new_packages = self.inspect_image(self.args.image, 'candidate')
         assert old_files == new_files, 'PostgreSQL, extension, locale, libc, ICU or entrypoint files changed'
         missing = old_packages.keys() - new_packages.keys()
-        assert missing == REMOVED_PACKAGES, 'Candidate did not remove exactly the reviewed packages'
+        expected_missing = REMOVED_PACKAGES & old_packages.keys()
+        assert missing == expected_missing, 'Candidate did not remove exactly the reviewed packages still in the previous image'
         assert old_packages.keys() >= new_packages.keys(), 'Candidate introduced an unexpected package'
         assert all(new_packages[key] == old_packages[key] for key in new_packages), 'A retained package version changed'
         assert not REMOVED_PACKAGES & new_packages.keys()

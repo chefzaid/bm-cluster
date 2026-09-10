@@ -11,7 +11,7 @@
     "dbgate": "docker.io/dbgate/dbgate@sha256:03956fb18367a2b1d736b4ebb702401c68ec5f7bde691f9ea2412c3df0c27e34",
     "grafana": "docker.io/grafana/grafana:13.2.1@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283",
     "dashboard-sidecar": "ghcr.io/kiwigrid/k8s-sidecar:2.11.2@sha256:2912be006f62f9ea080194cf6d3afcd90daead8d101d0ba686a137a849f6a4f6",
-    "vault": "docker.io/hashicorp/vault:2.0.4@sha256:5be49781ecf78bfe775c5309c6a4d9f4e9e040b6c885c99eb2b12fb69855e1a2",
+    "vault": "docker.io/hashicorp/vault:2.1.0@sha256:783103ba38c5e3edcaa9bbbcb0ff80fc93c690361f03fd487e89227da6c3efa9",
     "gitlab": "docker.io/gitlab/gitlab-ce@sha256:b431dcb56dbc1387182717c75fd8b581c2cbb09062cc6290098bbafd85343573",
     "oauth2-proxy": "quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded",
     "alertmanager": "quay.io/prometheus/alertmanager@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d",
@@ -36,5 +36,5 @@
     "prometheus": "docker.io/prom/prometheus@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9",
     "keycloak": "quay.io/keycloak/keycloak@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54"
   },
-  "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e"
+  "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.1.0-20260910.1@sha256:00c987f582b1db1493521c92f1f957c1db643b2cefc4839290c815ebc809295e"
 }

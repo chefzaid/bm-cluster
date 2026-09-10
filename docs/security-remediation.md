@@ -51,17 +51,17 @@ Counts below are **Critical / High / Medium / Low / Unknown**.
 | Trivy Operator | 0 / 3 / 6 / 12 / 3 | 0 / 0 / 0 / 0 / 1 |
 | OAuth2 Proxy | 0 / 1 / 0 / 0 / 3 | 0 / 0 / 0 / 0 / 1 |
 | MongoDB | 9 / 263 / 184 / 33 / 33 | 0 / 0 / 0 / 0 / 8 |
-| PostgreSQL | 16 / 92 / 185 / 155 / 14 | 14 / 70 / 145 / 132 / 0 |
+| PostgreSQL | 16 / 92 / 185 / 155 / 14 | 14 / 64 / 140 / 129 / 0 |
 | DBGate | 5 / 62 / 99 / 117 / 5 | 0 / 0 / 0 / 0 / 0 |
 | Grafana | 3 / 159 / 32 / 13 / 36 | 3 / 157 / 26 / 1 / 16 |
 | Dashboard sidecar | 0 / 8 / 10 / 12 / 0 | 0 / 0 / 0 / 0 / 0 |
-| Vault | 1 / 12 / 6 / 12 / 3 | 1 / 10 / 0 / 0 / 3 |
+| Vault | 1 / 12 / 6 / 12 / 3 | 0 / 0 / 0 / 0 / 1 |
 | GitLab | 25 / 405 / 151 / 31 / 72 | 3 / 19 / 35 / 11 / 20 |
 | Elasticsearch | 0 / 40 / 114 / 60 / 0 | 0 / 34 / 52 / 0 / 0 |
 | Kibana | 0 / 9 / 135 / 86 / 0 | 0 / 5 / 15 / 4 / 0 |
 | Logstash | 0 / 15 / 85 / 65 / 0 | 0 / 7 / 15 / 1 / 0 |
 
-Across these thirteen images, findings decrease from 2,938 to 810. This is an
+Across these thirteen images, findings decrease from 2,938 to 783. This is an
 image comparison, not a sum of Kubernetes reports or a statement that all
 remaining findings are exploitable.
 
@@ -89,12 +89,12 @@ No production credentials were copied into these images.
 ### PostgreSQL runtime tooling
 
 The September 10 update keeps **PostgreSQL 18.6**, Debian 12.15, glibc 2.36,
-ICU 72.1 and database ownership unchanged. It removes eleven unused GnuPG and
-SQLite packages without automatic dependency removal. `gpgv`, `libgpg-error`,
+ICU 72.1 and database ownership unchanged. It removes seventeen unused GnuPG,
+SQLite, pinentry and mount-tool packages without automatic dependency removal. `gpgv`, `libgpg-error`,
 Perl and Debian's PostgreSQL command wrappers remain available. A fresh image
-comparison drops **411 findings to 361**, including one Critical finding; the
-image still reports zero exposed secrets. This is not a complete PostgreSQL
-remediation: fourteen Critical findings remain, mostly in Perl packages.
+comparison across the two batches drops **411 findings to 347**, including one
+Critical and eight High findings; the image still reports zero exposed secrets.
+This is not a complete PostgreSQL remediation: fourteen Critical findings remain, mostly in Perl packages.
 
 `scripts/test-postgres-image.py IMAGE --previous-image PREVIOUS --logs PRIVATE_DIRECTORY`
 verifies 1,656 retained runtime, extension, locale and entrypoint files byte for
@@ -125,6 +125,41 @@ Sharp PNG/WebP/AVIF processing, and restart under UID/GID 10001 with a read-only
 root and dropped capabilities. Homepage initially serves its build-time page;
 the test uses the same configuration-refresh endpoint as its browser client.
 Configuration stays in the existing ConfigMap and writable caches remain bounded.
+
+### Vault source build and recovery
+
+The September 10 candidate upgrades Vault from **2.0.4 to 2.1.0**, builds the
+verified upstream commit with Go 1.26.7, and updates Apache Thrift to 0.24.0,
+gRPC to 1.83.2 and `golang.org/x/crypto` to 0.56.0. Available Alpine package
+updates are included. Comparing the exact old and candidate images against the
+same Trivy server reduces **16 findings to one Unknown**, with zero secrets.
+The remaining `GO-2026-5932` advisory concerns unmaintained OpenPGP code and has
+no fixed version listed; it remains visible.
+
+The image preserves all 107 embedded UI files from the pinned vendor image.
+`vault-ui.py` validates the Go compiler's embedded-file hashes and compares the
+rebuilt binary's assets byte for byte. The build retains ELF symbols and stamps
+the release version verified from `version/VERSION`, allowing Trivy to identify
+Vault 2.1.0 despite the checkout's Go module pseudo-version. Dependency versions
+remain those embedded by the Go compiler. No scanner exclusions are used.
+
+The source build runs Vault's version, PGP-key and Raft package tests. It limits
+compilation to one CPU and 4 GiB, disables inlining only for the generated
+Microsoft Graph models, and preserves every provider. Local builds should put
+`GOTMPDIR` on disk when `/tmp` is a memory-backed filesystem. The September 10
+candidate used the pinned host compiler and the maintained source/build flags,
+followed by the equivalent final Docker stage; the complete multi-stage Docker
+recipe was not run end to end during that local validation.
+
+`scripts/test-vault-image.py IMAGE --previous-image PREVIOUS --logs PRIVATE_DIRECTORY`
+checks old-volume upgrade, KV versions, least-privilege access, denied requests,
+authentication, transit decryption, served UI assets, audit-log rotation,
+restart and previous-version recovery into a separate volume. Before changing
+production, save a fresh Raft snapshot and verify its archive checksums. Test
+actual backup recovery in a network-disabled instance with the original unseal
+key and bootstrap token, and compare policies, authentication, audit devices
+and stored-secret hashes. Keep all snapshots, keys and raw inventories outside
+Git. See [Vault operations](vault.md) for the shared installation settings.
 
 ### SonarQube runtime and libraries
 

@@ -19,9 +19,16 @@ status_json="$(kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- \
 sealed="$(jq -r '.sealed // empty' <<<"$status_json")"
 [[ "$sealed" == "true" ]] || exit 0
 
-unseal_key="$(<"$UNSEAL_KEY_FILE")"
-# Vault 2.0 refuses a key on non-TTY stdin. Passing it as the command argument
-# is the supported automation path; keep the host-side key file root-only.
-kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- \
-  env VAULT_ADDR="$VAULT_ADDR" vault operator unseal "$unseal_key" >/dev/null
-unset unseal_key
+# `operator unseal` requires a terminal when no key argument is provided.
+# The anonymous API accepts JSON instead: stream it through exec stdin so the
+# key never appears in the host process list or Kubernetes exec arguments.
+jq -Rs '{key: sub("\n+$"; "")}' < "$UNSEAL_KEY_FILE" | \
+  kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- \
+    env VAULT_ADDR="$VAULT_ADDR" vault write -format=json sys/unseal - >/dev/null
+
+status_json="$(kubectl exec -n "$NAMESPACE" "$VAULT_POD" -- \
+  env VAULT_ADDR="$VAULT_ADDR" vault status -format=json 2>/dev/null || true)"
+if [[ -z "$status_json" ]] || ! jq -e '.sealed == false' <<<"$status_json" >/dev/null; then
+  echo "Vault remains sealed or its status is unavailable after unseal." >&2
+  exit 1
+fi

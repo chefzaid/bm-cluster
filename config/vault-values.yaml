@@ -3,13 +3,26 @@
 # Vault SIGHUP after atomically renaming the active audit file.
 server:
   shareProcessNamespace: true
+  statefulSet:
+    securityContext:
+      container:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
   volumes:
     - name: audit
       persistentVolumeClaim:
         claimName: vault-audit
+    # The Helm entrypoint prepares /tmp/storageconfig.hcl before starting Vault.
+    # Keep it writable and bounded without making the image filesystem writable.
+    - name: vault-tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 32Mi
   volumeMounts:
     - name: audit
       mountPath: /vault/audit
+    - name: vault-tmp
+      mountPath: /tmp
   extraContainers:
     - name: audit-log-rotate
       image: busybox@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616

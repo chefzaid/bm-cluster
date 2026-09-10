@@ -707,6 +707,16 @@ else
     pass "third-party GitHub Actions are pinned immutably"
 fi
 
+if command -v jq >/dev/null 2>&1; then
+    if python3 "$SCRIPT_DIR/test-vault-unseal.py"; then
+        pass "Vault unseal keys use stdin and seal status is verified"
+    else
+        fail "Vault unseal keys use stdin and seal status is verified"
+    fi
+else
+    info "jq is unavailable; skipping Vault unseal checks"
+fi
+
 if command -v helm >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
     if python3 "$SCRIPT_DIR/test-security-images.py"; then
         pass "public bootstrap and patched security image profiles"

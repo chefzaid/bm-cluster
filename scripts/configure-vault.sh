@@ -130,8 +130,11 @@ root_token="$(sudo cat "$VAULT_BOOTSTRAP_TOKEN_FILE")"
 
 if [[ "$sealed" == "true" ]]; then
   info "Unsealing Vault..."
-  printf '%s\n' "$unseal_key" | kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- \
-    env VAULT_ADDR="$VAULT_ADDR" vault operator unseal >/dev/null
+  # Stream an anonymous API request: operator unseal requires a terminal when
+  # reading a key interactively, and a key argument would expose it in exec metadata.
+  printf '%s' "$unseal_key" | jq -Rs '{key: .}' | \
+    kubectl exec -i -n "$NAMESPACE" "$VAULT_POD" -- \
+      env VAULT_ADDR="$VAULT_ADDR" vault write -format=json sys/unseal - >/dev/null
 fi
 
 status_json="$(vault_cmd status -format=json 2>/dev/null || true)"

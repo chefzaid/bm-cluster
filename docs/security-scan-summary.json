@@ -118,28 +118,27 @@
         "secrets": 1
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres:18.6-20260910.1@sha256:6d0bdf87c5ba514eb4168eb8aabc81389433273bb6e2e9a100529f1e5c56c89e",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres:18.6-20260910.2@sha256:84f4f15e924b0fcdd3a3e38e38680ac4b32fc579277c54404b733f8a7ce1fcb8",
         "vulnerabilities": {
           "CRITICAL": 14,
-          "HIGH": 70,
-          "MEDIUM": 145,
-          "LOW": 132,
+          "HIGH": 64,
+          "MEDIUM": 140,
+          "LOW": 129,
           "UNKNOWN": 0
         },
         "secrets": 0
       },
       "verificationDate": "2026-09-10",
       "latestBatch": {
-        "beforeImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres:18.6-20260908.2@sha256:35b506146ffa5094eeb6ce22b27351e4d687630fd5aa0cd7d8cbb0d645c2b509",
-        "beforeVulnerabilities": {
-          "CRITICAL": 15,
-          "HIGH": 72,
-          "MEDIUM": 169,
-          "LOW": 155,
+        "before": {
+          "CRITICAL": 14,
+          "HIGH": 70,
+          "MEDIUM": 145,
+          "LOW": 132,
           "UNKNOWN": 0
         },
-        "removedPackages": 11,
-        "removedFindings": 50
+        "findingsRemoved": 14,
+        "secrets": 0
       }
     },
     {
@@ -231,15 +230,30 @@
         "secrets": 0
       },
       "after": {
-        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.0.4-20260908.1@sha256:4ef784b437f2aebdea78dce31a263ad467e12251036669721baccceecb27a10e",
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.1.0-20260910.1@sha256:00c987f582b1db1493521c92f1f957c1db643b2cefc4839290c815ebc809295e",
         "vulnerabilities": {
-          "CRITICAL": 1,
-          "HIGH": 10,
+          "CRITICAL": 0,
+          "HIGH": 0,
           "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 1
+        },
+        "secrets": 0
+      },
+      "verificationDate": "2026-09-10",
+      "latestBatch": {
+        "before": {
+          "CRITICAL": 1,
+          "HIGH": 11,
+          "MEDIUM": 1,
           "LOW": 0,
           "UNKNOWN": 3
         },
-        "secrets": 0
+        "findingsRemoved": 15,
+        "secrets": 0,
+        "remainingAdvisories": [
+          "GO-2026-5932"
+        ]
       }
     },
     {

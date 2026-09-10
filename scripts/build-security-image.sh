@@ -22,10 +22,13 @@ if [[ -n "${KANIKO_EXECUTOR:-}" ]]; then
     --destination "$image" --cache=false --cleanup \
     --insecure-registry "$REGISTRY_PUSH_HOST" --digest-file "$output/digest.txt"
 else
-  # Prometheus's large provider SDKs (also bundled in Omnibus) need 3 GiB for
-  # the serialized Go build. Keep other image builds at their existing limit.
+  # Large provider SDKs need additional memory even with serialized Go builds.
+  # These are build limits; deployed workloads retain their own resource limits.
   build_memory=2g
-  case "$component" in gitlab|prometheus) build_memory=3g ;; esac
+  case "$component" in
+    gitlab|prometheus) build_memory=3g ;;
+    vault) build_memory=4g ;;
+  esac
   DOCKER_BUILDKIT=0 docker build --pull --no-cache --memory="$build_memory" --memory-swap="$build_memory" --cpu-quota=100000 \
     -f "$root/images/security/$component.Dockerfile" -t "$image" "$root/images/security"
 fi

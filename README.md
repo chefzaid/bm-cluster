@@ -38,7 +38,9 @@ replication. Control-plane quorum therefore does not guarantee public service
 availability after losing that host.
 
 Vault is the source of infrastructure credentials. External Secrets syncs those
-values into namespace-scoped Kubernetes Secrets. Longhorn provides persistent
+values into namespace-scoped Kubernetes Secrets. [Vault operations](docs/vault.md)
+covers its shared installer/Ansible settings, writable paths and host unseal timer.
+Longhorn provides persistent
 storage. Prometheus collects node, Kubernetes object, pod, container, and
 annotation-enabled application metrics; Grafana includes a provisioned cluster
 dashboard and loads application-owned dashboards from labeled ConfigMaps.
