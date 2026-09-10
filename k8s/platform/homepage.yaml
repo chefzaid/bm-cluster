@@ -462,7 +462,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage@sha256:5a7718ef79c4633f1ac24180ef5f275416748ff13f98a6c2985fafdc5777db54
+        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage:2.2.0-20260910.1@sha256:6913069a6bf1df934b18c40520f65b76b6fc1dd93d8882694c9b5cd702b94a89
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false

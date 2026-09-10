@@ -737,6 +737,32 @@
         },
         "secrets": 0
       }
+    },
+    {
+      "component": "homepage",
+      "verificationDate": "2026-09-10",
+      "before": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage@sha256:5a7718ef79c4633f1ac24180ef5f275416748ff13f98a6c2985fafdc5777db54",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 1,
+          "MEDIUM": 1,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      },
+      "after": {
+        "image": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage:2.2.0-20260910.1@sha256:6913069a6bf1df934b18c40520f65b76b6fc1dd93d8882694c9b5cd702b94a89",
+        "vulnerabilities": {
+          "CRITICAL": 0,
+          "HIGH": 0,
+          "MEDIUM": 0,
+          "LOW": 0,
+          "UNKNOWN": 0
+        },
+        "secrets": 0
+      }
     }
   ],
   "applicationRuntimeImages": [
@@ -744,9 +770,21 @@
     "registry.swirlit.dev/swirlit/indezy/indezy-server:1.2.2",
     "registry.swirlit.dev/swirlit/indezy/indezy-web:1.2.2",
     "registry.swirlit.dev/swirlit/devapp/order-app:1.4.1",
-    "registry.swirlit.dev/swirlit/thoughty/thoughty-server:1.1.5",
-    "registry.swirlit.dev/swirlit/thoughty/thoughty-web:1.1.5",
+    "registry.swirlit.dev/swirlit/thoughty/thoughty-server:1.2.11@sha256:aaf15faac1de98859246e53a392c342d97448308fad71a1b8ea3885d412283f4",
+    "registry.swirlit.dev/swirlit/thoughty/thoughty-web:1.2.11@sha256:cf1dcb138530dbfe6687bd4326ea2f685efc0de202f2d8d8e572d2868ee606fa",
     "registry.swirlit.dev/swirlit/devapp/user-app:1.4.1",
     "registry.swirlit.dev/swirlit/website/site@sha256:99cdcb75a0a1564baa05fb87871ecf9395e6f90958de1e5bd1fa131c9bd994f2"
-  ]
+  ],
+  "updated": "2026-09-10",
+  "applicationRechecks": {
+    "2026-09-10": {
+      "application": "thoughty",
+      "version": "1.2.11",
+      "vulnerabilities": 0,
+      "secrets": 0,
+      "liveConfigurationFindings": 0,
+      "sourceConfigurationFindings": 42,
+      "note": "Exact deployed images and tracked source including development dependencies; other application images retain the September 9 baseline."
+    }
+  }
 }

@@ -4,7 +4,9 @@ The target is zero vulnerabilities, exposed secrets, and unsafe configurations
 at **every severity**, including Low and Unknown. The platform has not reached
 that target. All eight distinct application runtime images scanned clean in the
 September 9 baseline. The September 10 recheck found eight new findings in
-Thoughty's server image and two in Homepage; follow-up fixes are underway.
+Thoughty's server image and two in Homepage. Thoughty 1.2.11 is now deployed
+and scans clean; the rebuilt Homepage image also scans clean and passes its
+runtime checks.
 Shared platform images still have findings. No severity filters, ignore rules,
 or vulnerability suppressions were added to obtain these results.
 
@@ -23,6 +25,15 @@ all five severity counts, and secret counts. Raw reports and operational
 credentials are retained outside Git. Image scan results are a dated snapshot;
 the Grafana dashboard and reports for the current workload digest provide the
 ongoing view.
+
+The September 10 Thoughty recheck covers the exact deployed API/worker and web
+digests, and tracked source including development dependencies. All report zero
+vulnerabilities and secrets, and all eight live configuration reports are clean.
+Its CI source scan still reports 42 configuration findings: incomplete Kustomize
+patches, default registry trust assumptions, public ConfigMap heuristics, low
+UID/GID values in standalone database examples, and missing Docker health checks.
+Those findings remain visible; a clean deployed workload is not a claim that
+every source configuration report is clean.
 
 DevApp's user, order and web images, Indezy's server and web images, Thoughty's
 server/worker and web images, and Website's image each reported **zero
@@ -74,6 +85,22 @@ GitLab generates installation-specific SSH keys on its persistent configuration
 volume. PostgreSQL now reports zero secrets; GitLab decreases from 25 to 22.
 The remaining GitLab matches are vendor examples/test fixtures and stay visible.
 No production credentials were copied into these images.
+
+### Homepage dependencies and runtime
+
+Homepage remains at **2.2.0**, with Sharp 0.35.4 and Vitest/coverage 4.1.11
+locked across the dependency graph. These fix the native image-decoding and
+test-tool findings. The maintained recipe builds the pinned upstream source
+with a frozen pnpm lockfile and runs all **1,611 upstream tests** before the
+production build. The final standalone Node 22.23.2 image reports zero
+vulnerabilities and secrets at every severity.
+
+`scripts/test-homepage-image.py IMAGE --logs PRIVATE_DIRECTORY` checks health,
+configured services and bookmarks, page refresh, rejected Host headers, native
+Sharp PNG/WebP/AVIF processing, and restart under UID/GID 10001 with a read-only
+root and dropped capabilities. Homepage initially serves its build-time page;
+the test uses the same configuration-refresh endpoint as its browser client.
+Configuration stays in the existing ConfigMap and writable caches remain bounded.
 
 ### SonarQube runtime and libraries
 
