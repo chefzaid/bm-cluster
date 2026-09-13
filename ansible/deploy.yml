@@ -5,6 +5,10 @@
   gather_facts: false
 
   environment:
+    PLATFORM_DOMAIN: "{{ platform_domain }}"
+    INTERNAL_DNS_ZONE: "{{ internal_dns_zone }}"
+    GITOPS_REPOSITORY_URL: "{{ gitops_repository_url }}"
+    CLOUDFLARE_ACCESS_TEAM_NAME: "{{ cloudflare_access_team_name }}"
     ORGANIZATION_NAME: "{{ organization_name }}"
     ORGANIZATION_SLUG: "{{ organization_slug }}"
     GITLAB_GROUP_PATH: "{{ gitlab_group_path }}"
@@ -214,12 +218,19 @@
         SONAR_ALM_SETTING: "{{ lookup('ansible.builtin.env', 'SONAR_ALM_SETTING') }}"
         CLOUDFLARE_ACCESS_IDP_NAME: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_IDP_NAME') }}"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
+        INTERNAL_DNS_ZONE: "{{ lookup('ansible.builtin.env', 'INTERNAL_DNS_ZONE') }}"
+        GITOPS_REPOSITORY_URL: "{{ lookup('ansible.builtin.env', 'GITOPS_REPOSITORY_URL') }}"
+        CLOUDFLARE_ACCESS_TEAM_NAME: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_TEAM_NAME') }}"
         CLOUDFLARE_TLS_SECRET_NAME: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_TLS_SECRET_NAME') }}"
       register: installed_identity
       changed_when: false
 
     - name: Preserve installed organization settings unless explicitly overridden
       ansible.builtin.set_fact:
+        platform_domain: "{{ (installed_identity.stdout | from_json).get('PLATFORM_DOMAIN', platform_domain) }}"
+        internal_dns_zone: "{{ (installed_identity.stdout | from_json).get('INTERNAL_DNS_ZONE', internal_dns_zone) }}"
+        gitops_repository_url: "{{ (installed_identity.stdout | from_json).get('GITOPS_REPOSITORY_URL', gitops_repository_url) }}"
+        cloudflare_access_team_name: "{{ (installed_identity.stdout | from_json).get('CLOUDFLARE_ACCESS_TEAM_NAME', cloudflare_access_team_name) }}"
         organization_name: "{{ (installed_identity.stdout | from_json).get('ORGANIZATION_NAME', organization_name) }}"
         organization_slug: "{{ (installed_identity.stdout | from_json).get('ORGANIZATION_SLUG', organization_slug) }}"
         gitlab_group_path: "{{ (installed_identity.stdout | from_json).get('GITLAB_GROUP_PATH', gitlab_group_path) }}"

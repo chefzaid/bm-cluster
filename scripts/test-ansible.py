@@ -19,7 +19,9 @@ public = ("PLATFORM_DOMAIN", "CONFIGURE_REPOSITORY_SYNC", "GITHUB_USERNAME",
           "K3S_PRIVATE_ADDRESS", "K3S_PRIVATE_INTERFACE", "K3S_NODE_NETWORK_CIDR",
           "CONTROL_PLANE_COUNT", "CLUSTER_NODE_COUNT", "K3S_CONTROL_PLANE_IPS",
           "K3S_WORKER_IPS", "SERVER_EXPOSURE", "HIGH_AVAILABILITY_ENABLED",
-          "CLOUDFLARE_PUBLISH_NODE_DNS")
+          "CLOUDFLARE_PUBLISH_NODE_DNS", "ORGANIZATION_NAME", "ORGANIZATION_SLUG",
+          "INTERNAL_DNS_ZONE", "GITLAB_GROUP_PATH", "GITLAB_PROJECT_NAME", "KEYCLOAK_REALM",
+          "TLS_SECRET_NAME", "GITOPS_REPOSITORY_URL", "CLOUDFLARE_ACCESS_TEAM_NAME")
 entry = {"tool": name, "args": args,
          "env": {key: os.environ[key] for key in public if key in os.environ},
          "github_token_present": bool(os.environ.get("GITHUB_ADMIN_TOKEN"))}
@@ -30,7 +32,9 @@ if name == os.environ.get("MOCK_FAIL"):
 if name == "systemctl":
     sys.exit(1 if os.environ.get("MOCK_NO_K3S") else 0)
 if name == "kubectl":
-    if 'configmap' in args and os.environ.get('MOCK_HA'):
+    if 'bm-cluster-identity' in args and os.environ.get('MOCK_IDENTITY'):
+        print(json.dumps({'data': json.loads(os.environ['MOCK_IDENTITY'])}))
+    elif 'configmap' in args and os.environ.get('MOCK_HA'):
         pg = {"enabled": True, "active": True, "bootstrapOwner": "admin", "bootstrapDatabase": "appdb",
               "storageSize": "2Gi", "image": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bookworm"}
         data = {"highAvailabilityEnabled": "true"} if 'bm-cluster-topology' in args else {"phase": "active", "postgresHa": json.dumps(pg)}
@@ -123,7 +127,19 @@ def exercise(case):
         }
         variables = {"ansible_python_interpreter": sys.executable, "server_exposure": "local"}
         playbook, expected_success, check_mode = "deploy.yml", True, False
-        if case == "tailscale":
+        if case == "identity":
+            stored = {"PLATFORM_DOMAIN": "example.com", "INTERNAL_DNS_ZONE": "services.example.internal",
+                      "ORGANIZATION_NAME": "Existing Company", "ORGANIZATION_SLUG": "company",
+                      "GITLAB_GROUP_PATH": "platform-team", "GITLAB_GROUP_NAME": "Platform Team",
+                      "GITLAB_PROJECT_NAME": "infrastructure", "KEYCLOAK_REALM": "employees",
+                      "TLS_SECRET_NAME": "company-wildcard", "SONAR_ALM_SETTING": "company-gitlab",
+                      "CLOUDFLARE_ACCESS_IDP_NAME": "Company SSO", "CLOUDFLARE_ACCESS_TEAM_NAME": "existing-team",
+                      "GITOPS_REPOSITORY_URL": "https://github.com/example/existing-platform.git"}
+            env["MOCK_IDENTITY"] = json.dumps(stored)
+            env.pop("GITOPS_REPOSITORY_URL")
+            subprocess.run(["git", "init", "-q", str(fixture)], check=True)
+            subprocess.run(["git", "-C", str(fixture), "remote", "add", "origin", "https://github.com/example/other-source.git"], check=True)
+        elif case == "tailscale":
             variables.update(manage_private_transport=True, k3s_node_transport="tailscale")
             env["TAILSCALE_API_TOKEN"] = "tskey-api-fixture"
         elif case == "vrack":
@@ -208,6 +224,12 @@ def exercise(case):
                 assert replica["args"] == ["--yes"] and replica["env"]["DEPLOY_REPOSITORIES"] == "none"
                 argo = next(i for i, call in enumerate(calls) if call["tool"] == "helm" and "argocd" in call["args"] and "--install" in call["args"])
                 assert argo < names.index("add-repos.sh")
+            if case == "identity":
+                for tool in ("configure-vault.sh", "configure-gitlab-ci.sh", "add-repos.sh"):
+                    settings = next(call for call in calls if call["tool"] == tool)["env"]
+                    for key in ("ORGANIZATION_NAME", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_GROUP_PATH",
+                                "GITLAB_PROJECT_NAME", "TLS_SECRET_NAME", "GITOPS_REPOSITORY_URL", "CLOUDFLARE_ACCESS_TEAM_NAME"):
+                        assert settings[key] == stored[key], (tool, key, settings[key])
             if case in ("tailscale", "vrack"):
                 transport = "configure-tailscale.sh" if case == "tailscale" else "configure-ovh-vrack.sh"
                 assert names.index(transport) < names.index("configure-k3s-control-plane-network.sh") < names.index("configure-node-security.sh")
@@ -257,7 +279,7 @@ def exercise(case):
 
 if __name__ == "__main__":
     cases = sys.argv[1:] or [
-        "default", "tailscale", "vrack", "cloudflare", "ha", "odoo_dependencies", "infra_only", "platform_infra_only",
+        "default", "identity", "tailscale", "vrack", "cloudflare", "ha", "odoo_dependencies", "infra_only", "platform_infra_only",
         "missing_k3s", "private_server", "worker_server", "missing_replication", "helm_failure", "check_mode",
         "install", "install_failure", "install_check",
     ]

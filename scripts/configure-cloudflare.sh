@@ -165,6 +165,11 @@ PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-$ZONE_NAME}"
 # shellcheck source=lib/platform-identity.sh
 source "$SCRIPT_DIR/lib/platform-identity.sh"
 platform_identity_load
+ZONE_NAME="${ZONE_NAME:-$PLATFORM_DOMAIN}"
+if [[ -z "$ACCESS_TEAM_NAME" && -n "${CLOUDFLARE_ACCESS_TEAM_NAME:-}" ]]; then
+    ACCESS_TEAM_NAME="$CLOUDFLARE_ACCESS_TEAM_NAME"
+    ACCESS_TEAM_NAME_EXPLICIT=true
+fi
 platform_identity_defaults
 platform_identity_validate
 ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
