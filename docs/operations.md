@@ -25,9 +25,9 @@ The platform discovers workloads without a central application inventory:
 
 | Signal | Application contract | Where to inspect it |
 |---|---|---|
-| Metrics | Pod annotations `prometheus.io/scrape`, `prometheus.io/path`, and `prometheus.io/port` | Prometheus and Grafana's Applications Namespace Overview |
+| Runtime metrics | Deploy a workload in `apps`; pod scrape annotations add application endpoint metrics | Grafana's Applications folder: one automatically managed dashboard per application |
 | Custom dashboards | ConfigMaps labeled `grafana_dashboard: "1"` | Grafana |
-| Container logs | Write to stdout/stderr; use a Kubernetes `app` label | Kibana's Applications Namespace Logs |
+| Container logs | Write to stdout/stderr from a workload in `apps` | Kibana's Applications / <application> / Logs dashboards |
 | Source analysis | App-owned scanner configuration and CI jobs | [Sonar discovery](sonar-discovery.md) |
 
 Fluent Bit collects container logs and adds Kubernetes metadata; records from
@@ -54,8 +54,10 @@ credentials cover only platform-owned images.
 kubectl get vulnerabilityreports,configauditreports,exposedsecretreports -A
 ```
 
-App repositories own their metrics endpoints, log format, and detailed
-dashboards. Shared discovery and dashboards are maintained in
+The [application dashboard guide](application-observability.md) explains automatic
+grouping, refresh, retention and troubleshooting. App repositories own their
+metrics endpoints, log format, and additional detailed dashboards. Shared
+discovery and dashboards are maintained in
 [monitoring.yaml](../k8s/platform/monitoring.yaml),
 [observability-discovery.yaml](../k8s/platform/observability-discovery.yaml), and
 [trivy.yaml](../k8s/platform/trivy.yaml); scanner settings live in

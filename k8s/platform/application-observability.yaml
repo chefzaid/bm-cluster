@@ -1,0 +1,324 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: application-observability-reader
+  namespace: apps
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [cronjobs, jobs]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: application-observability-reader
+  namespace: apps
+subjects:
+  - kind: ServiceAccount
+    name: grafana
+    namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: application-observability-reader
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: application-observability-discovery
+  namespace: infra
+data:
+  discovery.mjs: |
+    import http from 'node:http';
+    import https from 'node:https';
+    import { createHash } from 'node:crypto';
+    import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+    import { readFileSync, realpathSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { pathToFileURL } from 'node:url';
+
+    export const workloadPaths = [
+      '/apis/apps/v1/namespaces/apps/deployments',
+      '/apis/apps/v1/namespaces/apps/statefulsets',
+      '/apis/apps/v1/namespaces/apps/daemonsets',
+      '/apis/apps/v1/namespaces/apps/replicasets',
+      '/apis/batch/v1/namespaces/apps/cronjobs',
+      '/apis/batch/v1/namespaces/apps/jobs',
+      '/api/v1/namespaces/apps/pods',
+    ];
+    const hash = value => createHash('sha256').update(value).digest('hex');
+    const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const kindKey = object => `${object.kind}/${object.metadata.name}`;
+
+    export function discover(objects) {
+      const workloads = objects.filter(object => object.metadata?.namespace === 'apps');
+      const byName = new Map(workloads.map(object => [kindKey(object), object]));
+      const roots = new Map();
+      for (const object of workloads) {
+        let root = object;
+        const visited = new Set();
+        while (true) {
+          const key = kindKey(root);
+          if (visited.has(key)) throw new Error('Workload ownership cycle');
+          visited.add(key);
+          const owner = root.metadata.ownerReferences?.find(reference => reference.controller);
+          if (!owner) break;
+          const parent = byName.get(`${owner.kind}/${owner.name}`);
+          if (!parent || (owner.uid && parent.metadata.uid !== owner.uid)) break;
+          root = parent;
+        }
+        const key = kindKey(root);
+        if (!roots.has(key)) roots.set(key, { root, pods: new Set() });
+        if (object.kind === 'Pod') roots.get(key).pods.add(object.metadata.name);
+      }
+      const applications = new Map();
+      for (const { root, pods } of roots.values()) {
+        const metadata = root.metadata;
+        const template = root.kind === 'CronJob' ? root.spec?.jobTemplate?.spec?.template : root.spec?.template;
+        const labels = { ...template?.metadata?.labels, ...metadata.labels };
+        const tracking = metadata.annotations?.['argocd.argoproj.io/tracking-id']?.match(/^([^:]+):([^:]+):apps\/(.+)$/);
+        let identity;
+        if (tracking && tracking[2].split('/').at(-1) === root.kind && tracking[3] === metadata.name) {
+          identity = ['argocd', tracking[1]];
+        } else {
+          const label = ['app.kubernetes.io/part-of', 'app.kubernetes.io/instance', 'app.kubernetes.io/name', 'app']
+            .find(key => labels[key]);
+          const owner = metadata.ownerReferences?.find(reference => reference.controller);
+          identity = label ? [label, labels[label]] : ['workload', owner && !byName.has(`${owner.kind}/${owner.name}`)
+            ? `${owner.kind}/${owner.name}` : kindKey(root)];
+        }
+        const key = JSON.stringify(identity);
+        if (!applications.has(key)) applications.set(key, {
+          key, uid: `apps-${hash(key).slice(0, 20)}`, name: identity[1], workloads: [], patterns: new Set(),
+        });
+        const application = applications.get(key);
+        application.workloads.push(kindKey(root));
+        const name = escapeRegex(metadata.name);
+        const suffix = {
+          Deployment: '-[a-z0-9]+-[a-z0-9]+', StatefulSet: '-[0-9]+', DaemonSet: '-[a-z0-9]+',
+          ReplicaSet: '-[a-z0-9]+', CronJob: '-[0-9]+-[a-z0-9]+', Job: '-[a-z0-9]+', Pod: '',
+        }[root.kind];
+        if (suffix !== undefined) application.patterns.add(name + suffix);
+        // Include actual names for Jobs with unusual pod naming and orphaned/custom-controller pods.
+        // Avoid changing a dashboard on every ordinary rollout or completed batch pod.
+        const generated = new RegExp(`^${name}${suffix ?? '(?!)'}$`);
+        for (const pod of pods) if (!generated.test(pod)) application.patterns.add(escapeRegex(pod));
+      }
+      return [...applications.values()].map(application => ({
+        ...application, workloads: application.workloads.sort(), patterns: [...application.patterns].sort(),
+      })).sort((a, b) => a.key.localeCompare(b.key));
+    }
+
+    export function grafanaDashboard(application, kibanaUrl) {
+      const selector = `namespace="apps",pod=~${JSON.stringify(application.patterns.join('|'))}`;
+      const datasource = { type: 'prometheus', uid: 'prometheus' };
+      const panel = (id, title, expressions, unit, x, y, type = 'timeseries') => ({
+        id, title, type, datasource, gridPos: { x, y, w: type === 'stat' ? 6 : 12, h: type === 'stat' ? 4 : 8 },
+        targets: expressions.map((expr, index) => ({
+          refId: String.fromCharCode(65 + index), expr,
+          legendFormat: expr.includes('by (pod)') ? '{{pod}}' : '{{pod}} / {{container}}', instant: type === 'stat',
+        })),
+        fieldConfig: { defaults: { unit, noValue: 'No data' }, overrides: [] },
+        options: type === 'stat'
+          ? { reduceOptions: { calcs: ['lastNotNull'], values: false }, colorMode: 'value', graphMode: 'none' }
+          : { legend: { displayMode: 'table', placement: 'bottom' } },
+      });
+      return {
+        uid: application.uid, title: `Applications / ${application.name}`,
+        description: `Automatically managed from apps: ${application.workloads.join(', ')}. CPU, memory, readiness and restarts use cluster metrics. Scrape panels need prometheus.io/scrape annotations; no data means no metric series, not a healthy target.`,
+        tags: ['applications', 'auto-discovered', 'bm-cluster'], timezone: 'browser', schemaVersion: 41,
+        version: 1, refresh: '30s', time: { from: 'now-6h', to: 'now' }, editable: false,
+        links: [{ title: 'Application logs in Kibana', type: 'link', url: `${kibanaUrl}/app/dashboards#/view/${application.uid}-logs`, targetBlank: true }],
+        panels: [
+          panel(1, 'Pods', [`count(kube_pod_info{${selector}}) or vector(0)`], 'short', 0, 0, 'stat'),
+          panel(2, 'Ready pods', [`sum(kube_pod_status_ready{${selector},condition="true"}) or vector(0)`], 'short', 6, 0, 'stat'),
+          panel(3, 'Restarts (1h)', [`sum(increase(kube_pod_container_status_restarts_total{${selector}}[1h])) or vector(0)`], 'short', 12, 0, 'stat'),
+          panel(4, 'Metrics endpoints up', [`sum(up{job="kubernetes-pods",${selector}})`], 'short', 18, 0, 'stat'),
+          panel(5, 'CPU by pod', [`sum by (pod) (rate(container_cpu_usage_seconds_total{${selector},container!="",image!=""}[$__rate_interval]))`], 'cores', 0, 4),
+          panel(6, 'Memory working set by pod', [`sum by (pod) (container_memory_working_set_bytes{${selector},container!="",image!=""})`], 'bytes', 12, 4),
+          panel(7, 'Network received by pod', [`sum by (pod) (rate(container_network_receive_bytes_total{${selector}}[$__rate_interval]))`], 'Bps', 0, 12),
+          panel(8, 'Network sent by pod', [`sum by (pod) (rate(container_network_transmit_bytes_total{${selector}}[$__rate_interval]))`], 'Bps', 12, 12),
+          panel(9, 'Container readiness', [`kube_pod_container_status_ready{${selector}}`], 'short', 0, 20),
+          panel(10, 'Restarts by container', [`increase(kube_pod_container_status_restarts_total{${selector}}[1h])`], 'short', 12, 20),
+          panel(11, 'Metrics endpoint health', [`up{job="kubernetes-pods",${selector}}`], 'short', 0, 28),
+          panel(12, 'Prometheus scrape duration', [`scrape_duration_seconds{job="kubernetes-pods",${selector}}`], 's', 12, 28),
+        ],
+      };
+    }
+
+    export function kibanaObjects(application) {
+      const id = `${application.uid}-logs`;
+      const indexReference = 'kibanaSavedObjectMeta.searchSourceJSON.index';
+      const references = [{ name: indexReference, type: 'index-pattern', id }];
+      const filters = [{
+        meta: { alias: `apps / ${application.name}`, disabled: false, negate: false },
+        query: { bool: { filter: [
+          { term: { 'kubernetes.namespace_name': 'apps' } },
+          { regexp: { 'kubernetes.pod_name': { value: application.patterns.join('|'), flags: 'NONE' } } },
+        ] } },
+      }];
+      const source = { query: { language: 'kuery', query: '' }, filter: filters, indexRefName: indexReference };
+      const saved = (type, objectId, attributes, objectReferences, version) => ({
+        type, id: objectId, attributes, references: objectReferences,
+        migrationVersion: { [type]: version }, coreMigrationVersion: '7.17.0',
+      });
+      const visualization = (suffix, title, type, params, bucket) => saved('visualization', `${id}-${suffix}`, {
+        title: `${application.name}: ${title}`, description: 'Managed by bm-cluster application discovery.',
+        uiStateJSON: '{}', version: 1,
+        visState: JSON.stringify({ title, type, params, aggs: [
+          { id: '1', enabled: true, type: 'count', params: {}, schema: 'metric' }, bucket,
+        ] }), kibanaSavedObjectMeta: { searchSourceJSON: JSON.stringify(source) },
+      }, references, '7.14.0');
+      return [
+        saved('index-pattern', id, {
+          title: 'kubernetes-logs-v2-*', name: `Applications / ${application.name}`,
+          timeFieldName: '@timestamp', fields: '[]', fieldFormatMap: '{}', runtimeFieldMap: '{}', sourceFilters: '[]',
+        }, [], '7.11.0'),
+        saved('search', id, {
+          title: `${application.name}: container logs`, description: 'Managed by bm-cluster application discovery.',
+          columns: ['@timestamp', 'kubernetes.pod_name', 'kubernetes.container_name', 'level', 'message', 'log'],
+          sort: [['@timestamp', 'desc']], grid: {}, hideChart: false,
+          kibanaSavedObjectMeta: { searchSourceJSON: JSON.stringify({ ...source, highlightAll: true, version: true }) },
+        }, references, '7.9.3'),
+        visualization('volume', 'Log volume', 'histogram', { addTooltip: true, addLegend: false, type: 'histogram' }, {
+          id: '2', enabled: true, type: 'date_histogram', schema: 'segment',
+          params: { field: '@timestamp', interval: 'auto', min_doc_count: 1, extended_bounds: {} },
+        }),
+        visualization('containers', 'Logs by container', 'pie', { addTooltip: true, addLegend: true, isDonut: true }, {
+          id: '2', enabled: true, type: 'terms', schema: 'segment',
+          params: { field: 'kubernetes.container_name', orderBy: '1', order: 'desc', size: 10 },
+        }),
+        saved('dashboard', id, {
+          title: `Applications / ${application.name} / Logs`,
+          description: `Automatically managed from apps: ${application.workloads.join(', ')}. Clone this dashboard before customizing.`,
+          hits: 0, timeRestore: false,
+          optionsJSON: JSON.stringify({ useMargins: true, syncColors: false, hidePanelTitles: false }),
+          panelsJSON: JSON.stringify([
+            { type: 'visualization', ref: 'volume', x: 0, y: 0, w: 32, h: 14 },
+            { type: 'visualization', ref: 'containers', x: 32, y: 0, w: 16, h: 14 },
+            { type: 'search', ref: 'search', x: 0, y: 14, w: 48, h: 24 },
+          ].map((panel, index) => ({
+            version: '7.17.25', type: panel.type, gridData: { x: panel.x, y: panel.y, w: panel.w, h: panel.h, i: String(index + 1) },
+            panelIndex: String(index + 1), embeddableConfig: {}, panelRefName: panel.ref,
+          }))),
+          kibanaSavedObjectMeta: { searchSourceJSON: JSON.stringify({ query: source.query, filter: filters }) },
+        }, [
+          { name: 'volume', type: 'visualization', id: `${id}-volume` },
+          { name: 'containers', type: 'visualization', id: `${id}-containers` },
+          { name: 'search', type: 'search', id },
+        ], '7.17.3'),
+      ];
+    }
+
+    export class Api {
+      constructor(base, headers = () => ({}), ca) { this.base = base; this.headers = headers; this.ca = ca; }
+      async call(method, path, body, contentType = 'application/json') {
+        const url = new URL(path, this.base);
+        if (url.origin !== new URL(this.base).origin) throw new Error('Cross-origin API request rejected');
+        return new Promise((resolve, reject) => {
+          const payload = body === undefined ? undefined : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+          const request = (url.protocol === 'https:' ? https : http).request(url, {
+            method, ca: this.ca, timeout: 20000,
+            headers: { ...this.headers(), ...(payload ? { 'content-type': contentType, 'content-length': payload.length } : {}) },
+          }, response => {
+            let data = '';
+            response.setEncoding('utf8');
+            response.on('data', part => { data += part; if (data.length > 20_000_000) response.destroy(new Error('API response too large')); });
+            response.on('error', reject);
+            response.on('end', () => {
+              if (response.statusCode < 200 || response.statusCode >= 300) return reject(new Error(`${method} ${url.pathname}: HTTP ${response.statusCode}`));
+              try { resolve(JSON.parse(data)); } catch { reject(new Error(`Invalid JSON: ${url.pathname}`)); }
+            });
+          });
+          request.on('timeout', () => request.destroy(new Error(`Timeout: ${url.pathname}`)));
+          request.on('error', reject); request.end(payload);
+        });
+      }
+      async list(path) {
+        const items = [];
+        let continuation = '';
+        for (let page = 0; page < 1000; page++) {
+          const result = await this.call('GET', `${path}?limit=500&continue=${encodeURIComponent(continuation)}`);
+          if (!Array.isArray(result.items)) throw new Error(`Invalid workload list: ${path}`);
+          const kind = result.kind?.replace(/List$/, '');
+          if (!kind) throw new Error(`Missing workload kind: ${path}`);
+          items.push(...result.items.map(item => ({ ...item, kind: item.kind || kind })));
+          continuation = result.metadata?.continue;
+          if (!continuation) return items;
+        }
+        throw new Error(`Pagination limit: ${path}`);
+      }
+      async importObjects(objects) {
+        const boundary = 'bm-cluster-saved-objects';
+        const ndjson = objects.map(object => JSON.stringify(object)).join('\n') + '\n';
+        const body = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="applications.ndjson"\r\nContent-Type: application/ndjson\r\n\r\n${ndjson}\r\n--${boundary}--\r\n`);
+        const result = await this.call('POST', '/api/saved_objects/_import?overwrite=true', body, `multipart/form-data; boundary=${boundary}`);
+        if (!result.success || result.successCount !== objects.length) throw new Error('Kibana saved-object import was incomplete');
+      }
+    }
+
+    export async function writeDashboard(directory, dashboard) {
+      await mkdir(directory, { recursive: true });
+      const path = join(directory, `${dashboard.uid}.json`);
+      const content = JSON.stringify(dashboard) + '\n';
+      try { if (await readFile(path, 'utf8') === content) return false; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const temporary = `${path}.${process.pid}.tmp`;
+      await writeFile(temporary, content, { mode: 0o644 });
+      await rename(temporary, path);
+      return true;
+    }
+
+    export async function reconcile({ kubernetes, kibana, directory, kibanaUrl, imported = new Map(), now = Date.now() }) {
+      // A failed or partial Kubernetes snapshot must never replace the last known dashboards.
+      const objects = (await Promise.all(workloadPaths.map(path => kubernetes.list(path)))).flat();
+      const applications = discover(objects);
+      for (const application of applications) await writeDashboard(directory, grafanaDashboard(application, kibanaUrl));
+      const errors = [];
+      for (const application of applications) {
+        const objects = kibanaObjects(application);
+        const fingerprint = hash(JSON.stringify(objects));
+        const previous = imported.get(application.uid);
+        if (previous?.fingerprint === fingerprint && now - previous.at < 300000) continue;
+        try {
+          await kibana.importObjects(objects);
+          imported.set(application.uid, { fingerprint, at: now });
+        } catch (error) { errors.push(`${application.name}: ${error.message}`); }
+      }
+      return { applications, errors };
+    }
+
+    async function main() {
+      const serviceAccount = '/var/run/secrets/kubernetes.io/serviceaccount';
+      const kubernetes = new Api('https://kubernetes.default.svc', () => ({
+        Authorization: `Bearer ${readFileSync(`${serviceAccount}/token`, 'utf8').trim()}`,
+      }), readFileSync(`${serviceAccount}/ca.crt`));
+      if (!process.env.KIBANA_BOOTSTRAP_USERNAME || !process.env.KIBANA_BOOTSTRAP_PASSWORD) throw new Error('Kibana discovery credentials are missing');
+      const authorization = Buffer.from(`${process.env.KIBANA_BOOTSTRAP_USERNAME}:${process.env.KIBANA_BOOTSTRAP_PASSWORD}`).toString('base64');
+      const kibana = new Api(process.env.KIBANA_URL, () => ({ Authorization: `Basic ${authorization}`, 'kbn-xsrf': 'application-discovery' }));
+      const imported = new Map();
+      const interval = Number(process.env.DISCOVERY_INTERVAL_SECONDS || 60);
+      if (!Number.isFinite(interval) || interval < 10) throw new Error('Discovery interval must be at least ten seconds');
+      do {
+        try {
+          const result = await reconcile({ kubernetes, kibana, imported,
+            directory: process.env.DASHBOARD_DIRECTORY, kibanaUrl: process.env.KIBANA_PUBLIC_URL });
+          console.log(`Application observability: ${result.applications.length} applications, ${result.errors.length} errors`);
+          for (const error of result.errors) console.error(error);
+          if (process.argv.includes('--once')) { process.exitCode = result.errors.length ? 1 : 0; return; }
+        } catch (error) {
+          console.error(error.message);
+          if (process.argv.includes('--once')) { process.exitCode = 1; return; }
+        }
+        await new Promise(resolve => setTimeout(resolve, interval * 1000));
+      } while (true);
+    }
+
+    if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+      main().catch(error => { console.error(error.message); process.exitCode = 1; });
+    }

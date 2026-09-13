@@ -557,6 +557,11 @@ sed -nE 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*([^[:space:]]+).*/\1/p' "$
 compare_sets "$TEMP_DIR/public-hosts" "$TEMP_DIR/ingress-hosts" "centrally owned public hosts have matching Ingress resources"
 
 if command -v node >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    if "$SCRIPT_DIR/test-application-observability.sh"; then
+        pass "application dashboard discovery, scope, ownership, idempotency and API failures"
+    else
+        fail "application dashboard discovery, scope, ownership, idempotency and API failures"
+    fi
     if "$SCRIPT_DIR/test-sonar-discovery.sh"; then
         pass "Sonar discovery, privacy, deduplication and scan-only scheduling"
     else

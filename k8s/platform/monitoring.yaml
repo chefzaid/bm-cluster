@@ -861,6 +861,16 @@ data:
         updateIntervalSeconds: 30
         options:
           path: /var/lib/grafana/dashboards/applications
+      - name: Discovered applications
+        orgId: 1
+        folder: Applications
+        type: file
+        # Keep historical dashboards when a workload is removed or Grafana restarts.
+        disableDeletion: true
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards/discovered-applications
 
 ---
 apiVersion: v1
@@ -1180,6 +1190,39 @@ spec:
               mountPath: /tmp
             - name: grafana-logs
               mountPath: /var/log/grafana
+        - name: application-discovery
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
+          command: [node, /application-discovery/discovery.mjs]
+          env:
+            - name: DISCOVERY_INTERVAL_SECONDS
+              value: "60"
+            - name: DASHBOARD_DIRECTORY
+              value: /var/lib/grafana/dashboards/discovered-applications
+            - name: KIBANA_URL
+              value: http://kibana.__INTERNAL_DNS_ZONE__:5601
+            - name: KIBANA_PUBLIC_URL
+              value: https://kibana.__PUBLIC_DOMAIN__
+          envFrom:
+            - secretRef:
+                name: kibana-bootstrap-credentials
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 192Mi
+          volumeMounts:
+            - name: application-discovery
+              mountPath: /application-discovery
+              readOnly: true
+            - name: dashboard-files
+              mountPath: /var/lib/grafana/dashboards
         - name: dashboard-sidecar
           image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/dashboard-sidecar:2.11.2-20260908.4@sha256:a2ace0140cda9221aecdfe93917f0d1f07a567a76d452c549d907726d158c608
           securityContext:
@@ -1226,6 +1269,9 @@ spec:
             name: grafana-dashboard-provider
         - name: dashboard-files
           emptyDir: {}
+        - name: application-discovery
+          configMap:
+            name: application-observability-discovery
         - name: kubernetes-dashboard
           configMap:
             name: grafana-kubernetes-dashboard

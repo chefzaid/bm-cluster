@@ -109,6 +109,7 @@ role and exposure.
 | Add, synchronize and deploy repositories | [Repository onboarding](docs/repository-replication.md) |
 | Author an app's setup declaration | [Onboarding contract](docs/application-onboarding.md) |
 | Configure automatic and manual source analysis | [Sonar discovery](docs/sonar-discovery.md) |
+| Discover per-application Grafana and Kibana dashboards | [Application observability](docs/application-observability.md) |
 | Monitor, maintain storage, back up, or validate changes | [Operations](docs/operations.md) |
 | Manage host policy, SSO, and credentials | [Security and identity](docs/security.md) |
 | Maintain platform image builds | [Security images](docs/security-images.md) |
