@@ -1089,6 +1089,29 @@ spec:
           type: RuntimeDefault
         runAsUser: 10001
         runAsGroup: 10001
+      initContainers:
+        # File providers stop initializing when a sidecar's directory is absent.
+        - name: prepare-dashboard-directories
+          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
+          command:
+            - node
+            - -e
+            - "const fs=require('node:fs'); for(const directory of ['applications','discovered-applications']) fs.mkdirSync('/var/lib/grafana/dashboards/'+directory,{recursive:true});"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: dashboard-files
+              mountPath: /var/lib/grafana/dashboards
       containers:
         - name: grafana
           image: docker.io/grafana/grafana:13.2.1-distroless@sha256:3600073f45a9895d2e2c4042da0e745819f5b78bf781266952a400c40dcd8d69
