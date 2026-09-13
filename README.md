@@ -66,7 +66,7 @@ for the deployment view.
 
 ## Services and URLs
 
-[Homepage](https://dashboard.swirlit.dev) is the live service directory, including
+[Homepage](https://intranet.swirlit.dev) is the live service directory, including
 internal components and application-owned entries. The links below use
 `swirlit.dev`; installation renders the domain you select. Administrative UIs
 use the access controls described in [security and identity](docs/security.md).
@@ -74,7 +74,7 @@ use the access controls described in [security and identity](docs/security.md).
 | Service | URL | Purpose |
 |---|---|---|
 | Odoo | [odoo.swirlit.dev](https://odoo.swirlit.dev) | ERP and CRM |
-| Homepage | [dashboard.swirlit.dev](https://dashboard.swirlit.dev) | Service catalog and cluster status |
+| Homepage | [intranet.swirlit.dev](https://intranet.swirlit.dev) | Service catalog and cluster status |
 | GitLab | [gitlab.swirlit.dev](https://gitlab.swirlit.dev) | Source, CI, artifacts, and packages |
 | Container Registry | [registry.swirlit.dev](https://registry.swirlit.dev/v2/) | OCI image API; browse images in GitLab |
 | Argo CD | [argocd.swirlit.dev](https://argocd.swirlit.dev) | GitOps delivery |

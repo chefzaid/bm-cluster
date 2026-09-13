@@ -65,7 +65,7 @@ data:
   settings.yaml: |
     title: Swirlit BM Cluster
     description: Applications, infrastructure, data, delivery, and observability
-    startUrl: https://dashboard.__PUBLIC_DOMAIN__
+    startUrl: https://intranet.__PUBLIC_DOMAIN__
     theme: dark
     color: slate
     language: en
@@ -152,7 +152,7 @@ data:
     - Cluster Management:
         - Cluster Dashboard:
             icon: homepage.png
-            href: https://dashboard.__PUBLIC_DOMAIN__
+            href: https://intranet.__PUBLIC_DOMAIN__
             description: This Homepage service catalog
             namespace: infra
             podSelector: app=homepage
@@ -475,7 +475,7 @@ spec:
             fieldRef:
               fieldPath: status.podIP
         - name: HOMEPAGE_ALLOWED_HOSTS
-          value: "$(MY_POD_IP):3000,homepage.__INTERNAL_DNS_ZONE__:3000,dashboard.__PUBLIC_DOMAIN__"
+          value: "$(MY_POD_IP):3000,homepage.__INTERNAL_DNS_ZONE__:3000,intranet.__PUBLIC_DOMAIN__"
         - name: LOG_TARGETS
           value: stdout
         ports:
@@ -596,10 +596,10 @@ spec:
   ingressClassName: nginx
   tls:
   - hosts:
-    - dashboard.__PUBLIC_DOMAIN__
+    - intranet.__PUBLIC_DOMAIN__
     secretName: swirlit-dev-tls
   rules:
-  - host: dashboard.__PUBLIC_DOMAIN__
+  - host: intranet.__PUBLIC_DOMAIN__
     http:
       paths:
       - path: /

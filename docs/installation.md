@@ -145,6 +145,6 @@ kubectl get applications -n infra
 ```
 
 The installer waits for selected components and reports their endpoints. Open
-`https://dashboard.<your-domain>` for the service catalog. See
+`https://intranet.<your-domain>` for the service catalog. See
 [Ansible](ansible.md) for repeatable platform reconciliation and
 [Argo CD](delivery.md#argo-cd-operations) for ongoing GitOps ownership.

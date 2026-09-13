@@ -1409,7 +1409,7 @@ fi
 echo ""
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]] || kubectl get deployment homepage -n infra >/dev/null 2>&1; then
-        echo "Service dashboard: https://dashboard.$PLATFORM_DOMAIN"
+        echo "Intranet: https://intranet.$PLATFORM_DOMAIN"
     fi
 
     echo ""

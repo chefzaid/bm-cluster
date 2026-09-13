@@ -512,6 +512,7 @@ access_app_name() {
         argocd) echo "Argo CD" ;;
         dbgate) echo "DBGate" ;;
         grafana) echo "Grafana" ;;
+        intranet) echo "Intranet" ;;
         kafka) echo "Kafka UI" ;;
         kibana) echo "Kibana" ;;
         longhorn) echo "Longhorn" ;;
