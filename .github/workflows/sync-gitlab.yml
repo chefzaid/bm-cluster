@@ -95,7 +95,7 @@ jobs:
           repository="$RUNNER_TEMP/repository-sync"
           git init --quiet "$repository"
           cd "$repository"
-          git config user.name 'SwirlIT repository sync'
+          git config user.name 'Repository sync'
           git config user.email "${REPOSITORY_SYNC_EMAIL:-repository-sync@users.noreply.github.com}"
           git remote add github "https://github.com/${GITHUB_REPOSITORY}.git"
           git remote add gitlab "$GITLAB_REPOSITORY"

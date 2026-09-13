@@ -95,9 +95,9 @@ class SecurityImagesTest(unittest.TestCase):
             with self.subTest(enabled=enabled), tempfile.TemporaryDirectory() as directory:
                 result = subprocess.run([
                     str(ROOT / 'scripts/render-cluster-config.sh'), '--output', directory,
-                    '--domain', 'example.test', '--internal-domain', 'swirlit.internal',
-                    '--gitops-repository', 'http://gitlab.swirlit.internal/swirlit/bm-cluster.git',
-                    '--cloudflare-access-team', 'swirlit',
+                    '--domain', 'example.test', '--internal-domain', 'internal.example.test',
+                    '--gitops-repository', 'http://gitlab.internal.example.test/example/bm-cluster.git',
+                    '--cloudflare-access-team', 'example',
                 ], env={**os.environ, 'SECURITY_IMAGES_ENABLED': str(enabled).lower()},
                     capture_output=True, text=True, check=True)
                 self.assertEqual(result.stdout.strip(), directory)
@@ -161,9 +161,11 @@ class SecurityImagesTest(unittest.TestCase):
                 result = subprocess.run([
                     'helm', 'template', 'bm-cluster', str(ROOT / 'k8s'),
                     '-f', str(ROOT / f'k8s/profiles/security-images-{profile}.values'),
-                    '--set', 'publicDomain=example.test,internalDnsZone=swirlit.internal,cloudflareAccessTeamName=swirlit,appsEnabled=true',
-                    '--set', 'gitopsRepositoryURL=http://gitlab.swirlit.internal/swirlit/bm-cluster.git',
+                    '--set', 'publicDomain=example.test,internalDnsZone=internal.example.test,cloudflareAccessTeamName=example,appsEnabled=true',
+                    '--set', 'gitopsRepositoryURL=http://gitlab.internal.example.test/example/bm-cluster.git',
                     '--set', f'trivy-operator.image.registry={registry},trivy-operator.trivy.image.registry={registry}',
+                    '--set', 'trivy-operator.image.repository=' + ('example/bm-cluster/security/trivy-operator' if enabled else 'aquasec/trivy-operator'),
+                    '--set', 'trivy-operator.trivy.image.repository=' + ('example/bm-cluster/security/trivy' if enabled else 'aquasec/trivy'),
                 ], capture_output=True, text=True, check=True)
                 self.assertNotIn('__SECURITY_', result.stdout)
                 documents = list(yaml.safe_load_all(result.stdout))

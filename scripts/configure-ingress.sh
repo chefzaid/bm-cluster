@@ -3,6 +3,10 @@
 set -euo pipefail
 umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../config/platform.env
 source "$ROOT/config/platform.env"
@@ -40,7 +44,7 @@ PY
     # The tunnel uses the public apex as TLS SNI even before an application
     # owns that host. Avoid NGINX's self-signed catch-all certificate.
     args+=(--values "$temporary/ha.yaml" --set-string
-        "controller.extraArgs.default-ssl-certificate=$NAMESPACE/${CLOUDFLARE_TLS_SECRET_NAME:-swirlit-dev-tls}")
+        "controller.extraArgs.default-ssl-certificate=$NAMESPACE/${CLOUDFLARE_TLS_SECRET_NAME:-${TLS_SECRET_NAME}}")
 else
     args+=(--set controller.service.type=LoadBalancer
         --set controller.service.enableHttp=true

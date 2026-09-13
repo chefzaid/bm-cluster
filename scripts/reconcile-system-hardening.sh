@@ -62,7 +62,7 @@ for target in \
     echo "Admission did not apply the expected images and hardening to $target" >&2
     exit 1
   fi
-  if jq -e 'any(.[]; contains("/swirlit/bm-cluster/security/"))' <<< "$expected" >/dev/null; then
+  if jq -e 'any(.[]; test("/[^/]+/[^/]+/security/"))' <<< "$expected" >/dev/null; then
     kubectl wait --for=condition=Ready externalsecret/platform-registry-auth \
       -n "$namespace" --timeout=120s
   fi

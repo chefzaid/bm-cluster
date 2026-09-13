@@ -30,7 +30,7 @@ NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}
 PUBLISH_NODE_DNS="${CLOUDFLARE_PUBLISH_NODE_DNS:-true}"
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-infra}"
 INGRESS_SERVICE="${INGRESS_SERVICE:-ingress-nginx-controller}"
-TLS_SECRET_NAME="${CLOUDFLARE_TLS_SECRET_NAME:-swirlit-dev-tls}"
+
 MIN_TLS_VERSION="${CLOUDFLARE_MIN_TLS_VERSION:-1.2}"
 ENABLE_HSTS="${CLOUDFLARE_ENABLE_HSTS:-true}"
 HSTS_MAX_AGE="${CLOUDFLARE_HSTS_MAX_AGE:-31536000}"
@@ -161,6 +161,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 ZONE_NAME="${ZONE_NAME,,}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-$ZONE_NAME}"
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
+platform_identity_validate
 ACCESS_TEAM_NAME="${ACCESS_TEAM_NAME:-bm-cluster-${ZONE_NAME//./-}}"
 [[ -n "$ZONE_NAME" ]] || error "Set PLATFORM_DOMAIN or CLOUDFLARE_ZONE."
 [[ -z "$INTERNAL_DNS_ZONE" || "$ZONE_NAME" != "$INTERNAL_DNS_ZONE" ]] || \
@@ -584,21 +590,23 @@ configure_access() {
 
     idp_response="$(cf_request GET "/accounts/$ACCOUNT_ID/access/identity_providers")"
     require_success "$idp_response" "Reading Access identity providers"
-    idp_count="$(jq '[.result[] | select(.type == "oidc" and .name == "SwirlIT Keycloak")] | length' <<< "$idp_response")"
-    ((idp_count <= 1)) || error "More than one Access identity provider is named SwirlIT Keycloak."
+    idp_count="$(jq --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" '[.result[] | select(.type == "oidc" and .name == $name)] | length' <<< "$idp_response")"
+    ((idp_count <= 1)) || error "More than one Access identity provider is named $CLOUDFLARE_ACCESS_IDP_NAME."
     idp_file="$WORK_DIR/access-keycloak-idp.json"
     jq -n \
         --arg client_secret "$oidc_client_secret" \
         --arg domain "$ZONE_NAME" \
+        --arg realm "$KEYCLOAK_REALM" \
+        --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" \
         '{
-            name:"SwirlIT Keycloak",
+            name:$name,
             type:"oidc",
             config:{
                 client_id:"cloudflare-access",
                 client_secret:$client_secret,
-                auth_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/auth"),
-                token_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/token"),
-                certs_url:("https://keycloak." + $domain + "/auth/realms/swirlit/protocol/openid-connect/certs"),
+                auth_url:("https://keycloak." + $domain + "/auth/realms/" + $realm + "/protocol/openid-connect/auth"),
+                token_url:("https://keycloak." + $domain + "/auth/realms/" + $realm + "/protocol/openid-connect/token"),
+                certs_url:("https://keycloak." + $domain + "/auth/realms/" + $realm + "/protocol/openid-connect/certs"),
                 pkce_enabled:true,
                 email_claim_name:"email",
                 claims:["groups", "preferred_username"],
@@ -611,7 +619,7 @@ configure_access() {
         oidc_idp_id="$(jq -r '.result.id' <<< "$update_response")"
         info "Created the Keycloak OIDC identity provider for Cloudflare Access."
     else
-        oidc_idp_id="$(jq -r '.result[] | select(.type == "oidc" and .name == "SwirlIT Keycloak") | .id' <<< "$idp_response")"
+        oidc_idp_id="$(jq -r --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" '.result[] | select(.type == "oidc" and .name == $name) | .id' <<< "$idp_response")"
         update_response="$(cf_request PUT "/accounts/$ACCOUNT_ID/access/identity_providers/$oidc_idp_id" "$idp_file")"
         require_success "$update_response" "Updating the Access Keycloak identity provider"
         info "Reconciled the Keycloak OIDC identity provider for Cloudflare Access."

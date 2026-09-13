@@ -4,6 +4,10 @@ set -euo pipefail
 umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
 # shellcheck source=lib/tls.sh
 source "$SCRIPT_DIR/lib/tls.sh"
 info() { printf '[INFO] %s\n' "$*"; }
@@ -21,8 +25,8 @@ if [[ ! "${PLATFORM_DOMAIN:-}" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ 
     exit 2
 fi
 
-ensure_tls_secret infra swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
-ensure_tls_secret apps swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
+ensure_tls_secret infra "$TLS_SECRET_NAME" "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
+ensure_tls_secret apps "$TLS_SECRET_NAME" "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
 if [[ "$apps_enabled" == true ]]; then
-    ensure_tls_secret corp swirlit-dev-tls "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
+    ensure_tls_secret corp "$TLS_SECRET_NAME" "$PLATFORM_DOMAIN" "*.$PLATFORM_DOMAIN"
 fi

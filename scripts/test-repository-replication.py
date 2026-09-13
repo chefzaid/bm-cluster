@@ -262,10 +262,25 @@ class PlatformContextTests(unittest.TestCase):
         self.assertNotIn("INTERNAL_DNS_ZONE", self.discovery(resources, required=False))
 
     def test_explicit_settings_do_not_need_cluster_access(self):
-        environment = {name: ENV[name] for name in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_PUBLIC_URL", "PLATFORM_SECURITY_PROJECT_PATH")}
+        environment = {name: ENV[name] for name in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_PUBLIC_URL", "PLATFORM_SECURITY_PROJECT_PATH", "GITLAB_GROUP_PATH")}
+        environment["TLS_SECRET_NAME"] = "example-com-tls"
         with patch.dict(os.environ, environment, clear=True), patch.object(replication.subprocess, "run") as run:
             self.assertEqual(replication.platform_context(required=True), environment)
             run.assert_not_called()
+
+    def test_bootstrap_gitops_source_uses_the_configured_registry_project(self):
+        environment = {**ENV, "GITLAB_GROUP_PATH": "applications"}
+        environment.pop("PLATFORM_SECURITY_PROJECT_PATH")
+        resources = {("application", "bm-cluster"): {"spec": {"source": {
+            "repoURL": "https://github.com/example/source-platform.git", "helm": {"parameters": [
+                {"name": "gitlabGroupPath", "value": "engineering"},
+                {"name": "gitlabProjectName", "value": "cluster-images"},
+                {"name": "tlsSecretName", "value": "company-wildcard"},
+            ]}}}}}
+        context = self.discovery(resources, environment)
+        self.assertEqual(context["PLATFORM_SECURITY_PROJECT_PATH"], "engineering/cluster-images/security")
+        self.assertEqual(context["GITLAB_GROUP_PATH"], "applications")
+        self.assertEqual(context["TLS_SECRET_NAME"], "company-wildcard")
 
     def test_security_images_follow_platform_project_when_app_group_differs(self):
         environment = {**ENV, "GITLAB_GROUP_PATH": "engineering"}

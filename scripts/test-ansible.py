@@ -90,7 +90,8 @@ def exercise(case):
         commands.mkdir()
         (scripts / "lib").mkdir()
         for name in ("render-cluster-config.sh", "render-security-images.py", "render-platform-ha.py",
-                     "resolve-ha-profile.py", "configure-local-tls.sh", "lib/tls.sh"):
+                     "resolve-ha-profile.py", "configure-local-tls.sh", "lib/tls.sh",
+                     "render-identity.py", "platform-identity.py", "lib/platform-identity.sh"):
             shutil.copy2(ROOT / "scripts" / name, scripts / name)
         for source in (ROOT / "scripts").glob("*.sh"):
             if not (scripts / source.name).exists():

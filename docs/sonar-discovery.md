@@ -21,7 +21,7 @@ deduplicates components of the same repository. There is no application-name lis
 to maintain. Corporate/vendor workloads in `corp`, including Odoo, are outside
 this scope. Trivy security scanning operates independently.
 
-Discovery provisions missing projects, binds them to the managed `swirlit-gitlab`
+Discovery provisions missing projects, binds them to the configured `SONAR_ALM_SETTING`
 ALM integration and creates a protected, masked `SONAR_TOKEN` project variable
 when absent. Non-public GitLab repositories receive private Sonar projects.
 It requests at most one scan-only pipeline per run, defers while a discovered
@@ -70,6 +70,11 @@ projects it into `infra`; Sonar administration uses the existing Vault-backed
 admin token. Rerun the configurator before expiry; it reuses valid credentials
 and renews them within the renewal window declared in that script. Discovery
 itself does not renew the group token.
+
+The configurator also creates or updates the named GitLab integration and its
+import credential using the selected private service domain and group token.
+These are required before Sonar can bind newly discovered projects; see
+[Sonar's integration API workflow](https://docs.sonarsource.com/sonarqube-server/2026.1/project-administration/creating-your-project/automating-project-creation-and-import).
 
 Kubernetes permissions allow only workload listing in `apps` and Application
 listing in `infra`; the service account cannot read application Secrets or

@@ -70,7 +70,7 @@ spec:
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_SCOPE
               value: openid,profile,email,groups
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_ISSUERURI
-              value: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
+              value: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_USERNAMEATTRIBUTE
               value: preferred_username
             - name: AUTH_OAUTH2_CLIENT_KEYCLOAK_CLIENTNAME

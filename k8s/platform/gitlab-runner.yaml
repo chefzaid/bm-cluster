@@ -208,7 +208,7 @@ data:
         namespace = "gitlab-runners"
         service_account = "gitlab-ci-job"
         image = "docker.io/alpine@sha256:eafc1edb577d2e9b458664a15f23ea1c370214193226069eb22921169fc7e43f"
-        helper_image = "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner-helper:19.3.1-20260909.1@sha256:8ececef7dd3d5ae0844069370c4d703f8a3f3b7272929d67f5e85e7e3a584d8d"
+        helper_image = "registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/gitlab-runner-helper:19.3.1-20260909.1@sha256:8ececef7dd3d5ae0844069370c4d703f8a3f3b7272929d67f5e85e7e3a584d8d"
         image_pull_secrets = __SECURITY_PULL_SECRETS__
         pull_policy = ["if-not-present"]
         privileged = false
@@ -288,7 +288,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: gitlab-runner
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab-runner:19.3.1-20260909.1@sha256:c9b6fb6ffda1895d447411db1db8d64f68299bbee9d903c687b2da472fa326f0
+          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/gitlab-runner:19.3.1-20260909.1@sha256:c9b6fb6ffda1895d447411db1db8d64f68299bbee9d903c687b2da472fa326f0
           command: ["/bin/sh", "-ceu"]
           args:
             - |

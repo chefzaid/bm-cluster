@@ -4,6 +4,18 @@
   connection: local
   gather_facts: false
 
+  environment:
+    ORGANIZATION_NAME: "{{ organization_name }}"
+    ORGANIZATION_SLUG: "{{ organization_slug }}"
+    GITLAB_GROUP_PATH: "{{ gitlab_group_path }}"
+    GITLAB_GROUP_NAME: "{{ gitlab_group_name }}"
+    GITLAB_PROJECT_NAME: "{{ gitlab_project_name }}"
+    KEYCLOAK_REALM: "{{ keycloak_realm }}"
+    TLS_SECRET_NAME: "{{ tls_secret_name }}"
+    CLOUDFLARE_TLS_SECRET_NAME: "{{ tls_secret_name }}"
+    SONAR_ALM_SETTING: "{{ sonar_alm_setting }}"
+    CLOUDFLARE_ACCESS_IDP_NAME: "{{ cloudflare_access_idp_name }}"
+
   vars:
     infra_namespace: infra
     apps_namespace: apps
@@ -100,7 +112,14 @@
          lookup('ansible.builtin.pipe', 'git -C ' ~ (repository_root | quote) ~ ' remote get-url github 2>/dev/null || git -C ' ~ (repository_root | quote) ~ ' remote get-url origin') |
          regex_replace('^git@github.com:', 'https://github.com/') |
          regex_replace('^ssh://git@github.com/', 'https://github.com/') }}
-    gitlab_group_path: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_PATH') | default('swirlit', true) }}"
+    organization_slug: "{{ lookup('ansible.builtin.env', 'ORGANIZATION_SLUG') | default(platform_domain.split('.')[0], true) }}"
+    organization_name: "{{ lookup('ansible.builtin.env', 'ORGANIZATION_NAME') | default(organization_slug, true) }}"
+    gitlab_group_path: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_PATH') | default(organization_slug, true) }}"
+    gitlab_group_name: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_NAME') | default(organization_name, true) }}"
+    keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default(organization_slug, true) }}"
+    tls_secret_name: "{{ lookup('ansible.builtin.env', 'TLS_SECRET_NAME') | default(lookup('ansible.builtin.env', 'CLOUDFLARE_TLS_SECRET_NAME'), true) | default((platform_domain | replace('.', '-')) ~ '-tls', true) }}"
+    sonar_alm_setting: "{{ lookup('ansible.builtin.env', 'SONAR_ALM_SETTING') | default(organization_slug ~ '-gitlab', true) }}"
+    cloudflare_access_idp_name: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_IDP_NAME') | default(organization_name ~ ' Keycloak', true) }}"
     gitlab_project_name: "{{ lookup('ansible.builtin.env', 'GITLAB_PROJECT_NAME') | default('bm-cluster', true) }}"
     trusted_node_cidr: "{{ k3s_node_network_cidr | default(lookup('ansible.builtin.env', 'K3S_NODE_NETWORK_CIDR'), true) }}"
     private_transport_enabled: "{{ manage_private_transport | default(false) | bool }}"
@@ -177,6 +196,39 @@
           This playbook relies on command results and cannot predict changes in
           check mode. Use --syntax-check or scripts/validate-repository.sh --live
           for validation without changing the cluster.
+
+    - name: Read installed public organization settings
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ repository_root }}/scripts/platform-identity.py"
+          - --discover
+      environment:
+        ORGANIZATION_NAME: "{{ lookup('ansible.builtin.env', 'ORGANIZATION_NAME') }}"
+        ORGANIZATION_SLUG: "{{ lookup('ansible.builtin.env', 'ORGANIZATION_SLUG') }}"
+        GITLAB_GROUP_PATH: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_PATH') }}"
+        GITLAB_GROUP_NAME: "{{ lookup('ansible.builtin.env', 'GITLAB_GROUP_NAME') }}"
+        GITLAB_PROJECT_NAME: "{{ lookup('ansible.builtin.env', 'GITLAB_PROJECT_NAME') }}"
+        KEYCLOAK_REALM: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') }}"
+        TLS_SECRET_NAME: "{{ lookup('ansible.builtin.env', 'TLS_SECRET_NAME') }}"
+        SONAR_ALM_SETTING: "{{ lookup('ansible.builtin.env', 'SONAR_ALM_SETTING') }}"
+        CLOUDFLARE_ACCESS_IDP_NAME: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_ACCESS_IDP_NAME') }}"
+        PLATFORM_DOMAIN: "{{ platform_domain }}"
+        CLOUDFLARE_TLS_SECRET_NAME: "{{ lookup('ansible.builtin.env', 'CLOUDFLARE_TLS_SECRET_NAME') }}"
+      register: installed_identity
+      changed_when: false
+
+    - name: Preserve installed organization settings unless explicitly overridden
+      ansible.builtin.set_fact:
+        organization_name: "{{ (installed_identity.stdout | from_json).get('ORGANIZATION_NAME', organization_name) }}"
+        organization_slug: "{{ (installed_identity.stdout | from_json).get('ORGANIZATION_SLUG', organization_slug) }}"
+        gitlab_group_path: "{{ (installed_identity.stdout | from_json).get('GITLAB_GROUP_PATH', gitlab_group_path) }}"
+        gitlab_group_name: "{{ (installed_identity.stdout | from_json).get('GITLAB_GROUP_NAME', gitlab_group_name) }}"
+        gitlab_project_name: "{{ (installed_identity.stdout | from_json).get('GITLAB_PROJECT_NAME', gitlab_project_name) }}"
+        keycloak_realm: "{{ (installed_identity.stdout | from_json).get('KEYCLOAK_REALM', keycloak_realm) }}"
+        tls_secret_name: "{{ (installed_identity.stdout | from_json).get('TLS_SECRET_NAME', tls_secret_name) }}"
+        sonar_alm_setting: "{{ (installed_identity.stdout | from_json).get('SONAR_ALM_SETTING', sonar_alm_setting) }}"
+        cloudflare_access_idp_name: "{{ (installed_identity.stdout | from_json).get('CLOUDFLARE_ACCESS_IDP_NAME', cloudflare_access_idp_name) }}"
 
     - name: Validate the shared platform contract
       ansible.builtin.assert:

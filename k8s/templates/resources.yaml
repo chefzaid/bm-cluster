@@ -5,12 +5,16 @@
 {{- if not $root.Values.securityImagesEnabled -}}
 {{- $catalog := $root.Files.Get "security-images.json" | fromJson -}}
 {{- range $component, $image := $catalog.upstreams -}}
-{{- $pattern := printf "registry\\.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/%s(:[^@\\s]+)?@sha256:[a-f0-9]{64}" $component -}}
+{{- $pattern := printf "registry\\.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/%s(:[^@\\s]+)?@sha256:[a-f0-9]{64}" $component -}}
 {{- $content = regexReplaceAllLiteral $pattern $content $image -}}
 {{- end -}}
 {{- end -}}
 {{- $profile := ternary "patched" "bootstrap" $root.Values.securityImagesEnabled -}}
 {{- $scannerRegistry := ternary (printf "registry.%s" $root.Values.publicDomain) "docker.io" $root.Values.securityImagesEnabled -}}
+{{- $identity := include "bm-cluster.identity" $root | fromJson -}}
+{{- $imagePath := printf "%s/%s/security" (index $identity "__GITLAB_GROUP_PATH__") (index $identity "__GITLAB_PROJECT_NAME__") -}}
+{{- $content = replace "__SECURITY_OPERATOR_REPOSITORY__" (ternary (printf "%s/trivy-operator" $imagePath) "aquasec/trivy-operator" $root.Values.securityImagesEnabled) $content -}}
+{{- $content = replace "__SECURITY_TRIVY_REPOSITORY__" (ternary (printf "%s/trivy" $imagePath) "aquasec/trivy" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__SECURITY_IMAGE_PROFILE__" $profile $content -}}
 {{- $content = replace "__SECURITY_PULL_SECRETS__" (ternary "[\"platform-registry-auth\"]" "[]" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__SECURITY_SCANNER_REGISTRY__" $scannerRegistry $content -}}
@@ -20,6 +24,9 @@
 {{- $content = replace "__KEYCLOAK_READ_ONLY__" (ternary "true" "false" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__KEYCLOAK_PULL_SECRETS__" (ternary "[{\"name\":\"platform-registry-auth\"}]" "[]" $root.Values.securityImagesEnabled) $content -}}
 {{- $content = replace "__KEYCLOAK_START_ARGS__" (ternary "[\"start\", \"--optimized\", \"--import-realm\"]" "[\"start\", \"--import-realm\"]" $root.Values.securityImagesEnabled) $content -}}
+{{- range $token, $value := (include "bm-cluster.identity" $root | fromJson) -}}
+{{- $content = replace $token $value $content -}}
+{{- end -}}
 {{- $content = replace "__PUBLIC_DOMAIN__" (required "publicDomain is required" $root.Values.publicDomain) $content -}}
 {{- $content = replace "__INTERNAL_DNS_ZONE__" (required "internalDnsZone is required" $root.Values.internalDnsZone) $content -}}
 {{- $content = replace "__GITOPS_REPOSITORY_URL__" (required "gitopsRepositoryURL is required" $root.Values.gitopsRepositoryURL) $content -}}

@@ -51,12 +51,16 @@ def render(root, enabled):
     # This runs before the ordinary domain-placeholder renderer.
     scanner_registry = "registry.__PUBLIC_DOMAIN__" if enabled else "docker.io"
     private_image = re.compile(
-        r"registry\.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/([a-z][a-z0-9-]*)(?::[^\s@\"']+)?@sha256:[a-f0-9]{64}"
+        r"registry\.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/([a-z][a-z0-9-]*)(?::[^\s@\"']+)?@sha256:[a-f0-9]{64}"
     )
     for path in (root / "k8s").rglob("*.yaml"):
+        if "templates" in path.parts:
+            continue
         content = path.read_text()
         if not enabled and "templates" not in path.parts:
             content = private_image.sub(lambda match: catalog["upstreams"][match[1]], content)
+        content = content.replace("__SECURITY_OPERATOR_REPOSITORY__", "__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/trivy-operator" if enabled else "aquasec/trivy-operator")
+        content = content.replace("__SECURITY_TRIVY_REPOSITORY__", "__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/trivy" if enabled else "aquasec/trivy")
         content = content.replace("__SECURITY_IMAGE_PROFILE__", profile)
         content = content.replace("__SECURITY_SCANNER_REGISTRY__", scanner_registry)
         content = content.replace("__SECURITY_PULL_SECRETS__", '["platform-registry-auth"]' if enabled else '[]')
@@ -85,6 +89,12 @@ def render(root, enabled):
         [{"name": "platform-registry-auth"}] if enabled else []
     )
     vault_path.write_text(yaml.safe_dump(vault, sort_keys=False))
+    argocd_path = root / "config/argocd-values.yaml"
+    argocd = yaml.safe_load(argocd_path.read_text())
+    if not enabled:
+        repository, tag = image_parts(catalog["upstreams"]["redis"])
+        argocd.setdefault("redis", {})["image"] = {"repository": repository, "tag": tag}
+    argocd_path.write_text(yaml.safe_dump(argocd, sort_keys=False))
     ingress_path = root / "config/ingress-nginx-values.yaml"
     ingress = yaml.safe_load(ingress_path.read_text())
     controller = ingress["controller"]

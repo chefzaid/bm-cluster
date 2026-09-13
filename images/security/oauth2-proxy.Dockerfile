@@ -8,7 +8,7 @@ COPY oauth2-proxy.patch /tmp/oauth2-proxy.patch
 RUN git apply --check /tmp/oauth2-proxy.patch && git apply /tmp/oauth2-proxy.patch
 ENV CGO_ENABLED=0 GOMAXPROCS=2 GOMEMLIMIT=2GiB
 RUN go test -p 2 ./pkg/encryption ./pkg/cookies ./pkg/sessions/... ./providers \
-    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/oauth2-proxy/oauth2-proxy/v7/pkg/version.VERSION=7.15.4-swirlit.1" -o /out/oauth2-proxy .
+    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/oauth2-proxy/oauth2-proxy/v7/pkg/version.VERSION=7.15.4-platform.1" -o /out/oauth2-proxy .
 FROM docker.io/library/alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/oauth2-proxy /bin/oauth2-proxy

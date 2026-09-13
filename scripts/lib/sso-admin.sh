@@ -2,7 +2,7 @@
 # shellcheck disable=SC2034 # Validation errors are read by scripts that source this library.
 
 # Shared validation for the administrator identity provisioned through the
-# SwirlIT Keycloak realm. Callers decide whether validation failures should be
+# configured Keycloak realm. Callers decide whether validation failures should be
 # interactive warnings or fatal errors by reading SSO_ADMIN_VALIDATION_ERROR.
 
 SSO_ADMIN_VALIDATION_ERROR=""

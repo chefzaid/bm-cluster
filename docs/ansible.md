@@ -42,6 +42,8 @@ supply cluster identity while the remaining inputs come from the process:
 
 ```yaml
 installer_environment:
+  ORGANIZATION_NAME: Example Company
+  ORGANIZATION_SLUG: example
   PLATFORM_DOMAIN: example.com
   CONTROL_PLANE_NODE_NAME: control-plane-01
   SERVER_EXPOSURE: local
@@ -69,6 +71,8 @@ are accepted when HA is requested or already recorded in the cluster. Set
 the hostname.
 
 ```bash
+export ORGANIZATION_NAME='Example Company'
+export ORGANIZATION_SLUG=example
 export PLATFORM_DOMAIN=example.com
 export CONTROL_PLANE_NODE_NAME=control-plane-01
 export GITOPS_REPOSITORY_URL=https://github.com/example/bm-cluster.git
@@ -84,6 +88,12 @@ Use `-e server_exposure=local` for a locally exposed bootstrap host; the default
 is internet exposure. Set `CLOUDFLARE_ACCESS_TEAM_NAME` when using an existing
 Zero Trust team. The internal DNS zone and public node label use the same
 defaults as the installer.
+
+Organization, GitLab, realm, TLS, and integration settings use the same
+[identity inputs](installation.md#organization-and-installation-identity) as the
+installer. Reconciliation reuses the installed public identity ConfigMap, with
+explicit environment values taking precedence, and passes the resolved identity
+to every provisioning helper and the generated Argo CD Application.
 
 [Control-plane SSH access](node-enrollment.md#remote-enrollment) is reconciled
 from registered control-plane private addresses on multi-node installations.

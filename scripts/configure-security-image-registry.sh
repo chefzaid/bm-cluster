@@ -4,6 +4,11 @@ set -euo pipefail
 set +x
 umask 077
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/platform-identity.sh
+source "$script_dir/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
+platform_identity_validate
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 # shellcheck source=scripts/lib/gitlab-admin-token.sh
@@ -31,14 +36,14 @@ if [[ -n "$registry_username" && -n "$registry_token" ]]; then
   printf 'user = "%s:%s"\n' "$registry_username" "$registry_token" > "$work_dir/registry.conf"
   if curl --config "$work_dir/registry.conf" --fail --silent --show-error --get \
     --data-urlencode service=container_registry \
-    --data-urlencode "scope=repository:${GITLAB_PROJECT_PATH:-swirlit/bm-cluster}/security/postgres-client:pull" \
+    --data-urlencode "scope=repository:${GITLAB_PROJECT_PATH}/security/postgres-client:pull" \
     "http://$gitlab_ip/jwt/auth" > "$work_dir/auth.json"; then
     info "Existing platform registry pull token is valid"
     exit 0
   fi
 fi
 printf 'header = "PRIVATE-TOKEN: %s"\n' "$GITLAB_ADMIN_TOKEN" > "$work_dir/api.conf"
-project_path="$(jq -rn --arg value "${GITLAB_PROJECT_PATH:-swirlit/bm-cluster}" '$value|@uri')"
+project_path="$(jq -rn --arg value "${GITLAB_PROJECT_PATH}" '$value|@uri')"
 project_id="$(curl --config "$work_dir/api.conf" --fail --silent --show-error \
   "http://$gitlab_ip/api/v4/projects/$project_path" | jq -er '.id')"
 jq -n --arg expiry "$(date -u -d '+364 days' +%Y-%m-%dT00:00:00Z)" \

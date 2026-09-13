@@ -2,6 +2,17 @@ publicDomain: ""
 internalDnsZone: ""
 gitopsRepositoryURL: ""
 cloudflareAccessTeamName: ""
+# The installer supplies these values and records them in its Argo Application.
+# Empty optional values derive from the public domain's first label.
+organizationName: ""
+organizationSlug: ""
+gitlabGroupPath: ""
+gitlabGroupName: ""
+gitlabProjectName: bm-cluster
+keycloakRealm: ""
+tlsSecretName: ""
+sonarAlmSetting: ""
+cloudflareAccessIdpName: ""
 # Controls centrally managed corporate workloads; the apps foundation is always included.
 appsEnabled: false
 deschedulerEnabled: true

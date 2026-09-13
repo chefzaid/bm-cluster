@@ -100,8 +100,8 @@ PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
 INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-}"
 CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
 CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-}"
-GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
-GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
+GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-}"
+GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-}"
 GITOPS_REPOSITORY_URL="${GITOPS_REPOSITORY_URL:-}"
 RENDERED_CONFIG_DIR=""
@@ -179,8 +179,16 @@ ask_with_default() {
     installer_prompt_yes_no "$1" "${2:-N}" "$AUTO_APPROVE"
 }
 
+# shellcheck source=scripts/lib/platform-identity.sh
+source "$SCRIPT_DIR/scripts/lib/platform-identity.sh"
+
 prompt_cluster_identity() {
     local default_node
+    platform_identity_load
+    if [[ "$AUTO_APPROVE" != true ]]; then
+        installer_prompt_value ORGANIZATION_NAME "Company or organization display name" "${ORGANIZATION_NAME:-}"
+    fi
+    [[ -n "${ORGANIZATION_NAME:-}" ]] || error "Set ORGANIZATION_NAME to the company or organization display name."
 
     if [[ "$AUTO_APPROVE" != "true" ]]; then
         installer_prompt_value PLATFORM_DOMAIN "Public base domain for this cluster" "$PLATFORM_DOMAIN"
@@ -189,6 +197,18 @@ prompt_cluster_identity() {
     [[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
         error "Set PLATFORM_DOMAIN to a valid base domain such as example.com."
 
+    ORGANIZATION_SLUG="${ORGANIZATION_SLUG:-${PLATFORM_DOMAIN%%.*}}"
+    if [[ "$AUTO_APPROVE" != true ]]; then
+        installer_prompt_value ORGANIZATION_SLUG "Organization identifier (lowercase letters, digits, hyphens)" "$ORGANIZATION_SLUG"
+        installer_prompt_value GITLAB_GROUP_PATH "GitLab group path" "${GITLAB_GROUP_PATH:-$ORGANIZATION_SLUG}"
+        installer_prompt_value GITLAB_GROUP_NAME "GitLab group display name" "${GITLAB_GROUP_NAME:-$ORGANIZATION_NAME}"
+        installer_prompt_value GITLAB_PROJECT_NAME "Platform GitLab project name" "${GITLAB_PROJECT_NAME:-bm-cluster}"
+        installer_prompt_value KEYCLOAK_REALM "Application SSO realm" "${KEYCLOAK_REALM:-$ORGANIZATION_SLUG}"
+        installer_prompt_value TLS_SECRET_NAME "Shared TLS secret name" "${TLS_SECRET_NAME:-${CLOUDFLARE_TLS_SECRET_NAME:-${PLATFORM_DOMAIN//./-}-tls}}"
+        installer_prompt_value INTERNAL_DNS_ZONE "Private service DNS zone" "${INTERNAL_DNS_ZONE:-internal.$PLATFORM_DOMAIN}"
+    fi
+    platform_identity_defaults
+    platform_identity_validate || error "Invalid organization configuration."
     INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-internal.$PLATFORM_DOMAIN}"
     INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE,,}"
     [[ "$INTERNAL_DNS_ZONE" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
@@ -235,8 +255,6 @@ github_repository_url() {
 
 configure_repository_delivery() {
     local default_gitops github_url
-    local repository_name
-    repository_name="$(basename "$SCRIPT_DIR")"
     github_url="$(github_repository_url || true)"
 
     if [[ -z "$CONFIGURE_REPOSITORY_SYNC" ]]; then
@@ -257,19 +275,15 @@ configure_repository_delivery() {
     if [[ -n "${REPOSITORY_SYNC_MAPPINGS:-}" ]]; then
         error "REPOSITORY_SYNC_MAPPINGS was replaced by GITHUB_USERNAME, GITHUB_REPOSITORIES, and GITLAB_GROUP_PATH; see docs/repository-replication.md."
     fi
-    if [[ "$AUTO_APPROVE" != "true" ]]; then
-        installer_prompt_value GITLAB_GROUP_PATH "GitLab group path" "$GITLAB_GROUP_PATH"
-        installer_prompt_value GITLAB_GROUP_NAME "GitLab group display name" "$GITLAB_GROUP_NAME"
-    fi
     [[ "$GITLAB_GROUP_PATH" =~ ^[A-Za-z0-9_.-]+$ ]] || error "The platform GitLab group must be a top-level group."
-    GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$repository_name}"
+    GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$GITLAB_PROJECT_NAME}"
     default_gitops="${GITOPS_REPOSITORY_URL:-$github_url}"
     if [[ "$AUTO_APPROVE" != "true" ]]; then
         installer_prompt_value GITOPS_REPOSITORY_URL "Cluster GitOps repository URL (must already be accessible)" "$default_gitops"
     else
         GITOPS_REPOSITORY_URL="$default_gitops"
     fi
-    [[ "$GITOPS_REPOSITORY_URL" =~ ^https?://[^[:space:]]+\.git$ ]] || \
+    [[ "$GITOPS_REPOSITORY_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9_.~%+-]+)+\.git$ ]] || \
         error "Set GITOPS_REPOSITORY_URL to an HTTP(S) .git repository accessible by Argo CD."
     export CONFIGURE_REPOSITORY_SYNC GITLAB_GROUP_PATH
     export GITLAB_GROUP_NAME GITLAB_PROJECT_PATH GITOPS_REPOSITORY_URL
@@ -614,6 +628,9 @@ ask_with_default "Proceed with installation and deployment?" "Y" || { info "Abor
 installer_prompt_section "Cluster identity and deployment scope" \
     "Choose where this cluster runs and whether it includes application workloads."
 prompt_cluster_identity
+installer_prompt_section "GitOps and repository delivery" \
+    "Choose the Argo CD source and optionally configure GitHub/GitLab synchronization."
+configure_repository_delivery
 
 enrolled_exposure=""
 if command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
@@ -832,9 +849,6 @@ fi
     error "CLOUDFLARE_ACCESS_TEAM_NAME must be a single lowercase DNS label."
 export CLOUDFLARE_ACCESS_TEAM_NAME
 
-installer_prompt_section "GitOps and repository delivery" \
-    "Choose the Argo CD source and optionally configure GitHub/GitLab synchronization."
-configure_repository_delivery
 if [[ "$CONFIGURE_REPOSITORY_SYNC" == true && "$AUTO_APPROVE" == true ]]; then
     [[ -n "${GITHUB_USERNAME:-${GITHUB_OWNER:-}}" && -n "${GITHUB_ADMIN_TOKEN:-}" &&
        -n "${GITHUB_REPOSITORIES:-}" && -n "${DEPLOY_REPOSITORIES:-}" ]] || \
@@ -1126,10 +1140,10 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$CONFIGURE_CLOUDFLARE" != "true" && ( "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$DEPLOY_PLATFORM_SERVICES" == "true" || "$DEPLOY_ODOO" == "true" ) ]]; then
         step "Ensuring HTTPS TLS secret..."
         tls_domains=("$CLOUDFLARE_ZONE" "*.$CLOUDFLARE_ZONE")
-        ensure_tls_secret infra swirlit-dev-tls "${tls_domains[@]}"
-        ensure_tls_secret apps swirlit-dev-tls "${tls_domains[@]}"
+        ensure_tls_secret infra "$TLS_SECRET_NAME" "${tls_domains[@]}"
+        ensure_tls_secret apps "$TLS_SECRET_NAME" "${tls_domains[@]}"
         if [[ "$INSTALL_APPS" == "true" ]]; then
-            ensure_tls_secret corp swirlit-dev-tls "${tls_domains[@]}"
+            ensure_tls_secret corp "$TLS_SECRET_NAME" "${tls_domains[@]}"
         fi
     fi
 

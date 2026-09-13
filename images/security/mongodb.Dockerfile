@@ -13,7 +13,7 @@ RUN git apply --check /tmp/dependencies.patch && git apply /tmp/dependencies.pat
 RUN go test -p 2 -tags=gssapi,failpoints ./common/archive ./common/json ./common/options \
     && for name in bsondump mongodump mongoexport mongofiles mongoimport mongorestore mongostat mongotop; do \
       go build -p 2 -trimpath -buildmode=pie -tags=gssapi,failpoints \
-        -ldflags='-s -w -X main.VersionStr=100.18.0-swirlit.1 -X main.GitCommit=21a342dfee6468ad9350d156d25086da64dd03b1' \
+        -ldflags='-s -w -X main.VersionStr=100.18.0-platform.1 -X main.GitCommit=21a342dfee6468ad9350d156d25086da64dd03b1' \
         -o /out/$name ./$name/main; \
     done
 FROM docker.io/library/mongo@sha256:8ef27524b4cde51b9f07bb0827a56d02c6d3b148d0b7d0ca8ff4dfd57351ff4f AS upstream

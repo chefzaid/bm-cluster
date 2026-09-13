@@ -60,7 +60,7 @@ def gitlab_control_route():
 def platform_context(*, required=False):
     """Read public installed settings; explicit operator environment always wins."""
     keys = ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "KEYCLOAK_REALM", "GITLAB_PUBLIC_URL")
-    context = {key: os.environ[key] for key in (*keys, "PLATFORM_SECURITY_PROJECT_PATH") if os.environ.get(key)}
+    context = {key: os.environ[key] for key in (*keys, "PLATFORM_SECURITY_PROJECT_PATH", "GITLAB_GROUP_PATH", "TLS_SECRET_NAME") if os.environ.get(key)}
 
     def resource(kind, name, namespace):
         try:
@@ -73,15 +73,11 @@ def platform_context(*, required=False):
             return {}
 
     namespace = os.environ.get("GITLAB_NAMESPACE", "infra")
-    if not all(context.get(key) for key in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "PLATFORM_SECURITY_PROJECT_PATH")):
+    if not all(context.get(key) for key in ("PLATFORM_DOMAIN", "INTERNAL_DNS_ZONE", "PLATFORM_SECURITY_PROJECT_PATH", "GITLAB_GROUP_PATH", "TLS_SECRET_NAME")):
         application = resource("application", "bm-cluster", "infra")
         source = application.get("spec", {}).get("source", {})
         repository = urlparse(source.get("repoURL", ""))
         project_path = repository.path.strip("/").removesuffix(".git")
-        if ("PLATFORM_SECURITY_PROJECT_PATH" not in context and repository.scheme in ("http", "https", "ssh")
-                and repository.hostname and len(project_path.split("/")) >= 2
-                and all(NAME.fullmatch(part) for part in project_path.split("/"))):
-            context["PLATFORM_SECURITY_PROJECT_PATH"] = project_path + "/security"
         helm = source.get("helm", {})
         try:
             inline = yaml.safe_load(helm.get("values", "")) or {}
@@ -90,9 +86,21 @@ def platform_context(*, required=False):
         values = dict(inline) if isinstance(inline, dict) else {}
         values.update(helm.get("valuesObject") or {})
         values.update({item["name"]: item.get("value") for item in helm.get("parameters", []) if "name" in item})
-        for key, name in (("PLATFORM_DOMAIN", "publicDomain"), ("INTERNAL_DNS_ZONE", "internalDnsZone")):
+        if "PLATFORM_SECURITY_PROJECT_PATH" not in context:
+            if values.get("gitlabGroupPath") and values.get("gitlabProjectName"):
+                context["PLATFORM_SECURITY_PROJECT_PATH"] = values["gitlabGroupPath"] + "/" + values["gitlabProjectName"] + "/security"
+            elif (repository.scheme in ("http", "https", "ssh") and repository.hostname
+                  and len(project_path.split("/")) >= 2
+                  and all(NAME.fullmatch(part) for part in project_path.split("/"))):
+                context["PLATFORM_SECURITY_PROJECT_PATH"] = project_path + "/security"
+        for key, name in (("PLATFORM_DOMAIN", "publicDomain"), ("INTERNAL_DNS_ZONE", "internalDnsZone"),
+                          ("KEYCLOAK_REALM", "keycloakRealm"), ("GITLAB_GROUP_PATH", "gitlabGroupPath"),
+                          ("TLS_SECRET_NAME", "tlsSecretName")):
             if key not in context and values.get(name):
                 context[key] = values[name]
+
+    if "GITLAB_GROUP_PATH" not in context and context.get("PLATFORM_SECURITY_PROJECT_PATH"):
+        context["GITLAB_GROUP_PATH"] = context["PLATFORM_SECURITY_PROJECT_PATH"].rsplit("/", 2)[0]
 
     if "INTERNAL_DNS_ZONE" not in context:
         config = resource("configmap", "coredns-custom", "kube-system")

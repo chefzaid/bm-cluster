@@ -294,20 +294,6 @@ else
     fail "runtime references use the selected private alias zone or Kubernetes service DNS"
 fi
 
-legacy_private_dns_label=local
-legacy_private_zone="swirlit.${legacy_private_dns_label}"
-legacy_private_zone_references="$({
-    grep -RIl -F --exclude='validate-repository.sh' --exclude-dir=.git \
-        --exclude-dir=node_modules --exclude-dir=target \
-        "$legacy_private_zone" "$REPOSITORY_ROOT" || true
-} | LC_ALL=C sort -u)"
-if [[ -z "$legacy_private_zone_references" ]]; then
-    pass "legacy private DNS zone references are absent"
-else
-    printf 'Legacy private DNS zone references remain:\n%s\n' \
-        "$legacy_private_zone_references" >&2
-    fail "legacy private DNS zone references are absent"
-fi
 
 manifest_inventory_failed=false
 for manifest_csv in "$FOUNDATION_MANIFESTS" "$DATASTORE_MANIFESTS" "$PLATFORM_MANIFESTS" "$POST_DEPLOY_CREATE_MANIFESTS" "$POST_ARGOCD_MANIFESTS"; do
@@ -725,6 +711,11 @@ else
 fi
 
 if command -v helm >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+    if python3 "$SCRIPT_DIR/test-platform-identity.py"; then
+        pass "organization-neutral installation, GitOps rendering and identity preservation"
+    else
+        fail "organization-neutral installation, GitOps rendering and identity preservation"
+    fi
     if python3 "$SCRIPT_DIR/test-security-images.py"; then
         pass "public bootstrap and patched security image profiles"
     else

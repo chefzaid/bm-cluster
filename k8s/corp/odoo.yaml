@@ -53,9 +53,9 @@ data:
     from . import models
   __manifest__.py: |
     {
-        "name": "SwirlIT Keycloak SSO",
+        "name": "Platform Keycloak SSO",
         "version": "19.0.1.0.0",
-        "author": "SwirlIT",
+        "author": "Platform",
         "license": "LGPL-3",
         "depends": ["auth_oauth"],
         "installable": True,
@@ -91,7 +91,7 @@ data:
                 'post_logout_redirect_uri': 'https://odoo.__PUBLIC_DOMAIN__/',
             })
             return request.redirect(
-                'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/logout?' + query,
+                'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__/protocol/openid-connect/logout?' + query,
                 303,
                 local=False,
             )
@@ -351,8 +351,8 @@ spec:
               provider_values = {
                   'name': 'Keycloak',
                   'client_id': 'odoo',
-                  'auth_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/auth',
-                  'validation_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit/protocol/openid-connect/userinfo',
+                  'auth_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__/protocol/openid-connect/auth',
+                  'validation_endpoint': 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__/protocol/openid-connect/userinfo',
                   'data_endpoint': '',
                   'scope': 'openid profile email',
                   'enabled': True,
@@ -619,7 +619,7 @@ spec:
   tls:
     - hosts:
         - odoo.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: odoo.__PUBLIC_DOMAIN__
       http:

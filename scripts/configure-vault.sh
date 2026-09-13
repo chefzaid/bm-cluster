@@ -13,6 +13,11 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
   source "$PLATFORM_CONFIG"
 fi
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
+platform_identity_validate
 SSO_ADMIN_LIBRARY="$SCRIPT_DIR/lib/sso-admin.sh"
 VAULT_STATE_DIR="${VAULT_STATE_DIR:-/var/lib/bm-cluster}"
 VAULT_UNSEAL_KEY_FILE="$VAULT_STATE_DIR/vault-unseal-key"
@@ -466,9 +471,9 @@ if ! vault_cmd_auth "$root_token" auth list -format=json | jq -e '."oidc/"' >/de
   vault_cmd_auth "$root_token" auth enable oidc >/dev/null
 fi
 
-info "Configuring Vault OIDC authentication against the SwirlIT Keycloak realm..."
+info "Configuring Vault OIDC authentication against the $KEYCLOAK_REALM Keycloak realm..."
 vault_cmd_auth "$root_token" write auth/oidc/config \
-  oidc_discovery_url="https://keycloak.$PLATFORM_DOMAIN/auth/realms/swirlit" \
+  oidc_discovery_url="https://keycloak.$PLATFORM_DOMAIN/auth/realms/$KEYCLOAK_REALM" \
   oidc_client_id="vault" \
   oidc_client_secret="$vault_oidc_client_secret" \
   default_role="platform-admin" >/dev/null

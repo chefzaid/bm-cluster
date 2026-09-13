@@ -11,7 +11,14 @@ if [[ -r "$PLATFORM_CONFIG" ]]; then
   source "$PLATFORM_CONFIG"
 fi
 REPOSITORY_NAME="${REPOSITORY_NAME:-$(basename "$REPOSITORY_ROOT")}"
-GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-swirlit/$REPOSITORY_NAME}"
+# An explicit target may be an application in a different group from the platform.
+# Only discover the platform group when the caller did not select a project.
+if [[ -z "${GITLAB_PROJECT_PATH:-}" ]]; then
+  # shellcheck source=lib/platform-identity.sh
+  source "$SCRIPT_DIR/lib/platform-identity.sh"
+  platform_identity_load
+  GITLAB_PROJECT_PATH="${GITLAB_GROUP_PATH:?Set GITLAB_GROUP_PATH or GITLAB_PROJECT_PATH}/$REPOSITORY_NAME"
+fi
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
 GITLAB_URL="${GITLAB_URL:-${PLATFORM_DOMAIN:+https://gitlab.$PLATFORM_DOMAIN}}"
 # Only operator API traffic uses this temporary/private origin. Persisted sync

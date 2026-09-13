@@ -15,7 +15,7 @@ spec:
     - grafana.__PUBLIC_DOMAIN__
     - kafka.__PUBLIC_DOMAIN__
     - portainer.__PUBLIC_DOMAIN__
-    secretName: swirlit-dev-tls
+    secretName: __TLS_SECRET_NAME__
   rules:
   - host: argocd.__PUBLIC_DOMAIN__
     http:
@@ -75,7 +75,7 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts: [sonarqube.__PUBLIC_DOMAIN__]
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: sonarqube.__PUBLIC_DOMAIN__
       http:
@@ -105,7 +105,7 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts: [sonarqube.__PUBLIC_DOMAIN__]
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: sonarqube.__PUBLIC_DOMAIN__
       http:
@@ -135,7 +135,7 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts: [dbgate.__PUBLIC_DOMAIN__]
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: dbgate.__PUBLIC_DOMAIN__
       http:
@@ -166,7 +166,7 @@ spec:
   tls:
     - hosts:
         - kibana.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: kibana.__PUBLIC_DOMAIN__
       http:
@@ -197,7 +197,7 @@ spec:
   tls:
     - hosts:
         - longhorn.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: longhorn.__PUBLIC_DOMAIN__
       http:
@@ -228,7 +228,7 @@ spec:
   tls:
     - hosts:
         - gitlab.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: gitlab.__PUBLIC_DOMAIN__
       http:
@@ -258,7 +258,7 @@ spec:
   tls:
     - hosts:
         - registry.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: registry.__PUBLIC_DOMAIN__
       http:

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 set +x
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+platform_identity_defaults
+platform_identity_validate
 umask 077
 
 NAMESPACE="${NAMESPACE:-infra}"
 RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runners}"
 GITLAB_URL="${GITLAB_URL:-}"
-GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
-GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-SwirlIT}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/bm-cluster}"
 GITLAB_PROJECT_NAME="${GITLAB_PROJECT_NAME:-bm-cluster}"
 CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-false}"

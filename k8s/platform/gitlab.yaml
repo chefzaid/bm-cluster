@@ -55,7 +55,7 @@ data:
             email.save!
             canonical_user.emails.where.not(email: primary_email).delete_all
 
-            project = Project.find_by_full_path("swirlit/bm-cluster")
+            project = Project.find_by_full_path("__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__")
             if project
               integration = project.alert_management_http_integrations
                 .find_or_initialize_by(name: "Cluster Prometheus")
@@ -170,7 +170,7 @@ spec:
       - name: gitlab
         securityContext:
           allowPrivilegeEscalation: false
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/gitlab:19.3.1-20260909.2@sha256:17d03a47cbe3c7da7f5f29f9bcc824e0a7dec8142e9813b3b7387b2de6337945
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/gitlab:19.3.1-20260909.2@sha256:17d03a47cbe3c7da7f5f29f9bcc824e0a7dec8142e9813b3b7387b2de6337945
         env:
         - name: KEYCLOAK_CLIENT_SECRET
           valueFrom:
@@ -229,7 +229,7 @@ spec:
                   name: 'openid_connect',
                   scope: ['openid', 'profile', 'email', 'groups'],
                   response_type: 'code',
-                  issuer: 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit',
+                  issuer: 'https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__',
                   discovery: true,
                   client_auth_method: 'query',
                   uid_field: 'preferred_username',
@@ -288,7 +288,7 @@ spec:
               command:
                 - /bin/bash
                 - -lc
-                - nohup /opt/swirlit/bootstrap-sso-admin >>/var/log/gitlab/sso-admin-bootstrap.log 2>&1 </dev/null &
+                - nohup /opt/platform/bootstrap-sso-admin >>/var/log/gitlab/sso-admin-bootstrap.log 2>&1 </dev/null &
         volumeMounts:
         - name: gitlab-config
           mountPath: /etc/gitlab
@@ -297,7 +297,7 @@ spec:
         - name: gitlab-data
           mountPath: /var/opt/gitlab
         - name: sso-admin-bootstrap
-          mountPath: /opt/swirlit/bootstrap-sso-admin
+          mountPath: /opt/platform/bootstrap-sso-admin
           subPath: bootstrap.sh
           readOnly: true
       volumes:

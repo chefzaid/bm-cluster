@@ -92,7 +92,7 @@ data:
       root: ENV.fetch('GITLAB_API_URL'),
       token: ENV.fetch('GITLAB_TOKEN')
     )
-    group_path = ENV.fetch('GITLAB_GROUP_PATH', 'swirlit')
+    group_path = ENV.fetch('GITLAB_GROUP_PATH')
     retention_days = Integer(ENV.fetch('RETENTION_DAYS', '1095'), 10)
     dry_run = ENV.fetch('DRY_RUN', 'false').casecmp('true').zero?
     cutoff = Time.now.utc - (retention_days * 86_400)
@@ -184,13 +184,13 @@ spec:
               type: RuntimeDefault
           containers:
             - name: cleanup
-              image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ruby-helper@sha256:16c59a86fabfcc0217b7fe40bd65ad0f04818afc80be006ba64c7a3cbb1f3f9b
+              image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/ruby-helper@sha256:16c59a86fabfcc0217b7fe40bd65ad0f04818afc80be006ba64c7a3cbb1f3f9b
               command: [ruby, /scripts/cleanup.rb]
               env:
                 - name: GITLAB_API_URL
                   value: http://gitlab.__INTERNAL_DNS_ZONE__/api/v4
                 - name: GITLAB_GROUP_PATH
-                  value: swirlit
+                  value: __GITLAB_GROUP_PATH__
                 - name: RETENTION_DAYS
                   value: "1095"
                 - name: GITLAB_TOKEN

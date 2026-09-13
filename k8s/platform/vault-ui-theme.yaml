@@ -27,7 +27,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ui-theme
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/nginx@sha256:60fc1623a3e0c16a45cdfb0ca57034173af24ac5abf0086abd057d1f5100c5a6
+          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/nginx@sha256:60fc1623a3e0c16a45cdfb0ca57034173af24ac5abf0086abd057d1f5100c5a6
           command: ["/usr/sbin/nginx", "-c", "/theme/nginx.conf", "-g", "daemon off;"]
           ports:
             - name: http
@@ -136,7 +136,7 @@ spec:
   tls:
     - hosts:
         - vault.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: vault.__PUBLIC_DOMAIN__
       http:
@@ -227,10 +227,10 @@ data:
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
   theme.js: |
-    /* SwirlIT Vault theme: local assets, dark by default, per-browser opt-out. */
+    /* Platform Vault theme: local assets, dark by default, per-browser opt-out. */
     (() => {
       'use strict';
-      const preferenceKey = 'swirlit.vault.theme';
+      const preferenceKey = 'platform.vault.theme';
       let dark = true;
       try { dark = localStorage.getItem(preferenceKey) !== 'light'; } catch {}
       const reader = window.DarkReader;
@@ -256,7 +256,7 @@ data:
       apply();
       document.addEventListener('DOMContentLoaded', () => {
         const button = document.createElement('button');
-        button.id = 'swirlit-theme-toggle';
+        button.id = 'platform-theme-toggle';
         button.type = 'button';
         button.setAttribute('aria-label', 'Dark theme');
         const updateButton = () => {
@@ -275,7 +275,7 @@ data:
       }, { once: true });
     })();
   theme.css: |
-    #swirlit-theme-toggle {
+    #platform-theme-toggle {
       position: fixed;
       right: 1rem;
       bottom: 0.75rem;
@@ -289,7 +289,7 @@ data:
       cursor: pointer;
       box-shadow: 0 2px 8px #0002;
     }
-    #swirlit-theme-toggle:focus-visible {
+    #platform-theme-toggle:focus-visible {
       outline: 2px solid #397ee5;
       outline-offset: 3px;
     }
@@ -313,26 +313,26 @@ data:
             client_max_body_size 64k;
             location = /healthz { return 200 'ok\n'; }
             location = /ui { return 302 /ui/; }
-            location = /ui/_swirlit/darkreader.js {
+            location = /ui/_platform/darkreader.js {
                 alias /theme/darkreader.js;
                 default_type application/javascript;
                 add_header X-Content-Type-Options nosniff;
             }
-            location = /ui/_swirlit/theme.js {
+            location = /ui/_platform/theme.js {
                 alias /theme/theme.js;
                 default_type application/javascript;
                 add_header X-Content-Type-Options nosniff;
             }
-            location = /ui/_swirlit/theme.css {
+            location = /ui/_platform/theme.css {
                 alias /theme/theme.css;
                 default_type text/css;
                 add_header X-Content-Type-Options nosniff;
             }
-            location = /ui/_swirlit/LICENSE {
+            location = /ui/_platform/LICENSE {
                 alias /theme/LICENSE;
                 default_type text/plain;
             }
-            location /ui/_swirlit/ { return 404; }
+            location /ui/_platform/ { return 404; }
             location /ui/ {
                 limit_except GET { deny all; }
                 # Vault's embedded UI assets are public. Keep credentials and bodies
@@ -349,7 +349,7 @@ data:
                 proxy_connect_timeout 5s;
                 proxy_read_timeout 30s;
                 proxy_pass http://vault.__INTERNAL_DNS_ZONE__:8200;
-                sub_filter '</head>' '<link rel="stylesheet" href="/ui/_swirlit/theme.css?v=1"><script src="/ui/_swirlit/darkreader.js?v=1"></script><script src="/ui/_swirlit/theme.js?v=1"></script></head>';
+                sub_filter '</head>' '<link rel="stylesheet" href="/ui/_platform/theme.css?v=1"><script src="/ui/_platform/darkreader.js?v=1"></script><script src="/ui/_platform/theme.js?v=1"></script></head>';
                 sub_filter_once on;
             }
             location / { return 404; }

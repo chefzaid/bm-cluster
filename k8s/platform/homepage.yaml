@@ -63,7 +63,7 @@ data:
     ingress: true
 
   settings.yaml: |
-    title: Swirlit BM Cluster
+    title: __PLATFORM_TITLE_JSON__
     description: Applications, infrastructure, data, delivery, and observability
     startUrl: https://intranet.__PUBLIC_DOMAIN__
     theme: dark
@@ -462,7 +462,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/homepage:2.2.0-20260910.1@sha256:6913069a6bf1df934b18c40520f65b76b6fc1dd93d8882694c9b5cd702b94a89
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/homepage:2.2.0-20260910.1@sha256:6913069a6bf1df934b18c40520f65b76b6fc1dd93d8882694c9b5cd702b94a89
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -597,7 +597,7 @@ spec:
   tls:
   - hosts:
     - intranet.__PUBLIC_DOMAIN__
-    secretName: swirlit-dev-tls
+    secretName: __TLS_SECRET_NAME__
   rules:
   - host: intranet.__PUBLIC_DOMAIN__
     http:

@@ -34,7 +34,7 @@ Automation (--yes never prompts):
   INTERNAL_DNS_ZONE      Private service zone; discovered, never guessed from public DNS
   KEYCLOAK_REALM         Existing application realm; otherwise read from the SSO issuer
   PLATFORM_SECURITY_PROJECT_PATH  Shared helper image prefix; read from platform GitOps
-  GITLAB_GROUP_PATH       Destination group (default: swirlit)
+  GITLAB_GROUP_PATH       Destination group (discovered from the installed platform)
   DEPLOY_REPOSITORIES     Required with --yes: comma-separated names, all, or none
   GITLAB_ADMIN_TOKEN      Optional on the control plane: issued locally otherwise
   CLOUDFLARE_API_TOKEN    Zone Read/DNS Edit token; prompted during interactive setup
@@ -87,13 +87,13 @@ trap 'exit 143' TERM
 
 GITHUB_USERNAME="${GITHUB_USERNAME:-${GITHUB_OWNER:-}}"
 GITHUB_REPOSITORIES="${GITHUB_REPOSITORIES:-}"
-GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-swirlit}"
+GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-}"
 GITLAB_PUBLIC_URL="${GITLAB_PUBLIC_URL:-${PLATFORM_DOMAIN:+https://gitlab.$PLATFORM_DOMAIN}}"
 export GITLAB_PUBLIC_URL
 # Values are public JSON, never sourced shell code. Deployment revalidates that
 # every required setting was explicit or discoverable before changing an app.
 platform_settings="$(python3 "$SCRIPT_DIR/scripts/replicate-repositories.py" --platform-context)"
-for setting in PLATFORM_DOMAIN INTERNAL_DNS_ZONE KEYCLOAK_REALM GITLAB_PUBLIC_URL PLATFORM_SECURITY_PROJECT_PATH; do
+for setting in PLATFORM_DOMAIN INTERNAL_DNS_ZONE KEYCLOAK_REALM GITLAB_PUBLIC_URL PLATFORM_SECURITY_PROJECT_PATH GITLAB_GROUP_PATH TLS_SECRET_NAME; do
     setting_value="$(jq -r --arg name "$setting" '.[$name] // empty' <<< "$platform_settings")"
     if [[ -n "$setting_value" ]]; then
         printf -v "$setting" '%s' "$setting_value"

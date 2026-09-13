@@ -4,6 +4,11 @@ K3s infrastructure for a single server or a cluster of control planes and worker
 This repository installs and manages the shared platform: networking, storage,
 identity, databases, delivery, observability, security, and Odoo.
 
+The installer prompts for your organization, domain, node, and delivery identity
+before installation. Configuration is parameterized for each deployment; see
+[organization settings](docs/installation.md#organization-and-installation-identity)
+for interactive setup, unattended inputs, and preservation of existing settings.
+
 Application repositories own their runtime manifests, pipelines, secrets
 contracts and Argo CD Applications. The platform discovers supported workloads
 through Kubernetes metadata; it has no application repository inventory.

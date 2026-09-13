@@ -18,6 +18,39 @@ spec:
           value: __SECURITY_SCANNER_REGISTRY__
         - name: trivy-operator.trivy.image.registry
           value: __SECURITY_SCANNER_REGISTRY__
+        - name: organizationName
+          value: __ORGANIZATION_NAME_JSON__
+          forceString: true
+        - name: organizationSlug
+          value: "__ORGANIZATION_SLUG__"
+          forceString: true
+        - name: gitlabGroupPath
+          value: "__GITLAB_GROUP_PATH__"
+          forceString: true
+        - name: gitlabGroupName
+          value: __GITLAB_GROUP_NAME_JSON__
+          forceString: true
+        - name: gitlabProjectName
+          value: "__GITLAB_PROJECT_NAME__"
+          forceString: true
+        - name: keycloakRealm
+          value: "__KEYCLOAK_REALM__"
+          forceString: true
+        - name: tlsSecretName
+          value: "__TLS_SECRET_NAME__"
+          forceString: true
+        - name: sonarAlmSetting
+          value: "__SONAR_ALM_SETTING__"
+          forceString: true
+        - name: cloudflareAccessIdpName
+          value: __CLOUDFLARE_ACCESS_IDP_NAME_JSON__
+          forceString: true
+        - name: trivy-operator.image.repository
+          value: __SECURITY_OPERATOR_REPOSITORY__
+          forceString: true
+        - name: trivy-operator.trivy.image.repository
+          value: __SECURITY_TRIVY_REPOSITORY__
+          forceString: true
         - name: publicDomain
           value: __PUBLIC_DOMAIN__
         - name: internalDnsZone

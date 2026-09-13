@@ -48,7 +48,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: migrate-sso-identity
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
+          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
           env:
             - name: SONAR_DB_PASSWORD
               valueFrom:
@@ -260,7 +260,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
       - name: prepare-theme
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/sonarqube:26.8.0-20260909.1@sha256:7c243ac15b5df71387fe0b41e9ffaf9b164aa7f165f38dcf6c1209ea6c1a812d
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/sonarqube:26.8.0-20260909.1@sha256:7c243ac15b5df71387fe0b41e9ffaf9b164aa7f165f38dcf6c1209ea6c1a812d
         command:
         - sh
         - -ec
@@ -291,7 +291,7 @@ spec:
         - name: sonarqube-themed-index
           mountPath: /prepared
       - name: init-database
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/postgres-client@sha256:0fbebd30e2814439e79bf53ca0187f2bfd9ff593edbb8a15a5b001daad698bdb
         securityContext:
           runAsNonRoot: true
           runAsUser: 10001
@@ -350,7 +350,7 @@ spec:
             memory: 256Mi
       containers:
       - name: sonarqube
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/sonarqube:26.8.0-20260909.1@sha256:7c243ac15b5df71387fe0b41e9ffaf9b164aa7f165f38dcf6c1209ea6c1a812d
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/sonarqube:26.8.0-20260909.1@sha256:7c243ac15b5df71387fe0b41e9ffaf9b164aa7f165f38dcf6c1209ea6c1a812d
         ports:
         - containerPort: 9000
         env:
@@ -381,19 +381,19 @@ spec:
           subPath: index.html
           readOnly: true
         - name: sonarqube-dark-theme
-          mountPath: /opt/sonarqube/web/js/swirlit-darkreader.js
+          mountPath: /opt/sonarqube/web/js/platform-darkreader.js
           subPath: darkreader.js
           readOnly: true
         - name: sonarqube-dark-theme
-          mountPath: /opt/sonarqube/web/js/swirlit-theme.js
+          mountPath: /opt/sonarqube/web/js/platform-theme.js
           subPath: theme.js
           readOnly: true
         - name: sonarqube-dark-theme
-          mountPath: /opt/sonarqube/web/css/swirlit-theme.css
+          mountPath: /opt/sonarqube/web/css/platform-theme.css
           subPath: theme.css
           readOnly: true
         - name: sonarqube-dark-theme
-          mountPath: /opt/sonarqube/web/js/swirlit-darkreader.LICENSE.txt
+          mountPath: /opt/sonarqube/web/js/platform-darkreader.LICENSE.txt
           subPath: LICENSE
           readOnly: true
         - name: sonarqube-data
@@ -562,10 +562,10 @@ data:
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE.
   theme.js: |
-    /* SwirlIT Sonar theme: local assets, dark by default, per-browser opt-out. */
+    /* Platform Sonar theme: local assets, dark by default, per-browser opt-out. */
     (() => {
       'use strict';
-      const preferenceKey = 'swirlit.sonar.theme';
+      const preferenceKey = 'platform.sonar.theme';
       let dark = true;
       try { dark = localStorage.getItem(preferenceKey) !== 'light'; } catch {}
       const reader = window.DarkReader;
@@ -591,7 +591,7 @@ data:
       apply();
       document.addEventListener('DOMContentLoaded', () => {
         const button = document.createElement('button');
-        button.id = 'swirlit-theme-toggle';
+        button.id = 'platform-theme-toggle';
         button.type = 'button';
         button.setAttribute('aria-label', 'Dark theme');
         const updateButton = () => {
@@ -610,7 +610,7 @@ data:
       }, { once: true });
     })();
   theme.css: |
-    #swirlit-theme-toggle {
+    #platform-theme-toggle {
       position: fixed;
       right: 1rem;
       bottom: 0.75rem;
@@ -624,11 +624,11 @@ data:
       cursor: pointer;
       box-shadow: 0 2px 8px #0002;
     }
-    #swirlit-theme-toggle:focus-visible {
+    #platform-theme-toggle:focus-visible {
       outline: 2px solid #397ee5;
       outline-offset: 3px;
     }
   head.html: |2
-        <link rel="stylesheet" href="WEB_CONTEXT/css/swirlit-theme.css?v=1" />
-        <script src="WEB_CONTEXT/js/swirlit-darkreader.js?v=1"></script>
-        <script src="WEB_CONTEXT/js/swirlit-theme.js?v=1"></script>
+        <link rel="stylesheet" href="WEB_CONTEXT/css/platform-theme.css?v=1" />
+        <script src="WEB_CONTEXT/js/platform-darkreader.js?v=1"></script>
+        <script src="WEB_CONTEXT/js/platform-theme.js?v=1"></script>

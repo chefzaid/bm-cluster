@@ -42,7 +42,7 @@ spec:
         fsGroup: 10001
       containers:
       - name: redis
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/redis@sha256:840b1a927e22d5f13b58c001588b89766c7ff972d4802a9e5df70ac294971973
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/redis@sha256:840b1a927e22d5f13b58c001588b89766c7ff972d4802a9e5df70ac294971973
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

@@ -28,7 +28,7 @@ redis:
     seccompProfile:
       type: RuntimeDefault
   image:
-    repository: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/redis
+    repository: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/redis
     tag: 20260907.1@sha256:840b1a927e22d5f13b58c001588b89766c7ff972d4802a9e5df70ac294971973
 dex:
   enabled: false
@@ -41,7 +41,7 @@ configs:
     admin.enabled: false
     oidc.config: |
       name: Keycloak
-      issuer: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
+      issuer: https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__
       clientID: argocd
       enablePKCEAuthentication: true
       requestedScopes:

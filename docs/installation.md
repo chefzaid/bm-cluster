@@ -23,7 +23,8 @@ For a new cluster:
 ./install-control-plane.sh
 ```
 
-The assistant collects the domain, node identity, installation scope, topology,
+The assistant first collects the organization, domain, GitLab project, SSO realm,
+TLS secret name, private DNS zone, node identity, and GitOps source. It then collects installation scope, topology,
 platform components, recovery destination, public access and administrator
 credentials. The recommended bundle installs the shared platform; declining it
 lets you select components individually. `infra + apps` adds centrally managed
@@ -43,6 +44,42 @@ For multiple nodes, choose one [private transport](networking.md#private-node-ne
 and complete its account prerequisites. Interactive setup guides these steps
 before changing the firewall. Unattended runs require them to be complete.
 The administrator password follows the [identity policy](security.md).
+
+## Organization and installation identity
+
+The installer supports your own organization and domain on a supported Ubuntu
+host. Runtime configuration contains placeholders; the installer renders public
+URLs, registry paths, authentication issuers, discovery settings, and branding
+from your answers before installing services. The source checkout stays generic.
+
+| Environment input | Helm value | Default or requirement |
+|---|---|---|
+| `ORGANIZATION_NAME` | `organizationName` | Required by the installer; company display name, including spaces and punctuation. |
+| `ORGANIZATION_SLUG` | `organizationSlug` | First label of the public domain; a lowercase DNS label. |
+| `PLATFORM_DOMAIN` | `publicDomain` | Required public base domain, such as `example.com`. |
+| `INTERNAL_DNS_ZONE` | `internalDnsZone` | `internal.<PLATFORM_DOMAIN>`; must differ from the public domain. |
+| `GITLAB_GROUP_PATH` | `gitlabGroupPath` | Organization slug; the installer provisions a top-level group. |
+| `GITLAB_GROUP_NAME` | `gitlabGroupName` | Organization display name. |
+| `GITLAB_PROJECT_NAME` | `gitlabProjectName` | `bm-cluster`; all platform image paths and GitLab integrations follow this choice. |
+| `KEYCLOAK_REALM` | `keycloakRealm` | Organization slug; `master` is reserved for Keycloak administration. |
+| `TLS_SECRET_NAME` | `tlsSecretName` | Public domain with dots replaced by hyphens, plus `-tls`; shared by ingress and certificate provisioning. `CLOUDFLARE_TLS_SECRET_NAME` is an alias. |
+| `SONAR_ALM_SETTING` | `sonarAlmSetting` | `<organization-slug>-gitlab`; the managed Sonar GitLab integration. |
+| `CLOUDFLARE_ACCESS_IDP_NAME` | `cloudflareAccessIdpName` | `<organization-name> Keycloak`; identifies the managed Access identity provider. |
+| `CLOUDFLARE_ACCESS_TEAM_NAME` | `cloudflareAccessTeamName` | Existing Zero Trust team label, or `bm-cluster-<domain-with-hyphens>` for a new team. |
+| `GITOPS_REPOSITORY_URL` | `gitopsRepositoryURL` | Accessible HTTP(S) `.git` URL; interactive setup suggests the checkout's remote. |
+
+The generated Argo CD Application carries these settings into subsequent Helm
+reconciliation. The public `infra/bm-cluster-identity` ConfigMap records installed
+choices for installer reruns, Ansible, and provisioning helpers. Explicit
+environment inputs override stored choices. Credentials remain in the existing
+secret-management flow; do not commit generated configuration or cluster values.
+
+For an existing installation created before this identity contract, preserve its
+current realm, GitLab group/project, TLS secret, organization name, and integration
+names as explicit Helm parameters on the installed `bm-cluster` Application
+**before syncing the generalized chart**. Supply the same values to a first
+installer/Ansible rerun. This records the existing identity; changing a realm,
+domain, or repository path is a separate migration of accounts and resources.
 
 ## Topology and scheduling
 
@@ -71,6 +108,8 @@ This example installs a single node with local exposure. Replace the domain,
 node name and GitOps URL with your own values:
 
 ```bash
+export ORGANIZATION_NAME='Example Company'
+export ORGANIZATION_SLUG=example
 export PLATFORM_DOMAIN=example.com
 export CONTROL_PLANE_NODE_NAME=control-plane-01
 export SERVER_EXPOSURE=local

@@ -36,10 +36,18 @@ bootstrap uses `docker.io`. Publish images and provision pull credentials before
 enabling the patched profile. See [Ansible operations](ansible.md) for
 reconciliation inputs.
 
+The installer also supplies `trivy-operator.image.repository` and
+`trivy-operator.trivy.image.repository` as Argo CD Helm parameters. Patched image
+repositories use `<GITLAB_GROUP_PATH>/<GITLAB_PROJECT_NAME>/security/<component>`;
+bootstrap repositories use the upstream catalog. Keep these explicit parameters
+when managing the Application manually: [Helm dependency values](https://helm.sh/docs/topics/charts/)
+are supplied by the parent and are not automatically rendered from placeholders.
+
 Argo CD's Redis image in [its Helm values](../config/argocd-values.yaml) is
-configured separately and remains private in both profiles. Make that exact
-image and its pull credentials available before installing Argo CD; selecting
-bootstrap alone does not remove this dependency.
+configured separately by the same renderer. Bootstrap selects its public upstream
+image; patched selects the configured platform registry project and requires its
+pull credentials. A fresh bootstrap installation can therefore start Argo CD
+before private platform images have been published.
 
 ## Build and promote
 

@@ -48,7 +48,7 @@ spec:
   tls:
     - hosts:
         - vault.__PUBLIC_DOMAIN__
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: vault.__PUBLIC_DOMAIN__
       http:

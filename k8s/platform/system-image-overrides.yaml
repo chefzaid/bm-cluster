@@ -28,7 +28,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'coredns',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/coredns:1.14.7-20260909.1@sha256:732c2af911d1fd54dcba79c08a498f2e89e3343d862ff1c75119e89ce6469a27'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/coredns:1.14.7-20260909.1@sha256:732c2af911d1fd54dcba79c08a498f2e89e3343d862ff1c75119e89ce6469a27'
                   }]
                 }
               }
@@ -84,7 +84,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'longhorn-ui',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/longhorn-ui:1.12.1-20260909.1@sha256:668baf58aa165952036182d306f69c18f68d639a821bc107faf2fd519289535b'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/longhorn-ui:1.12.1-20260909.1@sha256:668baf58aa165952036182d306f69c18f68d639a821bc107faf2fd519289535b'
                   }]
                 }
               }
@@ -140,7 +140,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'metrics-server',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/metrics-server:0.9.0-20260909.1@sha256:c15f3ecfd7ea8bd082e9d6aecd295c61f7f06789b55a6fb23fe80e48c93b9dfd'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/metrics-server:0.9.0-20260909.1@sha256:c15f3ecfd7ea8bd082e9d6aecd295c61f7f06789b55a6fb23fe80e48c93b9dfd'
                   }]
                 }
               }
@@ -196,7 +196,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'local-path-provisioner',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/local-path-provisioner:0.0.37-20260909.1@sha256:0c88516adce015ff6213f0b6042635d03b91f41ab313755a44bf6c2dd6a627a4'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/local-path-provisioner:0.0.37-20260909.1@sha256:0c88516adce015ff6213f0b6042635d03b91f41ab313755a44bf6c2dd6a627a4'
                   }]
                 }
               }
@@ -252,7 +252,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'csi-attacher',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-attacher:4.12.0-20260909.1@sha256:107811edf5ff945253ebd4a09859a4d0206f3b17c5885225ce2872469bf85fd9'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/csi-attacher:4.12.0-20260909.1@sha256:107811edf5ff945253ebd4a09859a4d0206f3b17c5885225ce2872469bf85fd9'
                   }]
                 }
               }
@@ -308,7 +308,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'csi-provisioner',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-provisioner:5.3.0-20260909.1@sha256:09ab294e450a5bb0f0d5952950e3eddb55847b9f4fe67474aba595e2b5db0af7'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/csi-provisioner:5.3.0-20260909.1@sha256:09ab294e450a5bb0f0d5952950e3eddb55847b9f4fe67474aba595e2b5db0af7'
                   }]
                 }
               }
@@ -364,7 +364,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'csi-resizer',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-resizer:2.2.1-20260909.1@sha256:d7fcf7064264011e9d94975165fb197123d42b97c365829e23a3179620fba4a5'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/csi-resizer:2.2.1-20260909.1@sha256:d7fcf7064264011e9d94975165fb197123d42b97c365829e23a3179620fba4a5'
                   }]
                 }
               }
@@ -420,7 +420,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'csi-snapshotter',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/csi-snapshotter:8.6.0-20260909.1@sha256:44bdb8b0a767ee726aadd7a15ef91ae8351c802a9734000950a529f0e3f80ead'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/csi-snapshotter:8.6.0-20260909.1@sha256:44bdb8b0a767ee726aadd7a15ef91ae8351c802a9734000950a529f0e3f80ead'
                   }]
                 }
               }
@@ -476,7 +476,7 @@ spec:
                 spec: Object.spec.template.spec{
                   containers: [Object.spec.template.spec.containers{
                     name: 'controller',
-                    image: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
+                    image: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
                   }]
                 }
               }
@@ -491,7 +491,7 @@ spec:
             object.spec.template.spec.initContainers.transformList(i, c, c.name == 'prepare-nginx-dirs',
               JSONPatch{
                 op: 'replace', path: '/spec/template/spec/initContainers/' + string(i) + '/image',
-                value: 'registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
+                value: 'registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3'
               }
             ) : []
     # LocalObjectReference entries are atomic; preserve unrelated pull secrets

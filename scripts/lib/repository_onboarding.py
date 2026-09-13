@@ -163,14 +163,14 @@ def public_context(runner, slug, project):
     internal = "http://gitlab." + runner.internal_zone
     return {
         "PUBLIC_DOMAIN": domain, "INTERNAL_DNS_ZONE": runner.internal_zone,
-        "TLS_SECRET_NAME": domain.replace(".", "-") + "-tls",
+        "TLS_SECRET_NAME": os.environ.get("TLS_SECRET_NAME") or domain.replace(".", "-") + "-tls",
         "GITLAB_PROJECT_PATH": project["path_with_namespace"], "GITLAB_PROJECT_ID": str(project["id"]),
         "GITLAB_PUBLIC_URL": runner.public_url, "GITLAB_INTERNAL_URL": internal,
         "GITLAB_REPOSITORY_URL": internal + "/" + project["path_with_namespace"] + ".git",
         "REGISTRY_HOST": "registry." + domain,
         "REGISTRY_PUSH_HOST": "gitlab-registry." + runner.internal_zone + ":5050",
         "GITHUB_OWNER": slug.split("/")[0], "GITHUB_REPOSITORY": slug.split("/")[1],
-        "DEFAULT_BRANCH": project["default_branch"], "KEYCLOAK_REALM": os.environ.get("KEYCLOAK_REALM", "swirlit"),
+        "DEFAULT_BRANCH": project["default_branch"], "KEYCLOAK_REALM": os.environ.get("KEYCLOAK_REALM", ""),
         "POD_CIDR": os.environ.get("K3S_CLUSTER_CIDR", "10.42.0.0/16"),
         "PLATFORM_SECURITY_PROJECT_PATH": os.environ.get("PLATFORM_SECURITY_PROJECT_PATH", ""),
         "SONAR_PROJECT_KEY": project["path_with_namespace"].replace("/", ":"),

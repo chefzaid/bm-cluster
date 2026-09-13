@@ -54,7 +54,7 @@ data:
     #!/bin/sh
     set -eu
 
-    realm="swirlit"
+    realm="__KEYCLOAK_REALM__"
     server="http://keycloak:8080/auth"
     response_file="/tmp/keycloak-response.json"
 
@@ -126,6 +126,7 @@ data:
       sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g'
     }
 
+    organization_name_json="$(printf '%s' "$ORGANIZATION_NAME" | json_escape)"
     sso_username_json="$(printf '%s' "$SSO_BOOTSTRAP_USERNAME" | json_escape)"
     sso_password_json="$(printf '%s' "$SSO_BOOTSTRAP_PASSWORD" | json_escape)"
     sso_email_json="$(printf '%s' "$SSO_PRIMARY_EMAIL" | json_escape)"
@@ -143,13 +144,13 @@ data:
 
     status="$(request GET "realms/$realm")"
     if [ "$status" = 404 ]; then
-      expect_success "$(request POST realms '{"realm":"swirlit","enabled":true}')"
+      expect_success "$(request POST realms '{"realm":"__KEYCLOAK_REALM__","enabled":true}')"
     fi
 
     realm_body='{
-      "realm":"swirlit",
+      "realm":"__KEYCLOAK_REALM__",
       "enabled":true,
-      "displayName":"SwirlIT",
+      "displayName":"'"$organization_name_json"'",
       "registrationAllowed":false,
       "resetPasswordAllowed":true,
       "rememberMe":true,
@@ -239,8 +240,8 @@ data:
       fi
     }
 
-    ensure_role platform-user "May sign in to SwirlIT applications and services"
-    ensure_role platform-admin "Administrator of SwirlIT applications and services"
+    ensure_role platform-user "May sign in to Platform applications and services"
+    ensure_role platform-admin "Administrator of Platform applications and services"
 
     # Services such as GitLab, Grafana, Argo CD, Vault, Kafka UI, and
     # Portainer request the groups scope explicitly. A client-level groups
@@ -257,7 +258,7 @@ data:
     if [ -z "$groups_scope_id" ]; then
       groups_scope_body='{
         "name":"groups",
-        "description":"SwirlIT group memberships used for application authorization",
+        "description":"Platform group memberships used for application authorization",
         "protocol":"openid-connect",
         "attributes":{
           "include.in.token.scope":"true",
@@ -496,7 +497,7 @@ data:
 
     # Keycloak realms are hard identity boundaries. Provision a matching local
     # identity in master so the same managed username/password can administer
-    # the entire Keycloak instance, not only the SwirlIT realm. If LDAP later
+    # the entire Keycloak instance, not only the Platform realm. If LDAP later
     # owns this master identity, preserve its federated credential linkage.
     expect_success "$(request GET "realms/master/users?username=$SSO_BOOTSTRAP_USERNAME&exact=true")"
     master_user_id="$(extract_id)"
@@ -584,7 +585,10 @@ spec:
       containers:
         - name: reconcile
           image: docker.io/curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
-          command: ["/bin/sh", "/opt/swirlit/reconcile.sh"]
+          command: ["/bin/sh", "/opt/platform/reconcile.sh"]
+          env:
+            - name: ORGANIZATION_NAME
+              value: __ORGANIZATION_NAME_JSON__
           envFrom:
             - secretRef:
                 name: keycloak-admin-secret
@@ -603,7 +607,7 @@ spec:
               memory: 128Mi
           volumeMounts:
             - name: script
-              mountPath: /opt/swirlit/reconcile.sh
+              mountPath: /opt/platform/reconcile.sh
               subPath: reconcile.sh
               readOnly: true
       volumes:
@@ -660,10 +664,10 @@ spec:
         fsGroup: 10001
       containers:
         - name: oauth2-proxy
-          image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/oauth2-proxy:7.15.4-20260908.1@sha256:5cb48ce3268c9877d0399649895719707e5e9ecf43ec480d3de88e9aa8ef1e48
+          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/oauth2-proxy:7.15.4-20260908.1@sha256:5cb48ce3268c9877d0399649895719707e5e9ecf43ec480d3de88e9aa8ef1e48
           args:
             - --provider=keycloak-oidc
-            - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/swirlit
+            - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__
             - --client-id=oauth2-proxy
             - --redirect-url=https://keycloak.__PUBLIC_DOMAIN__/oauth2/callback
             - --http-address=0.0.0.0:4180
@@ -742,7 +746,7 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts: [keycloak.__PUBLIC_DOMAIN__]
-      secretName: swirlit-dev-tls
+      secretName: __TLS_SECRET_NAME__
   rules:
     - host: keycloak.__PUBLIC_DOMAIN__
       http:

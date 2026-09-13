@@ -73,7 +73,7 @@ controller:
     mountPath: /tmp
   extraInitContainers:
   - name: prepare-nginx-dirs
-    image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3
+    image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/ingress-nginx:1.15.1-20260909.2@sha256:0246410be551621a760dc542658e6aa7009febe0398b4cbcb98117f6e00e0fe3
     command:
     - /bin/sh
     - -ec

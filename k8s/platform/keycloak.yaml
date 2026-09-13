@@ -48,7 +48,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: keycloak
-        image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/keycloak:26.7.3-20260909.1@sha256:488f84ab5d7935d7e98eb3a4597a098903678eb971dba82042f3da05d1cd1154
+        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/keycloak:26.7.3-20260909.1@sha256:488f84ab5d7935d7e98eb3a4597a098903678eb971dba82042f3da05d1cd1154
         args: __KEYCLOAK_START_ARGS__
         securityContext:
           allowPrivilegeEscalation: false

@@ -10,6 +10,6 @@ ENV CGO_ENABLED=0 GOMAXPROCS=2 GOMEMLIMIT=1400MiB
 RUN ./ttar -C collector/fixtures -x -f collector/fixtures/sys.ttar \
     && ./ttar -C collector/fixtures -x -f collector/fixtures/udev.ttar \
     && go test -p 2 ./collector \
-    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=1.12.1-swirlit.1" -o /out/node_exporter .
+    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=1.12.1-platform.1" -o /out/node_exporter .
 FROM quay.io/prometheus/node-exporter@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
 COPY --from=build /out/node_exporter /bin/node_exporter

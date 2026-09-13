@@ -14,8 +14,8 @@ RUN npm ci --no-audit --no-fund && npm run build
 FROM source AS build
 COPY --from=ui /ui/dist/ /src/ui/app/dist/
 RUN go test -p 2 ./config ./notify/... ./ui \
-    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=0.34.0-swirlit.1" -o /out/alertmanager ./cmd/alertmanager \
-    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=0.34.0-swirlit.1" -o /out/amtool ./cmd/amtool
+    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=0.34.0-platform.1" -o /out/alertmanager ./cmd/alertmanager \
+    && go build -p 2 -trimpath -ldflags="-s -w -X github.com/prometheus/common/version.Version=0.34.0-platform.1" -o /out/amtool ./cmd/amtool
 FROM quay.io/prometheus/alertmanager@sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d
 COPY --from=build /out/alertmanager /bin/alertmanager
 COPY --from=build /out/amtool /bin/amtool

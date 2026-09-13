@@ -195,7 +195,7 @@ data:
           const binding = await sonar.call('GET', `api/alm_settings/get_binding?project=${encodeURIComponent(key)}`);
           if (!binding) {
             const settings = await sonar.call('GET', 'api/v2/dop-translation/dop-settings');
-            const setting = settings.dopSettings.find(item => item.key === 'swirlit-gitlab');
+            const setting = settings.dopSettings.find(item => item.key === '__SONAR_ALM_SETTING__');
             if (!setting) throw new Error('Managed GitLab ALM setting is missing');
             await sonar.call('PUT', 'api/v2/dop-translation/bound-projects', {
               projectKey: key, projectName: project.name, devOpsPlatformSettingId: setting.id,
@@ -326,13 +326,13 @@ spec:
               type: RuntimeDefault
           containers:
             - name: discovery
-              image: registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
+              image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/node@sha256:63d6c7b512ce175ca8fc0cc4a4d437a37e6d97e527b19da1ce5308fa9bc70d1f
               command: [node, /scripts/discovery.mjs]
               env:
                 - name: GITLAB_API_URL
                   value: http://gitlab.__INTERNAL_DNS_ZONE__/api/v4
                 - name: GITLAB_GROUP_PATH
-                  value: swirlit
+                  value: __GITLAB_GROUP_PATH__
                 - name: GITLAB_REPOSITORY_HOSTS
                   value: gitlab.__INTERNAL_DNS_ZONE__,gitlab.__PUBLIC_DOMAIN__
                 - name: SONAR_HOST_URL

@@ -31,5 +31,5 @@
     "prometheus": "docker.io/prom/prometheus@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9",
     "keycloak": "quay.io/keycloak/keycloak@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54"
   },
-  "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/swirlit/bm-cluster/security/vault:2.1.0-20260910.1@sha256:00c987f582b1db1493521c92f1f957c1db643b2cefc4839290c815ebc809295e"
+  "vaultPatchedImage": "registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/vault:2.1.0-20260910.1@sha256:00c987f582b1db1493521c92f1f957c1db643b2cefc4839290c815ebc809295e"
 }

@@ -163,9 +163,9 @@ class InstallerTest(unittest.TestCase):
     def exercise(self, requested, stored):
         with tempfile.TemporaryDirectory(prefix="bm-ingress-test.") as directory:
             root = Path(directory)
-            for folder in ("config", "scripts", "bin"):
+            for folder in ("config", "scripts", "scripts/lib", "bin"):
                 (root / folder).mkdir()
-            for source in ("config/platform.env", "config/ingress-nginx-values.yaml", "config/ingress-nginx-ha-values.yaml", "scripts/configure-ingress.sh"):
+            for source in ("config/platform.env", "config/ingress-nginx-values.yaml", "config/ingress-nginx-ha-values.yaml", "scripts/configure-ingress.sh", "scripts/platform-identity.py", "scripts/lib/platform-identity.sh"):
                 shutil.copy(ROOT / source, root / source)
             reconciler = root / "scripts/reconcile-cluster-topology.sh"
             reconciler.write_text("#!/bin/sh\n[ \"$HIGH_AVAILABILITY_ENABLED\" = true ]\n")
@@ -177,7 +177,7 @@ class InstallerTest(unittest.TestCase):
             result_file = root / "result.json"
             env = {**os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
                    "STORED_MODE": stored, "HIGH_AVAILABILITY_ENABLED": requested,
-                   "RESULT": str(result_file)}
+                   "RESULT": str(result_file), "PLATFORM_DOMAIN": "example.com"}
             env.pop("CLOUDFLARE_API_TOKEN", None)
             run = subprocess.run(["bash", str(root / "scripts/configure-ingress.sh")], env=env,
                                  text=True, capture_output=True, timeout=30)
@@ -196,7 +196,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIsNone(overlay["controller"]["nodeSelector"]["svccontroller.k3s.cattle.io/enablelb"])
         self.assertEqual(overlay["controller"]["config"]["proxy-real-ip-cidr"], "127.0.0.1/32,::1/128")
         self.assertEqual(overlay["controller"]["config"]["use-forwarded-headers"], "false")
-        self.assertIn("controller.extraArgs.default-ssl-certificate=infra/swirlit-dev-tls", result['args'])
+        self.assertIn("controller.extraArgs.default-ssl-certificate=infra/example-com-tls", result['args'])
         sidecar = overlay["controller"]["extraContainers"][-1]
         self.assertEqual(sidecar["livenessProbe"]["httpGet"]["port"], 10254)
         self.assertEqual(sidecar["readinessProbe"]["httpGet"]["port"], 2000)
