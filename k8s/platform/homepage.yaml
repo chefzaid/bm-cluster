@@ -440,6 +440,8 @@ spec:
         app.kubernetes.io/part-of: bm-cluster
       annotations:
         bm-cluster/config-revision: "7"
+        # settings.yaml uses subPath; replace pods when the organization title changes.
+        bm-cluster/organization-name: __ORGANIZATION_NAME_JSON__
     spec:
       serviceAccountName: homepage
       automountServiceAccountToken: true

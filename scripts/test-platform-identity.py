@@ -83,6 +83,7 @@ class IdentityTest(unittest.TestCase):
                 self.assertEqual(stored["TLS_SECRET_NAME"], "shared-wildcard-tls")
                 homepage = yaml.safe_load(runtime["ConfigMap/homepage-config"]["data"]["settings.yaml"])
                 self.assertEqual(homepage["title"], name + " Intranet")
+                self.assertEqual(runtime["Deployment/homepage"]["spec"]["template"]["metadata"]["annotations"]["bm-cluster/organization-name"], name)
                 for item in runtime.values():
                     if item["kind"] == "Ingress":
                         for tls in item["spec"].get("tls", []):
