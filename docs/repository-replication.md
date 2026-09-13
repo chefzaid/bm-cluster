@@ -131,6 +131,11 @@ Its source must be a local Kustomize directory or Helm chart following the defau
 branch, targeting `apps` on `https://kubernetes.default.svc`. Its AppProject must
 already allow that source/destination. External charts and multi-source
 Applications are unsupported.
+
+Deploying workloads in `apps` also enables automatic discovery for SonarQube and
+per-application Grafana and ELK/Kibana dashboards. Follow the [namespace and discovery requirements](application-onboarding.md#namespace-and-automatic-discovery)
+to configure source analysis and optional application metrics alongside deployment.
+
 Use repository-owned configuration rather than custom Argo CD source overrides;
 unsupported Helm/Kustomize source options are rejected so validation and deployment
 render the same resources.

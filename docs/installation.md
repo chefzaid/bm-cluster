@@ -34,6 +34,10 @@ The `apps` namespace, its baseline networking, shared credentials and TLS
 foundation remain available with `INSTALL_SCOPE=infra`; Odoo does not need
 to be enabled for external applications.
 
+Deploy external workloads in `apps` for automatic SonarQube, Prometheus/Grafana,
+and ELK/Kibana discovery once those services are configured. The [application onboarding guide](application-onboarding.md#namespace-and-automatic-discovery)
+documents the namespace settings, automatic dashboards, and scanner requirements.
+
 Prepare a domain for public deployment and an accessible GitOps repository URL.
 For multiple nodes, choose one [private transport](networking.md#private-node-network)
 and complete its account prerequisites. Interactive setup guides these steps

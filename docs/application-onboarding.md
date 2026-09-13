@@ -4,6 +4,48 @@ Applications opt into [`add-repos.sh`](repository-replication.md) by committing
 `infra/onboarding.json`. Version 1 is declarative: the platform performs the
 supported service operations without running repository scripts or playbooks.
 
+## Namespace and automatic discovery
+
+Deploy application workloads in the **`apps` Kubernetes namespace**. With the
+shared observability and Sonar services installed and configured, this is the
+namespace used for automatic discovery by SonarQube, Prometheus/Grafana, and
+ELK/Kibana. Applications do not need an entry in a central application inventory.
+
+Keep the Argo CD `Application` resource in `infra` and set its destination to
+`apps`. These are the relevant fields in `infra/argocd/application.yaml`:
+
+```yaml
+metadata:
+  namespace: infra
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: apps
+```
+
+Render application resources into `apps` too: set `namespace: apps` in the
+application's Kustomization, or use `apps` as the namespace in Helm-rendered and
+plain manifests. These application discovery flows target `apps`; `infra` and
+`corp` have separate platform and corporate responsibilities.
+
+| Service | Automatic result | Application requirements |
+|---|---|---|
+| SonarQube | Discovers source projects, provisions Sonar projects, and schedules missing or stale analyses. | Argo CD tracking must map the workload to a supported GitLab repository. Commit `sonar-project.properties` and `.sonar-auto.json`, and implement the [scanner and scan-only CI contract](sonar-discovery.md#application-contract). Namespace placement alone does not supply scanner configuration or source coverage. |
+| Prometheus / Grafana | Creates `Applications / <application>` in Grafana's **Applications** folder, showing CPU, memory, network traffic, readiness, and restarts. | Baseline metrics use existing platform collectors. Application endpoint metrics additionally require a reachable endpoint and [pod-template scrape annotations](application-observability.md#metrics-and-logs). |
+| ELK / Kibana | Creates `Applications / <application> / Logs`, with searchable logs, log volume, and logs by container. | Write logs to container stdout/stderr; Fluent Bit collects them with Kubernetes metadata. No per-application dashboard registration is required. |
+
+Dashboard discovery runs every minute, with Grafana loading changes within its
+30-second provisioning interval. Sonar discovery runs every 15 minutes and
+schedules scans according to analysis freshness and pipeline availability.
+See [automatic application dashboards](application-observability.md) for grouping,
+customization, and troubleshooting, and [Sonar discovery](sonar-discovery.md) for
+source mapping, scan scheduling, and manual scans. Components managed by the same
+Argo CD Application share dashboards; components deployed without Argo CD can use
+a shared `app.kubernetes.io/part-of` label for dashboard grouping, while Sonar
+discovery still requires the Argo CD source mapping.
+
+## Onboarding declaration
+
 This generic example assumes an Application named `catalog`, a Kustomize source
 at `infra/k8s`, and app-owned CI jobs named `verify` and `release`:
 

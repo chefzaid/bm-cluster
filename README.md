@@ -10,6 +10,12 @@ through Kubernetes metadata; it has no application repository inventory.
 Use [`add-repos.sh`](docs/repository-replication.md) to import repositories and
 configure selected applications from their own onboarding declarations.
 
+Deploy application workloads in the **`apps` Kubernetes namespace** to enable
+automatic discovery by **SonarQube, Prometheus/Grafana, and ELK/Kibana**. The
+platform creates per-application metrics and logs dashboards and discovers source
+projects for Sonar analysis. See the [namespace and discovery requirements](docs/application-onboarding.md#namespace-and-automatic-discovery)
+for deployment settings, the Sonar scanner contract, and optional metrics endpoints.
+
 ## Topology
 
 ```mermaid
