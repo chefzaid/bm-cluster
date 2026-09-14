@@ -107,7 +107,7 @@ mode `0600`. Never place credentials in Helm values or command arguments.
 Check the local inventory against Kubernetes without contacting a BMC:
 
 ```bash
-python3 k8s/scripts/fence-unresponsive-nodes.py --check-inventory \
+python3 k8s/files/fence-unresponsive-nodes.py --check-inventory \
   --inventory /private/fencing/inventory.json --allowed-nodes cp-01
 ```
 

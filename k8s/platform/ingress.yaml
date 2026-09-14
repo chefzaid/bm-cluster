@@ -1,14 +1,56 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: platform-sso
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  forwardAuth:
+    # The normal OAuth2 Proxy endpoint returns verified identity headers or
+    # starts login itself, preserving the original URL and backend 401s.
+    address: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/
+    trustForwardHeader: true
+    preserveLocationHeader: true
+    forwardBody: false
+    addAuthCookiesToResponse: [_oauth2_proxy]
+    authResponseHeaders: [X-Auth-Request-User, X-Auth-Request-Email, X-Auth-Request-Groups]
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: platform-body-limit
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  buffering:
+    maxRequestBodyBytes: 1048576
+    memRequestBodyBytes: 1048576
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: keycloak-root
+  namespace: infra
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  redirectRegex:
+    regex: '^https://[^/]+/?$'
+    replacement: https://keycloak.__PUBLIC_DOMAIN__/auth/admin/master/console/
+    permanent: false
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: infra-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "-1"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
   - hosts:
     - argocd.__PUBLIC_DOMAIN__
@@ -65,14 +107,10 @@ metadata:
   name: sonarqube-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-sso@kubernetescrd,infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
-    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts: [sonarqube.__PUBLIC_DOMAIN__]
       secretName: __TLS_SECRET_NAME__
@@ -98,11 +136,10 @@ metadata:
   name: sonarqube-api-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts: [sonarqube.__PUBLIC_DOMAIN__]
       secretName: __TLS_SECRET_NAME__
@@ -125,14 +162,10 @@ metadata:
   name: dbgate-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-sso@kubernetescrd,infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
-    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts: [dbgate.__PUBLIC_DOMAIN__]
       secretName: __TLS_SECRET_NAME__
@@ -155,14 +188,10 @@ metadata:
   name: kibana-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-sso@kubernetescrd,infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
-    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - kibana.__PUBLIC_DOMAIN__
@@ -186,14 +215,10 @@ metadata:
   name: longhorn-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-sso@kubernetescrd,infra-platform-body-limit@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
-    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - longhorn.__PUBLIC_DOMAIN__
@@ -218,13 +243,8 @@ metadata:
   namespace: infra
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "0"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - gitlab.__PUBLIC_DOMAIN__
@@ -247,14 +267,8 @@ kind: Ingress
 metadata:
   name: gitlab-registry-ingress
   namespace: infra
-  annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: "0"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - registry.__PUBLIC_DOMAIN__

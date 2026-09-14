@@ -110,7 +110,7 @@ def stop_forward(process):
 
 def verify_origins(namespace, domain):
     pods = kubectl('get', 'pods', '-n', namespace, '-l',
-        'app.kubernetes.io/component=controller,app.kubernetes.io/name=ingress-nginx', '-o', 'json')['items']
+        'app.kubernetes.io/name=traefik', '-o', 'json')['items']
     ready = [pod for pod in pods if not pod['metadata'].get('deletionTimestamp')
         and pod.get('spec', {}).get('nodeName')
         and any(c.get('name') == 'cloudflared' and c.get('ready') for c in pod.get('status', {}).get('containerStatuses', []))
@@ -120,7 +120,7 @@ def verify_origins(namespace, domain):
     for pod in ready:
         process, port = forward_origin(namespace, pod['metadata']['name'])
         try:
-            # Secret propagation and NGINX reload are asynchronous. Retry the
+            # Secret propagation and Traefik reconciliation are asynchronous. Retry the
             # verified handshake briefly; never weaken verification to proceed.
             for attempt in range(10):
                 try:

@@ -59,6 +59,10 @@ Run these commands on a registered control plane with its local K3s kubeconfig:
 The final control-plane count must be odd. The plan is checked before any
 datastore conversion; each new server joins sequentially and must become Ready.
 
+Remote enrollment loads the installed platform domain and derives its registry
+hostname. It forwards registry settings to the new host; explicit `PLATFORM_DOMAIN`,
+`K3S_REGISTRY_HOST` and `K3S_REGISTRY_ENDPOINT` environment overrides take precedence.
+
 When adding control planes to a SQLite cluster, the assistant saves an
 integrity-checked database backup and server credentials/configuration under
 `/var/backups/bm-cluster/k3s/pre-etcd-<timestamp>`, restricted to root. It then

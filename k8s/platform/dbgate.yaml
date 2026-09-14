@@ -43,8 +43,6 @@ spec:
       labels:
         app: dbgate
     spec:
-      imagePullSecrets:
-        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -56,7 +54,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: dbgate
-          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/dbgate:7.2.6-20260909.1@sha256:da9f268f47aa4f9e76807f25425cc749f6aac651a0052adc4a537b00cfd45aba
+          image: docker.io/dbgate/dbgate@sha256:03956fb18367a2b1d736b4ebb702401c68ec5f7bde691f9ea2412c3df0c27e34
+          # Kubernetes owns /etc/hosts; bypass the upstream Docker wrapper.
+          command: ["node"]
+          args: ["bundle.js", "--listen-api"]
+          workingDir: /home/dbgate-docker
           ports:
             - containerPort: 3000
           env:

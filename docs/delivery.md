@@ -6,7 +6,8 @@ manifests and Argo CD Applications.
 
 ## Ownership and bootstrap
 
-The platform project is `<gitlab-group>/bm-cluster`. Its
+The platform project is `<gitlab-group>/<platform-project>` from the installed
+identity (`bm-cluster` is the default project name). Its
 [pipeline](../.gitlab-ci.yml) runs on the shared Kubernetes runner in
 `gitlab-runners`. The [root Application](../k8s/addons/bm-cluster-application.yaml)
 reconciles the platform from Git, including centrally owned Odoo in `corp` when
@@ -35,7 +36,7 @@ settings, provisions declared prerequisites/DNS and requests an API pipeline
 pinned to that configuration. The app's release job owns first Application
 creation and restores any paused sync policy. Success requires declared jobs
 and app readiness, rather than merely pipeline creation. See
-[repository onboarding](repository-replication.md) for inputs and recovery.
+[repository onboarding](repository-onboarding.md) for inputs and recovery.
 
 ## Pipelines and outputs
 
@@ -125,8 +126,7 @@ retention period. GitLab retains protected tags and the literal `latest` tag.
 The group API token comes from Vault `secret/infra/gitlab` through External Secrets.
 Removing tags or packages and reclaiming physical Registry storage are separate
 operations. Keep recovery images available before removing old image data; the
-[security image guide](security-images.md) covers the bootstrap/private-registry
-dependency.
+[image guide](security-images.md) explains public image pins and offline recovery.
 
 GitLab and runner metrics feed the provisioned GitLab Delivery Grafana dashboard;
 their container logs feed Elasticsearch/Kibana. See

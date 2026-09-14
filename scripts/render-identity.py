@@ -46,18 +46,6 @@ def render(root):
     values.update({identity.FIELDS[key]: value for key, value in settings.items()})
     values.update(appsEnabled=os.environ["INSTALL_APPS"] == "true",
                   deschedulerEnabled=os.environ["INSTALL_DESCHEDULER"] == "true")
-    # Dependency chart values are supplied explicitly: Helm does not template
-    # arbitrary strings in values files.
-    profile = "patched" if values["securityImagesEnabled"] else "bootstrap"
-    image_values = yaml.safe_load((root / f"k8s/profiles/security-images-{profile}.values").read_text())["trivy-operator"]
-    scanner = values["trivy-operator"]
-    for key in ("image", "trivy"):
-        if key == "image":
-            scanner[key].update(image_values[key])
-        else:
-            scanner[key]["image"].update(image_values[key]["image"])
-    registry = "registry." + settings["PLATFORM_DOMAIN"] if profile == "patched" else "docker.io"
-    scanner["image"]["registry"] = scanner["trivy"]["image"]["registry"] = registry
     values_path.write_text(yaml.safe_dump(values, sort_keys=False))
 
 

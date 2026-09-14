@@ -6,6 +6,3 @@
 *.env text eol=lf
 *.service text eol=lf
 *.timer text eol=lf
-# Unified diff context markers intentionally precede tabs and blank lines.
-images/security/*.patch -whitespace
-images/security/**/*.patch -whitespace

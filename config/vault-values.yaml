@@ -2,6 +2,9 @@
 # namespace sharing is required only so the unprivileged sidecar can send
 # Vault SIGHUP after atomically renaming the active audit file.
 server:
+  image:
+    repository: docker.io/hashicorp/vault
+    tag: 2.1.0@sha256:783103ba38c5e3edcaa9bbbcb0ff80fc93c690361f03fd487e89227da6c3efa9
   shareProcessNamespace: true
   statefulSet:
     securityContext:

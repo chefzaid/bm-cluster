@@ -37,22 +37,22 @@ spec:
         prometheus.io/port: "9000"
     spec:
       automountServiceAccountToken: false
-      imagePullSecrets: __KEYCLOAK_PULL_SECRETS__
       securityContext:
         runAsNonRoot: true
-        runAsUser: __KEYCLOAK_RUNTIME_UID__
-        runAsGroup: __KEYCLOAK_RUNTIME_GID__
-        fsGroup: __KEYCLOAK_RUNTIME_GID__
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 0
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
       - name: keycloak
-        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/keycloak:26.7.3-20260909.1@sha256:488f84ab5d7935d7e98eb3a4597a098903678eb971dba82042f3da05d1cd1154
-        args: __KEYCLOAK_START_ARGS__
+        image: quay.io/keycloak/keycloak:26.7.3@sha256:ff4257d0d64efbe99ed1ddfaf07765cc3c36dc7518bf8324d41961327f441c54
+        # The vendor image applies build-time configuration during startup.
+        args: ["start", "--import-realm"]
         securityContext:
           allowPrivilegeEscalation: false
-          readOnlyRootFilesystem: __KEYCLOAK_READ_ONLY__
+          readOnlyRootFilesystem: false
           capabilities:
             drop: ["ALL"]
         env:

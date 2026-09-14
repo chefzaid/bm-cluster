@@ -17,6 +17,11 @@ from the first control plane to every new Debian/Ubuntu host.
 | `ansible/install.yml` | Run the full installer unattended through Ansible |
 | `ansible/deploy.yml` | Reconcile an installed platform through Ansible |
 
+Existing installations using ingress-nginx or private platform images must first
+follow [the platform migration](platform-migration.md). Ordinary reconciliation
+stops at a read-only migration check. New installations use public upstream
+images and the separately installed Traefik release.
+
 For a new cluster:
 
 ```bash
@@ -29,8 +34,7 @@ platform components, recovery destination, public access and administrator
 credentials. The recommended bundle installs the shared platform; declining it
 lets you select components individually. `infra + apps` adds centrally managed
 Odoo in `corp`. External applications remain in their own repositories and
-are onboarded through [repository onboarding](repository-replication.md).
-`./replicate-repo.sh` remains a compatibility wrapper for `./add-repos.sh`.
+are onboarded through [repository onboarding](repository-onboarding.md).
 The `apps` namespace, its baseline networking, shared credentials and TLS
 foundation remain available with `INSTALL_SCOPE=infra`; Odoo does not need
 to be enabled for external applications.
@@ -60,7 +64,7 @@ from your answers before installing services. The source checkout stays generic.
 | `INTERNAL_DNS_ZONE` | `internalDnsZone` | `internal.<PLATFORM_DOMAIN>`; must differ from the public domain. |
 | `GITLAB_GROUP_PATH` | `gitlabGroupPath` | Organization slug; the installer provisions a top-level group. |
 | `GITLAB_GROUP_NAME` | `gitlabGroupName` | Organization display name. |
-| `GITLAB_PROJECT_NAME` | `gitlabProjectName` | `bm-cluster`; all platform image paths and GitLab integrations follow this choice. |
+| `GITLAB_PROJECT_NAME` | `gitlabProjectName` | `bm-cluster`; platform GitLab integrations follow this choice. |
 | `KEYCLOAK_REALM` | `keycloakRealm` | Organization slug; `master` is reserved for Keycloak administration. |
 | `TLS_SECRET_NAME` | `tlsSecretName` | Public domain with dots replaced by hyphens, plus `-tls`; shared by ingress and certificate provisioning. `CLOUDFLARE_TLS_SECRET_NAME` is an alias. |
 | `SONAR_ALM_SETTING` | `sonarAlmSetting` | `<organization-slug>-gitlab`; the managed Sonar GitLab integration. |
@@ -168,7 +172,7 @@ default; they are not a K3s upgrade procedure. Use
   `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` and `BACKUP_REPOSITORY_PASSWORD`.
   Keep the repository password outside the cluster for recovery.
 - **Repository import and deployment:** set `CONFIGURE_REPOSITORY_SYNC=true`
-  with the inputs in [repository onboarding](repository-replication.md).
+  with the inputs in [repository onboarding](repository-onboarding.md).
   The installer calls `add-repos.sh` after the platform and Argo CD are ready.
   Export `REPOSITORY_INPUTS_FILE`, `REPOSITORY_STATE_DIR` and
   `ONBOARDING_TIMEOUT` when customizing unattended app setup or resuming it.

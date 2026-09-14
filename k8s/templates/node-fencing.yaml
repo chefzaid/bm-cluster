@@ -69,7 +69,7 @@ metadata:
   namespace: infra
 data:
   fence-unresponsive-nodes.py: |
-{{ .Files.Get "scripts/fence-unresponsive-nodes.py" | indent 4 }}
+{{ .Files.Get "files/fence-unresponsive-nodes.py" | indent 4 }}
 ---
 apiVersion: batch/v1
 kind: CronJob

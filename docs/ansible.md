@@ -16,6 +16,18 @@ manifest inventories and provisioning helpers. Node roles, private networking,
 security, dependencies and readiness checks follow the same installation
 contract. [Installation](installation.md) documents the shared choices and inputs.
 
+Both entrypoints delegate Longhorn, Vault, External Secrets and Argo CD releases
+to [`reconcile-platform-release.sh`](../scripts/reconcile-platform-release.sh).
+That helper owns chart options, repository refreshes and readiness checks;
+the entrypoints retain feature selection and deployment order. Vault HA still
+uses its explicit migration workflow, and Vault readiness runs after its
+resources are applied and before its secrets bootstrap.
+
+Existing ingress-nginx/private-image installations require the explicit
+[platform migration](platform-migration.md). Do not set
+`platform_migration_approved=true` for routine reconciliation; it is the override
+for a prepared maintenance run. Retired image-profile inputs are rejected.
+
 ## Complete installation
 
 Install Ansible on the first host:
@@ -34,7 +46,7 @@ ansible-playbook -i ansible/inventory ansible/install.yml
 
 Complete [transport and Cloudflare prerequisites](networking.md) before an
 unattended run. All installer options also apply here, including offsite backups
-and [repository onboarding](repository-replication.md).
+and [repository onboarding](repository-onboarding.md).
 
 An optional `installer_environment` mapping overrides selected environment
 inputs for the installation task. For example, an encrypted extra-vars file can
@@ -178,11 +190,11 @@ The rotation helper receives the secret through stdin and the task uses
 ```bash
 ansible-playbook -i ansible/inventory --syntax-check ansible/install.yml
 ansible-playbook -i ansible/inventory --syntax-check ansible/deploy.yml
-python3 scripts/test-ansible.py
+./scripts/validate-repository.sh
 ./scripts/validate-repository.sh --live
 ```
 
-Behavioral tests run the playbooks with isolated host and cluster substitutes.
+Repository validation checks syntax, inputs and shared deployment rendering.
 The live validator uses Kubernetes server-side dry-run without mutation.
 `install.yml --check` skips installation; `deploy.yml` rejects check mode because
 later tasks depend on command results. These checks do not replace a fresh

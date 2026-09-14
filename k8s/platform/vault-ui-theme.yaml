@@ -16,8 +16,6 @@ spec:
         theme.__PUBLIC_DOMAIN__/config-revision: "1"
     spec:
       automountServiceAccountToken: false
-      imagePullSecrets:
-        - name: platform-registry-auth
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -27,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ui-theme
-          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/nginx@sha256:60fc1623a3e0c16a45cdfb0ca57034173af24ac5abf0086abd057d1f5100c5a6
+          image: docker.io/library/nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
           command: ["/usr/sbin/nginx", "-c", "/theme/nginx.conf", "-g", "daemon off;"]
           ports:
             - name: http
@@ -96,7 +94,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/name: traefik
       ports:
         - port: 8080
           protocol: TCP
@@ -129,10 +127,9 @@ metadata:
   name: vault-ui-theme
   namespace: infra
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-body-limit@kubernetescrd
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - vault.__PUBLIC_DOMAIN__

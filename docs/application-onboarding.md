@@ -1,6 +1,6 @@
 # Application onboarding contract
 
-Applications opt into [`add-repos.sh`](repository-replication.md) by committing
+Applications opt into [`add-repos.sh`](repository-onboarding.md) by committing
 `infra/onboarding.json`. Version 1 is declarative: the platform performs the
 supported service operations without running repository scripts or playbooks.
 
@@ -194,5 +194,5 @@ being listed as required delivery jobs.
 
 Missing configuration or a failed/manual required job stops onboarding. Merely
 creating a pipeline or registering an Application cannot count as success. See
-[reruns and recovery](repository-replication.md#automation-and-reruns) for private
+[reruns and recovery](repository-onboarding.md#automation-and-reruns) for private
 journals and partial-setup behavior.

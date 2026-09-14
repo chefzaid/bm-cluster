@@ -76,7 +76,7 @@ metadata:
   namespace: infra
 data:
   kafka-start.sh: |
-{{ .Files.Get "ha/kafka-start.sh" | indent 4 }}
+{{ .Files.Get "files/kafka-start.sh" | indent 4 }}
 {{- if eq $ha.phase "active" }}
 {{- range $name := list "kafka" "kafka-controller" }}
 ---

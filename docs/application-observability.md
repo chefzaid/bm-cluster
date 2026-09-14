@@ -88,7 +88,6 @@ not read application Secrets, change workloads, or require a Grafana API token.
 kubectl -n infra logs deployment/grafana -c application-discovery --tail=30
 kubectl -n infra exec deployment/grafana -c application-discovery -- \
   node /application-discovery/discovery.mjs --once
-./scripts/test-application-observability.sh
 ./scripts/validate-repository.sh --live
 ```
 
@@ -99,9 +98,10 @@ ordinary workload changes need no restart.
 
 [application-observability.yaml](../k8s/platform/application-observability.yaml)
 owns discovery and its namespaced RBAC. [monitoring.yaml](../k8s/platform/monitoring.yaml)
-owns the sidecar and Grafana provider. Tests cover ownership and namespace
-boundaries, unlabeled applications, rollout stability, scoped queries,
-saved-object references, idempotency, retention, pagination and API failures.
+owns the sidecar and Grafana provider. After a discovery change, use a disposable
+application to verify namespace/ownership boundaries, dashboard links and an
+idempotent second pass. Repository validation checks the manifests and embedded
+script syntax.
 
 The implementation uses Grafana's [file provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
 and Kibana's [saved-object import API](https://www.elastic.co/docs/api/doc/kibana/operation/operation-importsavedobjectsdefault).

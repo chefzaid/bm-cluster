@@ -46,7 +46,7 @@ Existing public choices are prefilled from each repository. Missing contracts or
 prerequisites stop that deployment; imports and completed setup remain reusable.
 
 Run on the control plane with its kubeconfig to deploy. GitLab and its instance
-runner must already exist. See docs/repository-replication.md for permissions,
+runner must already exist. See docs/repository-onboarding.md for permissions,
 deployment file locations, prerequisites, and recovery after partial failures.
 EOF
 }
@@ -92,7 +92,7 @@ GITLAB_PUBLIC_URL="${GITLAB_PUBLIC_URL:-${PLATFORM_DOMAIN:+https://gitlab.$PLATF
 export GITLAB_PUBLIC_URL
 # Values are public JSON, never sourced shell code. Deployment revalidates that
 # every required setting was explicit or discoverable before changing an app.
-platform_settings="$(python3 "$SCRIPT_DIR/scripts/replicate-repositories.py" --platform-context)"
+platform_settings="$(python3 "$SCRIPT_DIR/scripts/onboard-repositories.py" --platform-context)"
 for setting in PLATFORM_DOMAIN INTERNAL_DNS_ZONE KEYCLOAK_REALM GITLAB_PUBLIC_URL PLATFORM_SECURITY_PROJECT_PATH GITLAB_GROUP_PATH TLS_SECRET_NAME; do
     setting_value="$(jq -r --arg name "$setting" '.[$name] // empty' <<< "$platform_settings")"
     if [[ -n "$setting_value" ]]; then
@@ -122,9 +122,9 @@ fi
 [[ -n "$GITHUB_USERNAME" && -n "${GITHUB_ADMIN_TOKEN:-}" && -n "$GITHUB_REPOSITORIES" ]] || \
     fail "GITHUB_USERNAME, GITHUB_ADMIN_TOKEN, and GITHUB_REPOSITORIES are required."
 export GITHUB_USERNAME GITHUB_ADMIN_TOKEN GITHUB_REPOSITORIES GITLAB_PUBLIC_URL GITLAB_GROUP_PATH
-python3 "$SCRIPT_DIR/scripts/replicate-repositories.py" --check-inputs
+python3 "$SCRIPT_DIR/scripts/onboard-repositories.py" --check-inputs
 export REPOSITORY_NONINTERACTIVE="$non_interactive"
 # Concurrent runs must not revoke one another's short-lived administrator token.
 GITLAB_BOOTSTRAP_TOKEN_NAME="bm-cluster-repositories-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 GITLAB_ADMIN_TOKEN_NONINTERACTIVE="$non_interactive" gitlab_acquire_admin_token
-python3 "$SCRIPT_DIR/scripts/replicate-repositories.py"
+python3 "$SCRIPT_DIR/scripts/onboard-repositories.py"

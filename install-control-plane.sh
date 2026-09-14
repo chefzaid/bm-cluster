@@ -51,7 +51,7 @@ K8S_DIR="$K8S_TEMPLATE_DIR"
 ARGOCD_VALUES_FILE="$SCRIPT_DIR/config/argocd-values.yaml"
 RENDER_CONFIG_SCRIPT="$SCRIPT_DIR/scripts/render-cluster-config.sh"
 VAULT_VALUES_FILE="$SCRIPT_DIR/config/vault-values.yaml"
-INGRESS_VALUES_FILE="$SCRIPT_DIR/config/ingress-nginx-values.yaml"
+INGRESS_VALUES_FILE="$SCRIPT_DIR/config/traefik-values.yaml"
 VAULT_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/configure-vault.sh"
 SECURITY_HARDEN_SCRIPT="$SCRIPT_DIR/scripts/configure-node-security.sh"
 CLOUDFLARE_SCRIPT="$SCRIPT_DIR/scripts/configure-cloudflare.sh"
@@ -59,6 +59,7 @@ NODE_ENROLLMENT_SCRIPT="$SCRIPT_DIR/add-node.sh"
 K3S_HA_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-ha.sh"
 K3S_BACKUP_SCRIPT="$SCRIPT_DIR/scripts/configure-k3s-backups.sh"
 GITLAB_CI_SCRIPT="$SCRIPT_DIR/scripts/configure-gitlab-ci.sh"
+PLATFORM_RELEASE_SCRIPT="$SCRIPT_DIR/scripts/reconcile-platform-release.sh"
 REPLICATE_REPO_SCRIPT="$SCRIPT_DIR/add-repos.sh"
 GITLAB_TOKEN_LIBRARY="$SCRIPT_DIR/scripts/lib/gitlab-admin-token.sh"
 LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT="$SCRIPT_DIR/scripts/rotate-local-admin-passwords.sh"
@@ -112,7 +113,7 @@ helm_installer=""
 K3S_INSTALL_VERSION="${K3S_INSTALL_VERSION:-$DEFAULT_K3S_INSTALL_VERSION}"
 K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-}}"
 K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-$DEFAULT_K3S_REGISTRY_ENDPOINT}"
-INGRESS_NGINX_CHART_VERSION="${INGRESS_NGINX_CHART_VERSION:-$DEFAULT_INGRESS_NGINX_CHART_VERSION}"
+TRAEFIK_CHART_VERSION="${TRAEFIK_CHART_VERSION:-$DEFAULT_TRAEFIK_CHART_VERSION}"
 LONGHORN_CHART_VERSION="${LONGHORN_CHART_VERSION:-$DEFAULT_LONGHORN_CHART_VERSION}"
 VAULT_CHART_VERSION="${VAULT_CHART_VERSION:-$DEFAULT_VAULT_CHART_VERSION}"
 EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-$DEFAULT_EXTERNAL_SECRETS_CHART_VERSION}"
@@ -127,7 +128,6 @@ EXTERNAL_SECRET_WAIT_TIMEOUT="${EXTERNAL_SECRET_WAIT_TIMEOUT:-$DEFAULT_EXTERNAL_
 ARGOCD_HELM_TIMEOUT="${ARGOCD_HELM_TIMEOUT:-$DEFAULT_ARGOCD_HELM_TIMEOUT}"
 DATASTORE_WAIT_TIMEOUT="${DATASTORE_WAIT_TIMEOUT:-$DEFAULT_DATASTORE_WAIT_TIMEOUT}"
 PLATFORM_WAIT_TIMEOUT="${PLATFORM_WAIT_TIMEOUT:-$DEFAULT_PLATFORM_WAIT_TIMEOUT}"
-POST_DEPLOY_JOB_WAIT_TIMEOUT="${POST_DEPLOY_JOB_WAIT_TIMEOUT:-$DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT}"
 CLOUDFLARE_ZONE="${CLOUDFLARE_ZONE:-${DEFAULT_CLOUDFLARE_ZONE:-}}"
 CLOUDFLARE_NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}"
 CLOUDFLARE_ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEAM_NAME:-}}"
@@ -143,7 +143,6 @@ CONTROL_PLANES_TO_ADD=0
 IFS=',' read -r -a FOUNDATION_MANIFEST_ARRAY <<< "$FOUNDATION_MANIFESTS"
 IFS=',' read -r -a DATASTORE_MANIFEST_ARRAY <<< "$DATASTORE_MANIFESTS"
 IFS=',' read -r -a PLATFORM_MANIFEST_ARRAY <<< "$PLATFORM_MANIFESTS"
-IFS=',' read -r -a POST_DEPLOY_CREATE_MANIFEST_ARRAY <<< "$POST_DEPLOY_CREATE_MANIFESTS"
 IFS=',' read -r -a POST_ARGOCD_MANIFEST_ARRAY <<< "$POST_ARGOCD_MANIFESTS"
 IFS=',' read -r -a EXTERNAL_SECRET_NAME_ARRAY <<< "$EXTERNAL_SECRET_NAMES"
 IFS=',' read -r -a DATASTORE_WAIT_APP_ARRAY <<< "$DATASTORE_WAIT_APPS"
@@ -273,7 +272,7 @@ configure_repository_delivery() {
     esac
 
     if [[ -n "${REPOSITORY_SYNC_MAPPINGS:-}" ]]; then
-        error "REPOSITORY_SYNC_MAPPINGS was replaced by GITHUB_USERNAME, GITHUB_REPOSITORIES, and GITLAB_GROUP_PATH; see docs/repository-replication.md."
+        error "REPOSITORY_SYNC_MAPPINGS was replaced by GITHUB_USERNAME, GITHUB_REPOSITORIES, and GITLAB_GROUP_PATH; see docs/repository-onboarding.md."
     fi
     [[ "$GITLAB_GROUP_PATH" =~ ^[A-Za-z0-9_.-]+$ ]] || error "The platform GitLab group must be a top-level group."
     GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-$GITLAB_GROUP_PATH/$GITLAB_PROJECT_NAME}"
@@ -362,7 +361,7 @@ prepare_rendered_configuration() {
     K8S_DIR="$RENDERED_CONFIG_DIR/k8s"
     ARGOCD_VALUES_FILE="$RENDERED_CONFIG_DIR/config/argocd-values.yaml"
     VAULT_VALUES_FILE="$RENDERED_CONFIG_DIR/config/vault-values.yaml"
-    INGRESS_VALUES_FILE="$RENDERED_CONFIG_DIR/config/ingress-nginx-values.yaml"
+    INGRESS_VALUES_FILE="$RENDERED_CONFIG_DIR/config/traefik-values.yaml"
 }
 
 validate_local_admin_password() {
@@ -519,7 +518,7 @@ configure_platform_component_selection() {
 
     info "Custom component selection enabled."
     ask_with_default "Install/upgrade Longhorn and make it the default storage class?" "Y" && INSTALL_LONGHORN=true || INSTALL_LONGHORN=false
-    ask_with_default "Install/upgrade NGINX ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
+    ask_with_default "Install/upgrade Traefik ingress controller?" "Y" && INSTALL_INGRESS=true || INSTALL_INGRESS=false
     ask_with_default "Install/upgrade Vault + External Secrets and bootstrap secrets?" "Y" && INSTALL_VAULT_STACK=true || INSTALL_VAULT_STACK=false
     ask_with_default "Deploy/upgrade core data stores (Postgres, Kafka, Redis, MongoDB)?" "Y" && DEPLOY_DATA_STORES=true || DEPLOY_DATA_STORES=false
     ask_with_default "Deploy/upgrade platform services from the shared inventory?" "Y" && DEPLOY_PLATFORM_SERVICES=true || DEPLOY_PLATFORM_SERVICES=false
@@ -887,7 +886,7 @@ if [[ "$DEPLOY_DATA_STORES" == "true" && "$INSTALL_VAULT_STACK" != "true" ]]; th
 fi
 
 if [[ "$CONFIGURE_CLOUDFLARE" == "true" && "$INSTALL_INGRESS" != "true" ]]; then
-    warn "Cloudflare publishing requires NGINX ingress; enabling ingress installation."
+    warn "Cloudflare publishing requires Traefik ingress; enabling ingress installation."
     INSTALL_INGRESS=true
 fi
 
@@ -945,6 +944,9 @@ fi
 # Rendering uses Python/YAML and must follow prerequisite installation on a
 # fresh host. Explicitly skipping prerequisites requires these tools already.
 python3 -c 'import yaml' >/dev/null 2>&1 || error "Configuration rendering requires python3-yaml; enable prerequisite installation."
+if [[ "$RUN_K8S_FEATURES" == true ]] && command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
+    "$SCRIPT_DIR/scripts/check-platform-migration.sh"
+fi
 prepare_rendered_configuration
 
 if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
@@ -967,7 +969,7 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$INSTALL_K3S" == "true" ]]; then
-        info "Installing K3s (disabling Traefik, using Nginx Ingress instead)..."
+        info "Installing K3s with bundled ingress disabled; the shared Helm release owns Traefik..."
         download_installer https://get.k3s.io k3s-install.sh k3s_installer
         k3s_server_args=(
             --disable traefik
@@ -1150,26 +1152,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     if [[ "$INSTALL_LONGHORN" == "true" ]]; then
         longhorn_replicas="$("$CLUSTER_TOPOLOGY_SCRIPT" --print-longhorn-replicas)"
         step "Installing/upgrading Longhorn with $longhorn_replicas default replica(s) for new volumes..."
-        helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true
-        helm repo update > /dev/null 2>&1
-        helm upgrade --install longhorn longhorn/longhorn \
-            --namespace longhorn-system \
-            --create-namespace \
-            --version "$LONGHORN_CHART_VERSION" \
-            --set "defaultSettings.defaultReplicaCount=$longhorn_replicas" \
-            --set "persistence.defaultClassReplicaCount=$longhorn_replicas" \
-            --set defaultSettings.defaultDataLocality=best-effort \
-            --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1 \
-            --set "defaultSettings.storageMinimalAvailablePercentage=20" \
-            --set "defaultSettings.storageOverProvisioningPercentage=110" \
-            --wait --timeout "$LONGHORN_HELM_TIMEOUT"
-
-        kubectl patch storageclass longhorn -p \
-            '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-        kubectl patch storageclass local-path -p \
-            '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' 2>/dev/null || true
-        kubectl wait --for=condition=ready pod -l app=longhorn-manager \
-            -n longhorn-system --timeout="$LONGHORN_POD_WAIT_TIMEOUT"
+        LONGHORN_REPLICA_COUNT="$longhorn_replicas" LONGHORN_CHART_VERSION="$LONGHORN_CHART_VERSION" \
+            LONGHORN_HELM_TIMEOUT="$LONGHORN_HELM_TIMEOUT" LONGHORN_POD_WAIT_TIMEOUT="$LONGHORN_POD_WAIT_TIMEOUT" \
+            "$PLATFORM_RELEASE_SCRIPT" longhorn
         "$CLUSTER_TOPOLOGY_SCRIPT" \
             --control-plane-schedulable "$CONTROL_PLANE_SCHEDULABLE" \
             --expected-control-plane-count "$CONTROL_PLANE_COUNT" \
@@ -1181,12 +1166,12 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
     fi
 
     if [[ "$INSTALL_INGRESS" == "true" ]]; then
-        step "Installing Nginx Ingress Controller..."
+        step "Installing Traefik ingress controller..."
         if [[ "$HIGH_AVAILABILITY_ENABLED" == true && -z "${CLOUDFLARE_API_TOKEN:-}" ]]; then
             installer_prompt_secret CLOUDFLARE_API_TOKEN "Cloudflare token with Tunnel Edit and DNS/TLS permissions (input hidden)"
             export CLOUDFLARE_API_TOKEN
         fi
-        INGRESS_VALUES_FILE="$INGRESS_VALUES_FILE" INGRESS_NGINX_CHART_VERSION="$INGRESS_NGINX_CHART_VERSION" \
+        INGRESS_VALUES_FILE="$INGRESS_VALUES_FILE" TRAEFIK_CHART_VERSION="$TRAEFIK_CHART_VERSION" \
             INGRESS_HELM_TIMEOUT="$INGRESS_HELM_TIMEOUT" "$SCRIPT_DIR/scripts/configure-ingress.sh"
     fi
 
@@ -1212,49 +1197,18 @@ EOF
 
     if [[ "$INSTALL_VAULT_STACK" == "true" ]]; then
         step "Installing HashiCorp Vault..."
-        helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
-        helm repo update > /dev/null 2>&1
-        if [[ "$HIGH_AVAILABILITY_ENABLED" == true ]]; then
-            "$SCRIPT_DIR/scripts/configure-vault-ha.sh" --namespace infra \
-                --values "$VAULT_VALUES_FILE" --chart-version "$VAULT_CHART_VERSION"
-        else
-            helm upgrade --install vault hashicorp/vault \
-            --namespace infra \
-            --version "$VAULT_CHART_VERSION" \
-            --values "$VAULT_VALUES_FILE" \
-            --set injector.enabled=false \
-            --set server.ha.enabled=true \
-            --set server.ha.raft.enabled=true \
-            --set server.ha.replicas=1 \
-            --set server.dataStorage.storageClass=longhorn \
-            --set server.statefulSet.securityContext.pod.runAsNonRoot=true \
-            --set server.statefulSet.securityContext.pod.runAsUser=100 \
-            --set server.statefulSet.securityContext.pod.runAsGroup=1000 \
-            --set server.statefulSet.securityContext.pod.fsGroup=1000 \
-            --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault \
-            --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false \
-            --set 'server.statefulSet.securityContext.container.capabilities.drop[0]=ALL'
-        fi
+        VAULT_VALUES_FILE="$VAULT_VALUES_FILE" VAULT_CHART_VERSION="$VAULT_CHART_VERSION" \
+            "$PLATFORM_RELEASE_SCRIPT" vault
 
         step "Installing External Secrets Operator..."
-        helm repo add external-secrets https://charts.external-secrets.io 2>/dev/null || true
-        helm repo update > /dev/null 2>&1
-        external_secrets_ha_args=()
-        [[ "$HIGH_AVAILABILITY_ENABLED" != true ]] || external_secrets_ha_args+=(--values "$SCRIPT_DIR/config/external-secrets-ha-values.yaml")
-        helm upgrade --install external-secrets external-secrets/external-secrets \
-            --namespace infra \
-            --version "$EXTERNAL_SECRETS_CHART_VERSION" \
-            --values "$SCRIPT_DIR/config/external-secrets-values.yaml" \
-            "${external_secrets_ha_args[@]}" \
-            --set installCRDs=true \
-            --wait --timeout "$EXTERNAL_SECRETS_HELM_TIMEOUT"
+        EXTERNAL_SECRETS_CHART_VERSION="$EXTERNAL_SECRETS_CHART_VERSION" \
+            EXTERNAL_SECRETS_HELM_TIMEOUT="$EXTERNAL_SECRETS_HELM_TIMEOUT" \
+            "$PLATFORM_RELEASE_SCRIPT" external-secrets
 
         step "Applying unified Vault manifests (ingress, RBAC, and secret sync)..."
         kubectl apply -f "$K8S_DIR/platform/vault.yaml"
-        kubectl apply -f "$K8S_DIR/apps/security-image-registry.yaml"
 
-        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n infra --timeout="$VAULT_WAIT_TIMEOUT"
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=external-secrets -n infra --timeout="$VAULT_WAIT_TIMEOUT"
+        VAULT_WAIT_TIMEOUT="$VAULT_WAIT_TIMEOUT" "$PLATFORM_RELEASE_SCRIPT" wait-vault-stack
 
         [[ -x "$VAULT_BOOTSTRAP_SCRIPT" ]] || error "Vault configurator is not executable: $VAULT_BOOTSTRAP_SCRIPT"
         step "Bootstrapping Vault auth/policies and seeding secrets..."
@@ -1297,8 +1251,6 @@ EOF
     fi
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
-        step "Caching GitLab before its registry can be restarted..."
-        "$SCRIPT_DIR/scripts/cache-gitlab-image.sh" "$K8S_DIR" "$PLATFORM_WAIT_TIMEOUT"
         step "Deploying platform services..."
         for manifest in "${PLATFORM_MANIFEST_ARRAY[@]}"; do
             kubectl apply -f "$K8S_DIR/$manifest"
@@ -1313,12 +1265,6 @@ EOF
             kubectl rollout status "daemonset/$daemonset" -n infra \
                 --timeout="$PLATFORM_WAIT_TIMEOUT"
         done
-        for manifest in "${POST_DEPLOY_CREATE_MANIFEST_ARRAY[@]}"; do
-            created_resource="$(kubectl create -f "$K8S_DIR/$manifest" -o name)"
-            kubectl wait --for=condition=complete "$created_resource" -n infra \
-                --timeout="$POST_DEPLOY_JOB_WAIT_TIMEOUT"
-        done
-
         if [[ "$ROTATE_LOCAL_ADMIN_PASSWORDS" == "true" ]]; then
             [[ -x "$LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT" ]] || \
                 error "Local administrator password rotation script is not executable: $LOCAL_ADMIN_PASSWORD_ROTATION_SCRIPT"
@@ -1346,7 +1292,7 @@ EOF
     fi
 
     if [[ "$DEPLOY_PLATFORM_SERVICES" == "true" ]]; then
-        kubectl apply -f "$K8S_DIR/apps/sonar-apps-discovery.yaml"
+        kubectl apply -f "$K8S_DIR/platform/sonar-apps-discovery.yaml"
     fi
 
     if [[ "$DEPLOY_ODOO" == "true" ]]; then
@@ -1365,17 +1311,9 @@ EOF
 
     if [[ "$INSTALL_ARGOCD" == "true" ]]; then
         step "Installing ArgoCD..."
-        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-        helm repo update > /dev/null 2>&1
-        argocd_ha_args=()
-        [[ "$HIGH_AVAILABILITY_ENABLED" != true ]] || argocd_ha_args+=(--values "$SCRIPT_DIR/config/argocd-ha-values.yaml")
-        helm upgrade --install argocd argo/argo-cd \
-            --namespace infra \
-            --version "$ARGOCD_CHART_VERSION" \
-            --values "$ARGOCD_VALUES_FILE" \
-            "${argocd_ha_args[@]}" \
-            --set-string "global.image.tag=$ARGOCD_IMAGE_TAG" \
-            --wait --timeout "$ARGOCD_HELM_TIMEOUT"
+        ARGOCD_VALUES_FILE="$ARGOCD_VALUES_FILE" ARGOCD_CHART_VERSION="$ARGOCD_CHART_VERSION" \
+            ARGOCD_IMAGE_TAG="$ARGOCD_IMAGE_TAG" ARGOCD_HELM_TIMEOUT="$ARGOCD_HELM_TIMEOUT" \
+            "$PLATFORM_RELEASE_SCRIPT" argocd
 
         step "Applying the platform Argo CD Application..."
         for manifest in "${POST_ARGOCD_MANIFEST_ARRAY[@]}"; do

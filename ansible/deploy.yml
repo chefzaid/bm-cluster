@@ -25,6 +25,7 @@
     apps_namespace: apps
     corp_namespace: corp
     repository_root: "{{ playbook_dir }}/.."
+    platform_release_script: "{{ repository_root }}/scripts/reconcile-platform-release.sh"
     k8s_dir: "{{ repository_root }}/k8s"
     argocd_values_file: "{{ repository_root }}/config/argocd-values.yaml"
     platform_config_file: "{{ repository_root }}/config/platform.env"
@@ -32,8 +33,8 @@
 
     platform_contract_version: >-
       {{ lookup('ansible.builtin.ini', 'PLATFORM_CONTRACT_VERSION type=properties file=' ~ platform_config_file) }}
-    ingress_nginx_chart_version: >-
-      {{ lookup('ansible.builtin.ini', 'DEFAULT_INGRESS_NGINX_CHART_VERSION type=properties file=' ~ platform_config_file) }}
+    traefik_chart_version: >-
+      {{ lookup('ansible.builtin.ini', 'DEFAULT_TRAEFIK_CHART_VERSION type=properties file=' ~ platform_config_file) }}
     longhorn_chart_version: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_LONGHORN_CHART_VERSION type=properties file=' ~ platform_config_file) }}
     vault_chart_version: >-
@@ -63,8 +64,6 @@
       {{ lookup('ansible.builtin.ini', 'DEFAULT_DATASTORE_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
     platform_wait_timeout: >-
       {{ lookup('ansible.builtin.ini', 'DEFAULT_PLATFORM_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
-    post_deploy_job_wait_timeout: >-
-      {{ lookup('ansible.builtin.ini', 'DEFAULT_POST_DEPLOY_JOB_WAIT_TIMEOUT type=properties file=' ~ platform_config_file) }}
 
     foundation_manifests: >-
       {{ lookup('ansible.builtin.ini', 'FOUNDATION_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
@@ -72,8 +71,6 @@
       {{ lookup('ansible.builtin.ini', 'DATASTORE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     platform_manifests: >-
       {{ lookup('ansible.builtin.ini', 'PLATFORM_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
-    post_deploy_create_manifests: >-
-      {{ lookup('ansible.builtin.ini', 'POST_DEPLOY_CREATE_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     post_argocd_manifests: >-
       {{ lookup('ansible.builtin.ini', 'POST_ARGOCD_MANIFESTS type=properties file=' ~ platform_config_file) | split(',') | reject('equalto', '') | list }}
     external_secret_names: >-
@@ -244,7 +241,7 @@
     - name: Validate the shared platform contract
       ansible.builtin.assert:
         that:
-          - platform_contract_version == '6'
+          - platform_contract_version == '7'
           - server_exposure_mode in ['internet', 'local']
           - platform_domain is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
           - internal_dns_zone is match('^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$')
@@ -281,6 +278,19 @@
         HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       changed_when: false
       register: enrolled_node_exposure
+
+    - name: Check whether legacy ingress and images require a prepared migration
+      ansible.builtin.command: "{{ repository_root }}/scripts/check-platform-migration.sh"
+      environment:
+        PLATFORM_MIGRATION_APPROVED: "{{ platform_migration_approved | default(lookup('env', 'PLATFORM_MIGRATION_APPROVED') | default('false', true)) | lower }}"
+      changed_when: false
+
+    - name: Reject retired image profile inputs
+      ansible.builtin.assert:
+        that:
+          - security_images_enabled is not defined
+          - lookup('env', 'SECURITY_IMAGES_ENABLED') == ''
+        fail_msg: "Image profiles were retired; follow docs/platform-migration.md and remove the old inputs."
 
     - name: Preserve an enrolled control plane's private exposure
       ansible.builtin.set_fact:
@@ -329,11 +339,11 @@
 
     - name: Use the rendered Kubernetes and Argo CD configuration
       ansible.builtin.set_fact:
-        k8s_dir: "{{ rendered_configuration.path }}/k8s"
-        argocd_values_file: "{{ rendered_configuration.path }}/config/argocd-values.yaml"
-        ingress_values_file: "{{ rendered_configuration.path }}/config/ingress-nginx-values.yaml"
+        k8s_dir: "{{ rendered_configuration.path }}/rendered/k8s"
+        argocd_values_file: "{{ rendered_configuration.path }}/rendered/config/argocd-values.yaml"
+        ingress_values_file: "{{ rendered_configuration.path }}/rendered/config/traefik-values.yaml"
         vault_values_file_effective: >-
-          {{ (rendered_configuration.path ~ '/config/vault-values.yaml')
+          {{ (rendered_configuration.path ~ '/rendered/config/vault-values.yaml')
              if vault_values_file == (repository_root ~ '/config/vault-values.yaml')
              else vault_values_file }}
 
@@ -342,7 +352,7 @@
         argv:
           - "{{ repository_root }}/scripts/render-cluster-config.sh"
           - --output
-          - "{{ rendered_configuration.path }}"
+          - "{{ rendered_configuration.path }}/rendered"
           - --domain
           - "{{ platform_domain }}"
           - --internal-domain
@@ -360,7 +370,6 @@
           - --descheduler-enabled
           - "{{ descheduler_enabled | ternary('true', 'false') }}"
       environment:
-        SECURITY_IMAGES_ENABLED: "{{ security_images_enabled | default(lookup('env', 'SECURITY_IMAGES_ENABLED') | default('auto', true)) | lower }}"
         HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
         PLATFORM_HA_VALUES_FILE: "{{ platform_ha_values_file }}"
       changed_when: false
@@ -666,20 +675,6 @@
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-longhorn-host.sh"
       when: longhorn_enabled
 
-    - name: Add required Helm repositories
-      ansible.builtin.shell: |
-        set -euo pipefail
-        helm repo add hashicorp https://helm.releases.hashicorp.com --force-update
-        helm repo add external-secrets https://charts.external-secrets.io --force-update
-        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
-        helm repo add longhorn https://charts.longhorn.io --force-update
-        helm repo add argo https://argoproj.github.io/argo-helm --force-update
-        helm repo update
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: longhorn_enabled or ingress_effective or vault_stack_effective or argocd_enabled
-
     - name: Resolve Longhorn replicas from the shared registered-node policy
       ansible.builtin.command: "{{ repository_root }}/scripts/reconcile-cluster-topology.sh --print-longhorn-replicas"
       environment:
@@ -689,35 +684,16 @@
       changed_when: false
       when: longhorn_enabled
 
-    - name: Install or upgrade Longhorn
-      ansible.builtin.command: >-
-        helm upgrade --install longhorn longhorn/longhorn
-        --namespace longhorn-system
-        --create-namespace
-        --version {{ longhorn_chart_version }}
-        --set defaultSettings.defaultReplicaCount={{ longhorn_replica_count.stdout | int }}
-        --set persistence.defaultClassReplicaCount={{ longhorn_replica_count.stdout | int }}
-        --set defaultSettings.defaultDataLocality=best-effort
-        --set defaultSettings.concurrentAutomaticEngineUpgradePerNodeLimit=1
-        --set defaultSettings.storageMinimalAvailablePercentage=20
-        --set defaultSettings.storageOverProvisioningPercentage=110
-        --wait --timeout {{ longhorn_helm_timeout }}
-      when: longhorn_enabled
-
-    - name: Make Longhorn the default storage class
-      ansible.builtin.shell: |
-        set -euo pipefail
-        kubectl patch storageclass longhorn -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-        kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' || true
-      args:
-        executable: /bin/bash
-      when: longhorn_enabled
-
-    - name: Wait for Longhorn managers
-      ansible.builtin.command: >-
-        kubectl wait --for=condition=ready pod -l app=longhorn-manager
-        -n longhorn-system --timeout={{ longhorn_pod_wait_timeout }}
-      changed_when: false
+    - name: Install Longhorn and wait for its storage managers
+      ansible.builtin.command:
+        argv:
+          - "{{ platform_release_script }}"
+          - longhorn
+      environment:
+        LONGHORN_REPLICA_COUNT: "{{ longhorn_replica_count.stdout | int }}"
+        LONGHORN_CHART_VERSION: "{{ longhorn_chart_version }}"
+        LONGHORN_HELM_TIMEOUT: "{{ longhorn_helm_timeout }}"
+        LONGHORN_POD_WAIT_TIMEOUT: "{{ longhorn_pod_wait_timeout }}"
       when: longhorn_enabled
 
     - name: Reconcile Longhorn storage scheduling and topology configuration
@@ -746,14 +722,14 @@
         - longhorn_enabled
         - offsite_backups_enabled
 
-    - name: Install or upgrade NGINX Ingress
+    - name: Install or upgrade Traefik ingress
       ansible.builtin.command: "{{ repository_root }}/scripts/configure-ingress.sh"
       environment:
         HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
         CONTROL_PLANE_SCHEDULABLE: "{{ control_plane_scheduling_mode }}"
         INGRESS_NAMESPACE: "{{ infra_namespace }}"
         INGRESS_VALUES_FILE: "{{ ingress_values_file }}"
-        INGRESS_NGINX_CHART_VERSION: "{{ ingress_nginx_chart_version }}"
+        TRAEFIK_CHART_VERSION: "{{ traefik_chart_version }}"
         INGRESS_HELM_TIMEOUT: "{{ ingress_helm_timeout }}"
         CLOUDFLARE_API_TOKEN: "{{ cloudflare_api_token }}"
         PLATFORM_DOMAIN: "{{ platform_domain }}"
@@ -773,50 +749,31 @@
       no_log: true
       when: cloudflare_enabled
 
-    - name: Install or upgrade Vault
-      ansible.builtin.command: >-
-        helm upgrade --install vault hashicorp/vault
-        --namespace {{ infra_namespace }}
-        --version {{ vault_chart_version }}
-        --values {{ vault_values_file_effective }}
-        --set injector.enabled=false
-        --set server.ha.enabled=true
-        --set server.ha.raft.enabled=true
-        --set server.ha.replicas=1
-        --set server.dataStorage.storageClass=longhorn
-        --set server.statefulSet.securityContext.pod.runAsNonRoot=true
-        --set server.statefulSet.securityContext.pod.runAsUser=100
-        --set server.statefulSet.securityContext.pod.runAsGroup=1000
-        --set server.statefulSet.securityContext.pod.fsGroup=1000
-        --set-string server.statefulSet.securityContext.pod.seccompProfile.type=RuntimeDefault
-        --set server.statefulSet.securityContext.container.allowPrivilegeEscalation=false
-        --set server.statefulSet.securityContext.container.capabilities.drop[0]=ALL
-      when: vault_stack_effective and high_availability_mode != 'true'
-
-    - name: Install or migrate the native Vault Raft quorum
+    - name: Install Vault or reconcile its existing HA migration workflow
       ansible.builtin.command:
         argv:
-          - "{{ repository_root }}/scripts/configure-vault-ha.sh"
+          - "{{ platform_release_script }}"
+          - vault
           - --namespace
           - "{{ infra_namespace }}"
-          - --values
-          - "{{ vault_values_file_effective }}"
-          - --chart-version
-          - "{{ vault_chart_version }}"
       environment:
-        HIGH_AVAILABILITY_ENABLED: "true"
+        VAULT_VALUES_FILE: "{{ vault_values_file_effective }}"
+        VAULT_CHART_VERSION: "{{ vault_chart_version }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
         VAULT_HA_MIGRATE_EXISTING: "{{ lookup('ansible.builtin.env', 'VAULT_HA_MIGRATE_EXISTING') | default('false', true) }}"
-      when: vault_stack_effective and high_availability_mode == 'true'
+      when: vault_stack_effective
 
     - name: Install or upgrade External Secrets Operator
-      ansible.builtin.command: >-
-        helm upgrade --install external-secrets external-secrets/external-secrets
-        --namespace {{ infra_namespace }}
-        --version {{ external_secrets_chart_version }}
-        --values {{ repository_root }}/config/external-secrets-values.yaml
-        {{ ('--values ' ~ repository_root ~ '/config/external-secrets-ha-values.yaml') if high_availability_mode == 'true' else '' }}
-        --set installCRDs=true
-        --wait --timeout {{ external_secrets_helm_timeout }}
+      ansible.builtin.command:
+        argv:
+          - "{{ platform_release_script }}"
+          - external-secrets
+          - --namespace
+          - "{{ infra_namespace }}"
+      environment:
+        EXTERNAL_SECRETS_CHART_VERSION: "{{ external_secrets_chart_version }}"
+        EXTERNAL_SECRETS_HELM_TIMEOUT: "{{ external_secrets_helm_timeout }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       when: vault_stack_effective
 
     - name: Apply unified Vault resources
@@ -825,24 +782,15 @@
       changed_when: "'created' in vault_resources_apply.stdout or 'configured' in vault_resources_apply.stdout"
       when: vault_stack_effective
 
-    - name: Reconcile shared application access to platform bootstrap images
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/security-image-registry.yaml
-      register: apps_registry_apply
-      changed_when: "'created' in apps_registry_apply.stdout or 'configured' in apps_registry_apply.stdout"
-      when: vault_stack_effective
-
-    - name: Wait for Vault
-      ansible.builtin.command: >-
-        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0
-        -n {{ infra_namespace }} --timeout={{ vault_wait_timeout }}
-      changed_when: false
-      when: vault_stack_effective
-
-    - name: Wait for External Secrets controllers
-      ansible.builtin.command: >-
-        kubectl wait --for=condition=ready pod
-        -l app.kubernetes.io/name=external-secrets
-        -n {{ infra_namespace }} --timeout={{ vault_wait_timeout }}
+    - name: Wait for Vault and External Secrets before bootstrap
+      ansible.builtin.command:
+        argv:
+          - "{{ platform_release_script }}"
+          - wait-vault-stack
+          - --namespace
+          - "{{ infra_namespace }}"
+      environment:
+        VAULT_WAIT_TIMEOUT: "{{ vault_wait_timeout }}"
       changed_when: false
       when: vault_stack_effective
 
@@ -923,12 +871,6 @@
       changed_when: false
       when: data_stores_effective and (verified_ha_settings.postgresHa.active | default(false))
 
-    - name: Cache GitLab before its registry can be restarted
-      ansible.builtin.command: >-
-        {{ repository_root }}/scripts/cache-gitlab-image.sh
-        {{ k8s_dir }} {{ platform_wait_timeout }}
-      when: platform_services_enabled
-
     - name: Deploy platform services
       ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/{{ item }}
       loop: "{{ platform_manifests }}"
@@ -953,20 +895,6 @@
         kubectl rollout status daemonset/{{ item }}
         -n {{ infra_namespace }} --timeout={{ platform_wait_timeout }}
       loop: "{{ platform_wait_daemonsets }}"
-      changed_when: false
-      when: platform_services_enabled
-
-    - name: Create post-deployment reconciliation jobs
-      ansible.builtin.command: kubectl create -f {{ k8s_dir }}/{{ item }} -o name
-      loop: "{{ post_deploy_create_manifests }}"
-      register: post_deploy_jobs
-      when: platform_services_enabled
-
-    - name: Wait for post-deployment jobs
-      ansible.builtin.command: >-
-        kubectl wait --for=condition=complete {{ item.stdout }}
-        -n {{ infra_namespace }} --timeout={{ post_deploy_job_wait_timeout }}
-      loop: "{{ post_deploy_jobs.results }}"
       changed_when: false
       when: platform_services_enabled
 
@@ -1016,7 +944,7 @@
       when: platform_services_enabled
 
     - name: Enable namespace-driven Sonar analysis
-      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/apps/sonar-apps-discovery.yaml
+      ansible.builtin.command: kubectl apply -f {{ k8s_dir }}/platform/sonar-apps-discovery.yaml
       register: sonar_discovery_apply
       changed_when: "'created' in sonar_discovery_apply.stdout or 'configured' in sonar_discovery_apply.stdout"
       when: platform_services_enabled
@@ -1048,14 +976,18 @@
       when: descheduler_enabled
 
     - name: Install or upgrade Argo CD
-      ansible.builtin.command: >-
-        helm upgrade --install argocd argo/argo-cd
-        --namespace {{ infra_namespace }}
-        --version {{ argocd_chart_version }}
-        --values {{ argocd_values_file }}
-        {{ ('--values ' ~ repository_root ~ '/config/argocd-ha-values.yaml') if high_availability_mode == 'true' else '' }}
-        --set-string global.image.tag={{ argocd_image_tag }}
-        --wait --timeout {{ argocd_helm_timeout }}
+      ansible.builtin.command:
+        argv:
+          - "{{ platform_release_script }}"
+          - argocd
+          - --namespace
+          - "{{ infra_namespace }}"
+      environment:
+        ARGOCD_VALUES_FILE: "{{ argocd_values_file }}"
+        ARGOCD_CHART_VERSION: "{{ argocd_chart_version }}"
+        ARGOCD_IMAGE_TAG: "{{ argocd_image_tag }}"
+        ARGOCD_HELM_TIMEOUT: "{{ argocd_helm_timeout }}"
+        HIGH_AVAILABILITY_ENABLED: "{{ high_availability_mode }}"
       when: argocd_enabled
 
     - name: Apply GitLab-backed Argo CD applications

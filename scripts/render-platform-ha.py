@@ -59,7 +59,7 @@ def main():
                               if values.get(name + "Ha", {}).get("enabled")]
         migrated = {identity(doc) for doc in render(enabled, migrated_templates)} if migrated_templates else set()
     existing = set()
-    for group in ("base", "datastores", "platform", "apps", "corp", "addons"):
+    for group in ("base", "datastores", "platform", "corp", "addons"):
         for path in (args.root / "k8s" / group).glob("*.yaml"):
             original = list(yaml.safe_load_all(path.read_text()))
             transformed = []

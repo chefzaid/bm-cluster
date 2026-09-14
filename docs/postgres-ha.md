@@ -155,10 +155,9 @@ hosts become available. The isolated SQL canary validates migration semantics,
 not a real three-node failure.
 
 ```bash
-python3 scripts/test-postgres-ha.py
-bash scripts/test-postgres-access.sh
+python3 tests/test-postgres-ha.py
 # After explicitly pulling the profile's pinned public image:
-python3 scripts/test-postgres-ha.py --docker
+python3 tests/test-postgres-ha.py --docker
 ```
 
 See the upstream guidance on [synchronous replication](https://cloudnative-pg.io/docs/1.30/replication/),

@@ -190,7 +190,7 @@ setup; interactive setup pauses with the required registrar values.
 ### Application DNS ownership
 
 Each application declares its own DNS records and owns their lifecycle.
-[`add-repos.sh`](repository-replication.md) can provision or reconcile those exact
+[`add-repos.sh`](repository-onboarding.md) can provision or reconcile those exact
 hosts from `infra/onboarding.json`, without adding names to this repository.
 Direct ingress uses proxied A records targeting its unique public IPv4.
 Changing a hostname does not delete the old record; retire old hosts explicitly
@@ -213,29 +213,60 @@ application's Ingress ownership stop reconciliation. Unrelated MX/TXT records
 are preserved. App-owned checks still verify the public route and failover.
 
 The tunnel accepts the configured zone apex and wildcard subdomains and forwards
-them to local NGINX; Kubernetes Ingress resources select the application. This
+them to local Traefik; Kubernetes Ingress resources select the application. This
 uses Cloudflare's [hostname wildcard matching](https://developers.cloudflare.com/tunnel/advanced/local-management/configuration-file/#wildcards).
 It creates no wildcard DNS record and grants no application deployment ownership
-to the platform. A hostname without a matching Ingress receives NGINX's default
+to the platform. A hostname without a matching Ingress receives Traefik's default
 404 response. Other public zones require a separate ingress and DNS arrangement.
+
+### Ingress controller
+
+The platform installs Traefik through its own pinned Helm release, with K3s
+bundled Traefik disabled. Native Kubernetes Ingress preserves application-owned
+hosts, DNS/Homepage discovery and TLS secrets. Same-namespace Middleware adds
+authentication and request limits; Thoughty uses native weighted routes for its
+canary. This keeps the existing ownership model without another routing API
+migration. See [controller migration](platform-migration.md) for existing clusters.
+
+Only HTTP/HTTPS entry points receive public application routers. The shared
+header Middleware removes RFC `Forwarded`, `X-Real-IP` and forwarded routing
+overrides. Preserve Traefik's default appended `X-Forwarded-For` chain: app rate
+limiters validate the trusted proxy boundary and take the visitor immediately
+before the edge, or the single sanitized address for a direct client.
+
+For the platform host inventory, the Cloudflare configurator removes incoming
+`X-Forwarded-For` through a request-header transform. Cloudflare then supplies
+the visitor address itself, as documented in its [header transform behavior](https://developers.cloudflare.com/rules/transform/request-header-modification/#important-remarks).
+This prevents stock services from trusting a visitor-supplied leading address;
+app rate limiters also validate the chain locally. Verify the rule at the live
+edge during cutover, especially if Workers or additional proxies handle a host.
+
+The Traefik release publishes its trusted edge ranges in
+`infra/ingress-proxy-trust`. GitLab adds those ranges to its private proxy trust
+so direct-mode rate limits identify the visitor rather than the Cloudflare edge.
+After changing ingress mode or edge ranges, restart GitLab in a maintenance
+window to reload that environment input. A GitLab installation without ingress
+uses private proxy defaults. The token needs Zone **Transform Rules Edit** in
+addition to the listed DNS/security permissions.
 
 ### HA public ingress
 
-The [HA ingress profile](../config/ingress-nginx-ha-values.yaml) runs NGINX as a
+The [HA ingress profile](../config/traefik-ha-values.yaml) runs Traefik as a
 DaemonSet on control planes, with one co-located `cloudflared` container per
 pod. Every connector uses the same tunnel identity and connects outbound to
-Cloudflare. NGINX uses normal pod networking and an internal Service; additional
+Cloudflare. Traefik uses normal pod networking and an internal Service; additional
 hosts need no inbound public web listener or shared public IP.
 
-The connector sends HTTPS to its own NGINX listener over loopback, verifies the
+The connector sends HTTPS to its own Traefik listener over loopback, verifies the
 Cloudflare Origin CA certificate against the public domain, and preserves the
-request Host. NGINX accepts `CF-Connecting-IP` only from that loopback peer;
-visitor-supplied forwarded host, scheme and port headers remain untrusted.
-Application proxy and NetworkPolicy contracts still see the NGINX pod network.
+request Host. Traefik trusts the forwarded client-address chain only from that loopback peer.
+A shared Middleware clears forwarded routing headers and derives host, URI and
+method from the request; the public scheme is HTTPS.
+Application proxy and NetworkPolicy contracts still see the Traefik pod network.
 Keycloak/OIDC URLs, Access protection and Registry authentication retain their
 public hostnames.
 
-The connector's liveness check withdraws it when its local NGINX stops serving;
+The connector's liveness check withdraws it when its local Traefik stops serving;
 its readiness check requires a connected tunnel. Before changing public DNS to
 the tunnel CNAME, the configurator checks connectors on at least three distinct
 Ready control planes and performs verified HTTPS origin probes. The API token

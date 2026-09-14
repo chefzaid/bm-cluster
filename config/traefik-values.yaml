@@ -1,0 +1,109 @@
+# Native Kubernetes Ingress keeps routing and discovery owned by each repository.
+fullnameOverride: traefik
+image:
+  registry: docker.io
+  repository: library/traefik
+  tag: v3.7.13
+  digest: sha256:f86a2cab1b5c649070c49f883c743dd32d8485a56e3368c5f93b9e91f1e91259
+deployment:
+  replicas: 1
+ingressClass:
+  name: traefik
+  isDefaultClass: true
+providers:
+  kubernetesIngress:
+    ingressClass: traefik
+    strictPrefixMatching: true
+    # Longhorn's UI has an explicit platform-owned ExternalName Service.
+    allowExternalNameServices: true
+  kubernetesCRD:
+    allowCrossNamespace: false
+api:
+  dashboard: false
+ingressRoute:
+  dashboard:
+    enabled: false
+ports:
+  traefik:
+    port: 9000
+    expose: {default: false}
+  web:
+    asDefault: true
+    port: 8080
+    exposedPort: 80
+    http:
+      redirections:
+        entryPoint: {to: websecure, scheme: https, permanent: true}
+  websecure:
+    asDefault: true
+    port: 8444
+    exposedPort: 443
+    http:
+      tls: {enabled: true}
+      # Normalize routing headers even when the trusted edge forwards a
+      # visitor-supplied value; keep only its client-address chain.
+      middlewares: [infra-forwarded-headers@kubernetescrd]
+    transport:
+      respondingTimeouts:
+        readTimeout: 900s
+        writeTimeout: 900s
+        idleTimeout: 900s
+additionalArguments:
+  - --serversTransport.forwardingTimeouts.responseHeaderTimeout=900s
+service:
+  spec:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+nodeSelector:
+  kubernetes.io/os: linux
+  node-role.kubernetes.io/control-plane: "true"
+  svccontroller.k3s.cattle.io/enablelb: "true"
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile: {type: RuntimeDefault}
+resources:
+  requests: {cpu: 100m, memory: 90Mi}
+  limits: {cpu: "1", memory: 512Mi}
+tlsStore:
+  default:
+    defaultCertificate:
+      secretName: __TLS_SECRET_NAME__
+tlsOptions:
+  default:
+    minVersion: VersionTLS12
+extraObjects:
+  # GitLab/Rack also traverses the forwarded chain. Share the same edge
+  # inventory instead of maintaining a second hard-coded Cloudflare list.
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: ingress-proxy-trust
+      namespace: infra
+    data:
+      trustedIPs: '{{ join "," .Values.ports.websecure.forwardedHeaders.trustedIPs }}'
+  - apiVersion: traefik.io/v1alpha1
+    kind: Middleware
+    metadata:
+      name: forwarded-headers
+      namespace: infra
+    spec:
+      headers:
+        customRequestHeaders:
+          Forwarded: ""
+          X-Real-IP: ""
+          X-Forwarded-Host: ""
+          X-Forwarded-Port: ""
+          X-Forwarded-Proto: https
+          X-Forwarded-Uri: ""
+          X-Forwarded-Prefix: ""
+          X-Forwarded-Method: ""

@@ -652,8 +652,6 @@ spec:
       labels:
         app: oauth2-proxy
     spec:
-      imagePullSecrets:
-        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -664,7 +662,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: oauth2-proxy
-          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/oauth2-proxy:7.15.4-20260908.1@sha256:5cb48ce3268c9877d0399649895719707e5e9ecf43ec480d3de88e9aa8ef1e48
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.4@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
           args:
             - --provider=keycloak-oidc
             - --oidc-issuer-url=https://keycloak.__PUBLIC_DOMAIN__/auth/realms/__KEYCLOAK_REALM__
@@ -734,16 +732,10 @@ metadata:
   name: keycloak-ingress
   namespace: infra
   annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-body-limit@kubernetescrd,infra-keycloak-root@kubernetescrd
     argocd.argoproj.io/sync-wave: "0"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/app-root: /auth/admin/master/console/
-    # Cloudflare Access carries a signed OIDC state value, and Odoo uses an
-    # implicit response. Their redirect Location headers exceed Nginx's 4 KiB
-    # default even with compact tokens.
-    nginx.ingress.kubernetes.io/proxy-buffer-size: 32k
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts: [keycloak.__PUBLIC_DOMAIN__]
       secretName: __TLS_SECRET_NAME__

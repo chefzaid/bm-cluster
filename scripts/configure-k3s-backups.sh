@@ -29,10 +29,14 @@ command -v jq >/dev/null || { echo "jq is required." >&2; exit 1; }
 [[ "$CONFIGURE_OFFSITE_BACKUPS" =~ ^(true|false)$ ]] || { echo "CONFIGURE_OFFSITE_BACKUPS must be true or false." >&2; exit 1; }
 [[ "$RUN_BACKUP_NOW" =~ ^(true|false)$ ]] || { echo "RUN_BACKUP_NOW must be true or false." >&2; exit 1; }
 
-if ! sudo test -d "${K3S_DATA_DIR:-/var/lib/rancher/k3s}/server/db/etcd" && ! command -v sqlite3 >/dev/null; then
+if ! sudo test -d "${K3S_DATA_DIR:-/var/lib/rancher/k3s}/server/db/etcd/member" && ! command -v sqlite3 >/dev/null; then
   sudo apt-get update -qq
   sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sqlite3 >/dev/null
 fi
+
+# The backup unit requires these read-only mounts even before Vault or offsite
+# credentials have been configured during a fresh installation.
+sudo install -d -o root -g root -m 0700 /etc/bm-cluster /var/lib/bm-cluster
 
 if [[ "$CONFIGURE_OFFSITE_BACKUPS" == "true" ]]; then
   [[ "$BACKUP_S3_ENDPOINT" == https://* ]] || { echo "BACKUP_S3_ENDPOINT must use HTTPS." >&2; exit 1; }
@@ -52,7 +56,6 @@ if [[ "$CONFIGURE_OFFSITE_BACKUPS" == "true" ]]; then
     printf 'AWS_SECRET_ACCESS_KEY=%q\n' "$BACKUP_S3_SECRET_KEY"
     printf 'AWS_DEFAULT_REGION=%q\n' "$BACKUP_S3_REGION"
   } > "$backup_environment"
-  sudo install -d -o root -g root -m 0700 /etc/bm-cluster
   sudo install -o root -g root -m 0600 "$backup_environment" /etc/bm-cluster/backup.env
 fi
 
@@ -61,8 +64,8 @@ sudo install -o root -g root -m 0750 "$REPO_ROOT/scripts/backup-k3s.sh" /usr/loc
 sudo install -d -o root -g root -m 0755 /usr/local/lib/bm-cluster
 sudo install -o root -g root -m 0644 "$REPO_ROOT/scripts/lib/postgres-access.sh" /usr/local/lib/bm-cluster/postgres-access.sh
 sudo install -o root -g root -m 0644 "$REPO_ROOT/scripts/lib/vault-access.sh" /usr/local/lib/bm-cluster/vault-access.sh
-sudo install -o root -g root -m 0644 "$REPO_ROOT/config/systemd/bm-k3s-backup.service" /etc/systemd/system/bm-k3s-backup.service
-sudo install -o root -g root -m 0644 "$REPO_ROOT/config/systemd/bm-k3s-backup.timer" /etc/systemd/system/bm-k3s-backup.timer
+sudo install -o root -g root -m 0644 "$REPO_ROOT/config/host/bm-k3s-backup.service" /etc/systemd/system/bm-k3s-backup.service
+sudo install -o root -g root -m 0644 "$REPO_ROOT/config/host/bm-k3s-backup.timer" /etc/systemd/system/bm-k3s-backup.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now bm-k3s-backup.timer >/dev/null
 if [[ "$RUN_BACKUP_NOW" == "true" ]]; then

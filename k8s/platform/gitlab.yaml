@@ -160,8 +160,6 @@ spec:
       nodeSelector:
         kubernetes.io/os: linux
         kubernetes.io/arch: amd64
-      imagePullSecrets:
-        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         seccompProfile:
@@ -170,7 +168,7 @@ spec:
       - name: gitlab
         securityContext:
           allowPrivilegeEscalation: false
-        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/gitlab:19.3.1-20260909.2@sha256:17d03a47cbe3c7da7f5f29f9bcc824e0a7dec8142e9813b3b7387b2de6337945
+        image: docker.io/gitlab/gitlab-ce:19.3.1-ce.0@sha256:b431dcb56dbc1387182717c75fd8b581c2cbb09062cc6290098bbafd85343573
         env:
         - name: KEYCLOAK_CLIENT_SECRET
           valueFrom:
@@ -194,8 +192,26 @@ spec:
             secretKeyRef:
               name: monitoring-alert-credentials
               key: token
+        - name: INGRESS_TRUSTED_PROXY_CIDRS
+          valueFrom:
+            configMapKeyRef:
+              name: ingress-proxy-trust
+              key: trustedIPs
+              optional: true
         - name: GITLAB_OMNIBUS_CONFIG
           value: |
+            require 'ipaddr'
+            # Traefik appends its edge peer to XFF. Share its proxy inventory so
+            # Rails/Rack identify the visitor instead of a public Cloudflare IP.
+            edge_proxy_cidrs = ENV.fetch('INGRESS_TRUSTED_PROXY_CIDRS', '').split(',').map do |value|
+              cidr = value.strip
+              network = IPAddr.new(cidr)
+              raise 'Invalid ingress proxy CIDR' unless cidr.include?('/') && network.prefix.positive?
+              "#{network}/#{network.prefix}"
+            end
+            gitlab_rails['trusted_proxies'] = (
+              ['127.0.0.0/8', '::1/128', 'fc00::/7', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] + edge_proxy_cidrs
+            ).uniq
             external_url 'https://gitlab.__PUBLIC_DOMAIN__'
             gitlab_rails['nginx']['listen_port'] = 80
             gitlab_rails['nginx']['listen_https'] = false

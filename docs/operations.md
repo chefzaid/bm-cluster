@@ -47,8 +47,8 @@ For private application images, declare registry credentials through workload or
 ServiceAccount `imagePullSecrets` in the application namespace. Trivy Operator
 uses those references without a central list of application credential names;
 see its [private registry guidance](https://aquasecurity.github.io/trivy-operator/v0.27.0/tutorials/private-registries/).
-Application repositories own secret provisioning and rotation. Platform fallback
-credentials cover only platform-owned images.
+Application repositories own secret provisioning and rotation. Platform images
+are public and need no fallback registry credentials.
 
 ```bash
 kubectl get vulnerabilityreports,configauditreports,exposedsecretreports -A
@@ -141,8 +141,48 @@ Run from the repository root before changing installation or deployment behavior
 ./scripts/validate-repository.sh --live
 ```
 
-The second command adds Kubernetes server-side dry-runs without changing cluster
-resources. Checks cover shared contracts, shell code, Ansible, manifests,
-immutable images, and hostname inventories. Behavioral fixtures require Bash,
-jq, SQLite's `sqlite3` CLI, and `flock`; CI installs them automatically.
-See [delivery](delivery.md) for the additional default-branch deployment checks.
+The first command is offline and requires Bash, Git, ShellCheck, Python 3 with
+PyYAML, Helm, Ansible, Node.js, jq, SQLite's `sqlite3` CLI, and `flock`. CI installs
+these tools. Missing dependencies fail validation rather than silently skipping
+deployment checks. It checks syntax, documentation links, manifest inventories,
+workload policy and platform-owned image digests. Seven installer/GitOps render
+combinations cover HA, Odoo scope, PostgreSQL staging/cutover,
+Kafka migration phases and fencing. Each render checks resource references,
+Service selectors and named ports, Ingress backends, RBAC and installer/GitOps
+parity, then the command runs the [six safety suites](structure.md#validation-policy).
+
+The second command adds server-side dry-runs of the rendered profiles, including
+the opted-in database migration and fencing resources, against the active
+Kubernetes context.
+It requires kubectl, access to the API and the platform CRDs; it does not install
+resources. Synthetic `example.com` settings validate API compatibility, not the
+live installation's credentials, routing or health. Generated files are private
+and removed on exit.
+
+Syntax and rendering cannot establish successful installation, image runtime
+compatibility or failover. Rehearse installer/enrollment changes on disposable
+hosts and follow each service's upgrade/recovery guide. See [delivery](delivery.md)
+for the additional default-branch reconciliation and service checks.
+
+### Disposable rehearsal coverage
+
+The controller/image transition was rehearsed on 14 September 2026 without
+accessing the installed cluster. Evidence and temporary fixtures were kept
+outside Git; they are not another permanent test framework.
+
+| Area | Verified behavior |
+| --- | --- |
+| Installation wiring | Seven installer/GitOps render profiles; six safety suites; real Ansible with isolated host/cluster command substitutes across 24 scenarios; migration and ingress failure paths. |
+| K3s and ingress | Fresh pinned K3s server with embedded etcd and a joined worker; actual shared Traefik helper installation as an isolated candidate and promotion to direct ingress; native Ingress/CRD providers and all four app ingress NetworkPolicies. |
+| K3s recovery | Actual etcd snapshot restored with the original server token; earlier ConfigMap and encrypted Secret values returned, newer data disappeared, and both nodes rejoined Ready. |
+| HTTP behavior | All rendered platform/app Ingress paths, TLS/SNI, HTTPS redirects, auth return URLs/headers/cookies, backend 401, path boundaries, request limits, a 10 MiB authenticated POST, registry streaming upload, WebSocket echo and 90/10 native canary routing. |
+| Authentication | Actual OAuth2 Proxy and Traefik with a local OIDC/PKCE fixture, signed tokens, session cookies, identity/access-token headers and body-free authorization. |
+| Upstream state | PostgreSQL startup/persistence and SQL restore; MongoDB authenticated persistence; Vault Raft/unseal/snapshot; Keycloak production boot and database schema; SonarQube startup; GitLab API, Git repository/issue persistence and complete backup/restore after synthetic mutations. |
+
+The K3s nodes were disposable Docker containers. This does not validate Ubuntu
+provisioning, physical disks/Longhorn replication, real host fencing, Cloudflare
+Tunnel failover, production OIDC sessions or restoration of existing private-image
+data. Rehearse those against the actual host environment and protected backup
+copies before the [maintenance cutover](platform-migration.md). A synthetic
+upstream restore establishes the candidate's recovery path, not old-data
+compatibility.

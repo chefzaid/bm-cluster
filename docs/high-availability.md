@@ -11,7 +11,7 @@ activation steps.
 | Component | Opt-in behavior and limits |
 | --- | --- |
 | K3s | Three or more control planes with an odd embedded-etcd membership; a majority must remain available |
-| Public ingress | One NGINX pod and co-located Cloudflare Tunnel connector per control plane; public DNS targets the tunnel |
+| Public ingress | One Traefik pod and co-located Cloudflare Tunnel connector per control plane; public DNS targets the tunnel |
 | PostgreSQL | CloudNativePG primary and two standbys on different hosts; each commit requires one synchronous standby, and the canonical Service follows the primary |
 | Kafka | Three native KRaft controllers and brokers, replicated topics and an enforced minimum in-sync replica count after migration |
 | Vault | Three Raft voters on different control planes, with recovery material available on every verified control plane |
@@ -33,9 +33,9 @@ flowchart TB
     accDescr: Cloudflare reaches an independent Tunnel connector and local ingress on every control plane. Kubernetes Services route requests to application replicas on separate hosts. PostgreSQL, Vault, Kafka and Redis have their own replication and failover mechanisms.
     Edge["Cloudflare<br/>Public DNS targets the Tunnel"]
     subgraph Planes["Three or more control planes"]
-        CP1["Control plane 1<br/>Tunnel + local NGINX"]
-        CP2["Control plane 2<br/>Tunnel + local NGINX"]
-        CP3["Control plane 3<br/>Tunnel + local NGINX"]
+        CP1["Control plane 1<br/>Tunnel + local Traefik"]
+        CP2["Control plane 2<br/>Tunnel + local Traefik"]
+        CP3["Control plane 3<br/>Tunnel + local Traefik"]
         Etcd["Private K3s API and etcd quorum"]
     end
     Edge --> CP1

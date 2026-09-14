@@ -1,8 +1,3 @@
-# Public images let a fresh cluster start GitLab, its registry, and Vault.
-securityImagesEnabled: false
-trivy-operator:
-  image:
-    pullSecrets: []
-  trivy:
-    image:
-      imagePullSecret: null
+# Compatibility guard for existing Argo Applications; no image profile remains.
+# Replace the Application Helm settings using docs/platform-migration.md.
+platformMigrationRequired: true

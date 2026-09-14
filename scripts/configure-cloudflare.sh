@@ -29,7 +29,7 @@ API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 NODE_DNS_LABEL="${CLOUDFLARE_NODE_DNS_LABEL:-$DEFAULT_CLOUDFLARE_NODE_DNS_LABEL}"
 PUBLISH_NODE_DNS="${CLOUDFLARE_PUBLISH_NODE_DNS:-true}"
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-infra}"
-INGRESS_SERVICE="${INGRESS_SERVICE:-ingress-nginx-controller}"
+INGRESS_SERVICE="${INGRESS_SERVICE:-traefik}"
 
 MIN_TLS_VERSION="${CLOUDFLARE_MIN_TLS_VERSION:-1.2}"
 ENABLE_HSTS="${CLOUDFLARE_ENABLE_HSTS:-true}"
@@ -48,7 +48,6 @@ ACCESS_TEAM_NAME="${CLOUDFLARE_ACCESS_TEAM_NAME:-${DEFAULT_CLOUDFLARE_ACCESS_TEA
 ACCESS_TEAM_NAME_EXPLICIT=false
 [[ -z "$ACCESS_TEAM_NAME" ]] || ACCESS_TEAM_NAME_EXPLICIT=true
 ACCESS_OIDC_CLIENT_SECRET="${CLOUDFLARE_ACCESS_OIDC_CLIENT_SECRET:-}"
-INGRESS_CONFIGMAP="${INGRESS_CONFIGMAP:-$INGRESS_SERVICE}"
 INGRESS_MODE="${CLOUDFLARE_INGRESS_MODE:-}"
 TUNNEL_ID=""
 DNS_RECORD_TYPE=A
@@ -88,7 +87,7 @@ baseline, scoped WAF/cache rules, and Keycloak-backed Access for administrative 
 Options:
   --zone DOMAIN       Cloudflare zone (default: config/platform.env)
   --account-id ID     Cloudflare account ID; discovered when omitted
-  --origin-ip IP      NGINX public IPv4; discovered from Kubernetes when omitted
+  --origin-ip IP      Traefik public IPv4; discovered from Kubernetes when omitted
   -h, --help          Show this help
 
 Secret input:
@@ -118,7 +117,6 @@ Optional environment variables:
   CLOUDFLARE_ACCESS_TEAM_NAME      Used only when creating a Zero Trust organization
   INGRESS_NAMESPACE
   INGRESS_SERVICE
-  INGRESS_CONFIGMAP
   CLOUDFLARE_INGRESS_MODE         direct or tunnel; defaults to persisted cluster mode
 EOF
 }
@@ -224,6 +222,7 @@ The custom user token must allow:
   Zone    -> SSL and Certificates     -> Edit
   Zone    -> WAF                      -> Edit
   Zone    -> Cache Rules              -> Edit
+  Zone    -> Transform Rules          -> Edit
   Zone    -> Bot Management           -> Read
   Zone    -> Bot Management           -> Edit
   Account -> Access: Apps and Policies -> Edit
@@ -464,6 +463,22 @@ configure_edge_rules() {
         printf -v host_literal '"%s"' "$fqdn"
         host_set+="${host_set:+ }$host_literal"
     done
+
+    step "Reconciling trusted client addresses at the Cloudflare edge"
+    # Cloudflare rebuilds removed X-Forwarded-For from the visitor connection.
+    rule_file="$WORK_DIR/rule-client-ip.json"
+    jq -n --arg expression "(http.host in {$host_set})" '{
+        action:"rewrite",
+        action_parameters:{headers:{"x-forwarded-for":{operation:"remove"}}},
+        description:"bm-cluster: discard client-supplied forwarding chains",
+        enabled:true,
+        expression:$expression
+    }' > "$rule_file"
+    reconcile_ruleset_rule \
+        http_request_late_transform \
+        "BM Cluster request header rules" \
+        "bm-cluster: discard client-supplied forwarding chains" \
+        "$rule_file"
 
     if [[ "$ENABLE_WAF" == "true" ]]; then
         step "Reconciling the BM Cluster custom WAF rule"
@@ -759,34 +774,33 @@ append_unique_namespace() {
     TLS_NAMESPACES+=("$candidate")
 }
 
-configure_ingress_proxy_trust() {
-    local cidr_csv="$1"
-    local use_forwarded_headers="${2:-true}"
-    local current_data desired_data
-
-    if ! kubectl get configmap "$INGRESS_CONFIGMAP" -n "$INGRESS_NAMESPACE" >/dev/null 2>&1; then
-        warn "Ingress ConfigMap $INGRESS_NAMESPACE/$INGRESS_CONFIGMAP was not found; skipping Cloudflare client-IP trust configuration."
+verify_ingress_proxy_trust() {
+    local cidr_csv="$1" workloads
+    workloads="$(kubectl get deployment,daemonset -n "$INGRESS_NAMESPACE" -l app.kubernetes.io/name=traefik -o json)"
+    jq -e 'type == "object" and (.items | type) == "array"' <<< "$workloads" >/dev/null || \
+        error "Kubernetes returned an invalid Traefik workload inventory."
+    if [[ "$(jq '.items | length' <<< "$workloads")" == 0 ]]; then
+        warn "Traefik is not installed yet; configure-ingress.sh must configure edge trust before serving traffic."
         return 0
     fi
-
-    desired_data="$(jq -n --arg cidrs "$cidr_csv" --arg forwarded "$use_forwarded_headers" '{
-        "enable-real-ip":"true",
-        "forwarded-for-header":"CF-Connecting-IP",
-        "proxy-real-ip-cidr":$cidrs,
-        "use-forwarded-headers":$forwarded,
-        "ssl-protocols":"TLSv1.2 TLSv1.3",
-        "server-tokens":"false"
-    }')"
-    current_data="$(kubectl get configmap "$INGRESS_CONFIGMAP" -n "$INGRESS_NAMESPACE" -o json | jq -c '.data // {}')"
-    if jq -ne --argjson current "$current_data" --argjson desired "$desired_data" \
-        '$desired | to_entries | all(. as $entry | $current[$entry.key] == $entry.value)' >/dev/null; then
-        info "Ingress already trusts only Cloudflare proxy ranges for client IP headers."
-        return 0
+    if ! jq -e --arg cidrs "$cidr_csv" '
+      ($cidrs | split(",") | map(ascii_downcase) | sort) as $expected |
+      all(.items[];
+        (.spec.template.spec.containers | type) == "array" and
+        ([.spec.template.spec.containers[] | select(.name == "traefik")] | length) == 1 and
+        all(.spec.template.spec.containers[] | select(.name == "traefik");
+          (.args | type) == "array" and all(.args[]; type == "string") and
+          ((.args | map(ascii_downcase)) as $args |
+            all(["web", "websecure"][];
+              . as $entry |
+              [$args[] | select(startswith("--entrypoints." + $entry + ".forwardedheaders.trustedips="))] as $trust |
+              ($trust | length) == 1 and ($trust[0] | split("=")[1] | split(",") | sort) == $expected) and
+            all($args[];
+              (test("^--entrypoints\\.[^.]+\\.forwardedheaders\\.insecure(=|$)") | not) or endswith("=false")))))
+      ' <<< "$workloads" >/dev/null; then
+        error "Traefik edge trust differs from the current Cloudflare networks; reconcile ingress before publishing DNS."
     fi
-
-    kubectl patch configmap "$INGRESS_CONFIGMAP" -n "$INGRESS_NAMESPACE" --type merge \
-        -p "$(jq -cn --argjson data "$desired_data" '{data:$data}')" >/dev/null
-    info "Configured ingress to trust CF-Connecting-IP only from Cloudflare proxy ranges."
+    info "Verified ingress forwarded-header trust against the current edge inventory."
 }
 
 lock_origin_firewall() {
@@ -954,7 +968,7 @@ if [[ "$INGRESS_MODE" == tunnel ]]; then
     [[ "$TUNNEL_ID" =~ ^[a-f0-9]{8}-([a-f0-9]{4}-){3}[a-f0-9]{12}$ ]] || error "Prepare HA ingress with configure-cloudflare-tunnel.py first."
     [[ "$(jq -r '.data.domain // empty' <<< "$ingress_state")" == "$ZONE_NAME" ]] || error "Tunnel domain differs from the requested zone."
     # Count distinct nodes, not pods: duplicate replicas on one host are not HA.
-    ready_connectors="$(kubectl get pods -n "$INGRESS_NAMESPACE" -l app.kubernetes.io/component=controller,app.kubernetes.io/name=ingress-nginx -o json | jq '
+    ready_connectors="$(kubectl get pods -n "$INGRESS_NAMESPACE" -l app.kubernetes.io/name=traefik -o json | jq '
       [.items[] | select(.metadata.deletionTimestamp == null) |
        select(any(.status.containerStatuses[]?; .name == "cloudflared" and .ready == true)) |
        select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) |
@@ -1036,9 +1050,9 @@ mapfile -t CLOUDFLARE_PROXY_CIDRS < <(jq -r '.result.ipv4_cidrs[], .result.ipv6_
 (( ${#CLOUDFLARE_PROXY_CIDRS[@]} > 0 )) || error "Cloudflare returned no proxy networks."
 cloudflare_proxy_cidr_csv="$(IFS=,; echo "${CLOUDFLARE_PROXY_CIDRS[*]}")"
 if [[ "$INGRESS_MODE" == tunnel ]]; then
-    configure_ingress_proxy_trust '127.0.0.1/32,::1/128' false
+    verify_ingress_proxy_trust '127.0.0.1/32,::1/128'
 else
-    configure_ingress_proxy_trust "$cloudflare_proxy_cidr_csv"
+    verify_ingress_proxy_trust "$cloudflare_proxy_cidr_csv"
 fi
 
 if [[ -n "${CLOUDFLARE_HOST_LABELS:-}" ]]; then

@@ -318,9 +318,6 @@ else
     '
 fi
 
-# Share only read access to the platform image repository with runtime pods.
-"$SCRIPT_DIR/configure-security-image-registry.sh"
-
 if kubectl get externalsecret gitlab-runner-token -n "$RUNNER_NAMESPACE" >/dev/null 2>&1; then
   kubectl annotate externalsecret gitlab-runner-token -n "$RUNNER_NAMESPACE" \
     force-sync="$(date +%s)" --overwrite >/dev/null

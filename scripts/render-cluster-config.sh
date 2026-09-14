@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 OUTPUT_DIR=""
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-}"
 INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-}"
@@ -14,6 +14,8 @@ INSTALL_APPS="${INSTALL_APPS:-true}"
 INSTALL_DESCHEDULER="${INSTALL_DESCHEDULER:-true}"
 
 fail() { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
+
+[[ -z "${SECURITY_IMAGES_ENABLED:-}" ]] || fail "SECURITY_IMAGES_ENABLED has been retired; follow docs/platform-migration.md and unset it."
 
 while (( $# > 0 )); do
   case "$1" in
@@ -44,8 +46,17 @@ platform_identity_defaults
 platform_identity_validate
 export PLATFORM_DOMAIN INTERNAL_DNS_ZONE GITOPS_REPOSITORY_URL CLOUDFLARE_ACCESS_TEAM_NAME INSTALL_APPS INSTALL_DESCHEDULER
 
-[[ -n "$OUTPUT_DIR" && "$OUTPUT_DIR" != / && "$OUTPUT_DIR" != "$REPOSITORY_ROOT" ]] || \
+[[ -n "$OUTPUT_DIR" ]] || fail "Choose a dedicated output directory."
+OUTPUT_DIR="$(realpath -m -- "$OUTPUT_DIR")"
+case "$OUTPUT_DIR/" in
+  "$REPOSITORY_ROOT/"*) fail "Render outside the repository checkout." ;;
+esac
+[[ "$OUTPUT_DIR" != / && ( ! -e "$OUTPUT_DIR" || -d "$OUTPUT_DIR" ) ]] || \
   fail "Choose a dedicated output directory."
+# Reusing a populated directory can retain removed manifests or an old HA
+# profile. Refuse it instead of deleting files the renderer may not own.
+[[ ! -d "$OUTPUT_DIR" || -z "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]] || \
+  fail "The output directory must be empty; choose a fresh staging directory."
 [[ "$PLATFORM_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
   fail "Invalid public domain: $PLATFORM_DOMAIN"
 [[ "$INTERNAL_DNS_ZONE" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || \
@@ -58,14 +69,13 @@ export PLATFORM_DOMAIN INTERNAL_DNS_ZONE GITOPS_REPOSITORY_URL CLOUDFLARE_ACCESS
 [[ "$CLOUDFLARE_ACCESS_TEAM_NAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] || fail "Invalid Cloudflare Access team name."
 [[ "$INSTALL_APPS" =~ ^(true|false)$ ]] || fail "--apps-enabled must be true or false."
 [[ "$INSTALL_DESCHEDULER" =~ ^(true|false)$ ]] || fail "--descheduler-enabled must be true or false."
+[[ "${HIGH_AVAILABILITY_ENABLED:-false}" =~ ^(true|false)$ ]] || fail "HIGH_AVAILABILITY_ENABLED must be true or false."
 
-install -d -m 0700 "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config"
+install -d -m 0700 "$OUTPUT_DIR" "$OUTPUT_DIR/k8s" "$OUTPUT_DIR/config"
 cp -a "$REPOSITORY_ROOT/k8s/." "$OUTPUT_DIR/k8s/"
 install -m 0600 "$REPOSITORY_ROOT/config/argocd-values.yaml" "$OUTPUT_DIR/config/argocd-values.yaml"
 install -m 0600 "$REPOSITORY_ROOT/config/vault-values.yaml" "$OUTPUT_DIR/config/vault-values.yaml"
-install -m 0600 "$REPOSITORY_ROOT/config/ingress-nginx-values.yaml" "$OUTPUT_DIR/config/ingress-nginx-values.yaml"
-python3 "$SCRIPT_DIR/render-security-images.py" --root "$OUTPUT_DIR" \
-  --domain "$PLATFORM_DOMAIN" --enabled "${SECURITY_IMAGES_ENABLED:-auto}"
+install -m 0600 "$REPOSITORY_ROOT/config/traefik-values.yaml" "$OUTPUT_DIR/config/traefik-values.yaml"
 
 python3 "$SCRIPT_DIR/render-identity.py" --root "$OUTPUT_DIR"
 

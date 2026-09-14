@@ -499,7 +499,7 @@ class Services:
                 return "CNAME", tunnel + ".cfargotunnel.com"
             if values.get("mode") != "direct":
                 raise ServiceError("Unknown platform public ingress mode")
-        service = self.kubectl("get", "service", "ingress-nginx-controller", "-n", "infra", "-o", "json", "--request-timeout=15s")
+        service = self.kubectl("get", "service", "traefik", "-n", "infra", "-o", "json", "--request-timeout=15s")
         addresses = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
         public = []
         for address in addresses:

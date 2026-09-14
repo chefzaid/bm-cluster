@@ -123,7 +123,7 @@ main() {
     # Only scripts and unit files use SCP. Recovery values are never staged in
     # the SSH account's home or temporary directory.
     scp "${scp_options[@]}" "$SCRIPT_DIR/sync-vault-recovery.sh" "$SCRIPT_DIR/vault-unseal.sh" \
-      "$SCRIPT_DIR/../config/systemd/bm-vault-unseal.service" "$SCRIPT_DIR/../config/systemd/bm-vault-unseal.timer" \
+      "$SCRIPT_DIR/../config/host/bm-vault-unseal.service" "$SCRIPT_DIR/../config/host/bm-vault-unseal.timer" \
       "$target:$remote_dir/"
     printf -v command 'sudo -n bash %q --receive-stdin' "$remote_dir/sync-vault-recovery.sh"
     for quoted in "$name" "$address"; do printf -v quoted ' %q' "$quoted"; command+="$quoted"; done

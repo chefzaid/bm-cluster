@@ -32,7 +32,7 @@ all Argo Applications and let in-progress operations finish. Leave them paused
 until the final values have been persisted and verified.
 
 Use rendered installation Helm values for `--desired-values`, with the normal
-domain, internal DNS, image profile and GitOps inputs. Follow
+domain, internal DNS and GitOps inputs. Follow
 [installation inputs](installation.md#unattended-installation); do not
 pass the placeholder reference in `config/kafka-ha-values.yaml` as the complete
 platform values. Keep this file and the migration journal outside Git:
@@ -133,10 +133,8 @@ Check acknowledged production and consumption after losing the original host,
 then restore full health before another failure. Replica counts alone do not
 prove data durability or host-failure behavior.
 
-Repository checks are `python3 scripts/test-kafka-ha.py`. The optional
-`python3 scripts/test-kafka-ha-integration.py --output-dir PRIVATE_DIR` runs
-an isolated Docker canary using the rendered pinned image and temporary
-volumes; it exercises native upgrade, record preservation, observer admission,
-replication and loss of the original controller/broker. It requires Docker,
-Helm and several GiB of spare memory. It does not mutate Kubernetes or establish
-physical-host/network/storage failover.
+Offline migration safety checks are `python3 tests/test-kafka-ha.py` and run in
+repository validation. Before changing Kafka versions or migration logic,
+rehearse the prepare/migrate/verify sequence above on a disposable cluster with
+sample records. Check record preservation, observer admission and replication,
+then perform the controlled host-failure drill.

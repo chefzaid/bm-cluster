@@ -168,11 +168,11 @@ data:
             description: Distributed persistent storage
             namespace: longhorn-system
             podSelector: app.kubernetes.io/instance=longhorn
-        - NGINX Ingress:
+        - Traefik Ingress:
             icon: nginx.png
             description: Internal HTTP ingress controller
             namespace: infra
-            podSelector: app.kubernetes.io/instance=ingress-nginx
+            podSelector: app.kubernetes.io/name=traefik
         - K3s:
             icon: k3s.png
             description: Lightweight Kubernetes control plane and workers
@@ -181,9 +181,9 @@ data:
             description: Manual workload rebalancing addon
         - K3s ServiceLB:
             icon: mdi-swap-horizontal-bold
-            description: LoadBalancer implementation for NGINX
+            description: LoadBalancer implementation for Traefik
             namespace: kube-system
-            podSelector: svccontroller.k3s.cattle.io/svcname=ingress-nginx-controller
+            podSelector: svccontroller.k3s.cattle.io/svcname=traefik
 
     - Data & Messaging:
         - DBGate:
@@ -378,6 +378,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: homepage
+  annotations:
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: homepage_route
+    traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: lax
   namespace: infra
   labels:
     app: homepage
@@ -464,7 +469,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: homepage
-        image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/homepage:2.2.0-20260910.1@sha256:6913069a6bf1df934b18c40520f65b76b6fc1dd93d8882694c9b5cd702b94a89
+        image: ghcr.io/gethomepage/homepage:v2.2.0@sha256:753eeb0cc22ab7baad39ed47cbd1aae14e193dd1b264e965f193a9ea1d1e1bdd
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -570,8 +575,6 @@ spec:
       - name: next-cache
         emptyDir:
           sizeLimit: 256Mi
-      imagePullSecrets:
-      - name: platform-registry-auth
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -583,19 +586,9 @@ metadata:
     app.kubernetes.io/name: homepage
     app.kubernetes.io/part-of: bm-cluster
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/affinity: cookie
-    nginx.ingress.kubernetes.io/affinity-mode: balanced
-    nginx.ingress.kubernetes.io/session-cookie-name: homepage_route
-    nginx.ingress.kubernetes.io/session-cookie-samesite: Lax
-    nginx.ingress.kubernetes.io/session-cookie-secure: "true"
-    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
-    nginx.ingress.kubernetes.io/auth-url: http://oauth2-proxy.__INTERNAL_DNS_ZONE__:4180/oauth2/auth
-    nginx.ingress.kubernetes.io/auth-signin: https://keycloak.__PUBLIC_DOMAIN__/oauth2/start?rd=https://$host$escaped_request_uri
-    nginx.ingress.kubernetes.io/auth-response-headers: X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Request-Groups
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-sso@kubernetescrd,infra-platform-body-limit@kubernetescrd
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
   - hosts:
     - intranet.__PUBLIC_DOMAIN__

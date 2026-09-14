@@ -41,10 +41,9 @@ metadata:
   name: vault-ingress
   namespace: infra
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: infra-platform-body-limit@kubernetescrd
 spec:
-  ingressClassName: nginx
+  ingressClassName: traefik
   tls:
     - hosts:
         - vault.__PUBLIC_DOMAIN__

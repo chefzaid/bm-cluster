@@ -13,7 +13,7 @@ infer those requirements or replace manual scans.
 | Namespace discovery | Every 15 minutes, request a scan if the repository has no analysis or its latest analysis is over 24 hours old. |
 | Manual scan | Run a default-branch GitLab pipeline with `SONAR_SCAN_ONLY=true`; app-specific manual jobs/local scanner commands remain available as documented by the app. |
 
-The [`sonar-apps-discovery` CronJob](../k8s/apps/sonar-apps-discovery.yaml) runs
+The [`sonar-apps-discovery` CronJob](../k8s/platform/sonar-apps-discovery.yaml) runs
 in `infra`, listing Deployments, StatefulSets, DaemonSets, CronJobs, standalone
 Jobs and Pods in `apps`. It follows Argo CD tracking annotations to Applications,
 accepts source repositories only within configured GitLab hosts and group, and
@@ -98,9 +98,10 @@ server-side processing, and a failed quality gate differs from submission failur
 
 ## Validation
 
-`./scripts/test-sonar-discovery.sh` checks namespace boundaries, deduplication,
-privacy, scan-only triggers, active/recent work and missing contracts. Application
-repositories should test successful submission, scanner failure and missing-token
+Run `./scripts/validate-repository.sh` for manifest and embedded-script syntax.
+After a discovery change, use the manual pass above with a disposable application
+and verify its selected project, scan-only pipeline and analysis timestamp.
+Application repositories should test successful submission, scanner failure and missing-token
 behavior in their own quality jobs. Validate app CI with both values of
 `SONAR_SCAN_ONLY` and confirm that a scan-only pipeline cannot publish or deploy. The platform's
-[validation suite](operations.md#validation) includes discovery tests.
+[validation](operations.md#validation) covers deployment rendering.

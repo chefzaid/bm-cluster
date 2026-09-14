@@ -488,9 +488,15 @@ fi
 
 command -v apt-get >/dev/null 2>&1 || error "This installer currently supports Debian/Ubuntu nodes (apt-get is required)."
 missing_packages=()
-for package in ca-certificates curl open-iscsi nfs-common; do
+# Shared host-policy helpers use sudo, including when enrollment starts as root
+# on a minimal Debian/Ubuntu image where sudo has not yet been installed.
+for package in sudo ca-certificates curl open-iscsi nfs-common; do
     dpkg -s "$package" >/dev/null 2>&1 || missing_packages+=("$package")
 done
+# Vault recovery synchronization and the host unseal timer run on every server.
+if [[ "$ENROLLMENT_ROLE" == control-plane ]] && ! dpkg -s jq >/dev/null 2>&1; then
+    missing_packages+=(jq)
+fi
 if [[ ${#missing_packages[@]} -gt 0 ]]; then
     info "Installing $ENROLLMENT_ROLE prerequisites: ${missing_packages[*]}"
     "${SUDO[@]}" apt-get update -qq

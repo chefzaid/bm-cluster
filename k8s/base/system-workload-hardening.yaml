@@ -159,8 +159,8 @@ metadata:
 spec:
   policyName: bm-k3s-stateless-controller-hardening
 ---
-# Both the public SUSE image and the rebuilt NGINX image were tested with these
-# mounts. The UI proxies the manager API and does not need a Kubernetes token.
+# The public SUSE image uses these writable mounts. The UI proxies the manager
+# API and does not need a Kubernetes token.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
 metadata:
@@ -413,7 +413,7 @@ spec:
   policyName: bm-longhorn-csi-sidecar-hardening
 ---
 # Keep the tested upstream sidecars when Longhorn recreates its DaemonSet.
-# Both image profiles use these public images; no registry credentials are needed.
+# These public images need no registry credentials.
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingAdmissionPolicy
 metadata:

@@ -16,7 +16,6 @@ cloudflareAccessIdpName: ""
 # Controls centrally managed corporate workloads; the apps foundation is always included.
 appsEnabled: false
 deschedulerEnabled: true
-securityImagesEnabled: true
 highAvailabilityEnabled: false
 nodeFencing:
   enabled: false
@@ -108,14 +107,7 @@ trivy-operator:
     scannerReportTTL: 24h
     builtInTrivyServer: true
     accessGlobalSecretsAndServiceAccount: true
-    # Application credentials come from each workload/ServiceAccount's
-    # imagePullSecrets. Only platform fallback credentials belong here.
-    privateRegistryScanSecretsNames:
-      apps: platform-registry-auth
-      infra: platform-registry-auth
-      gitlab-runners: platform-registry-auth
-      kube-system: platform-registry-auth
-      longhorn-system: platform-registry-auth
+    # Scans use each application workload's own imagePullSecrets.
     metricsFindingsEnabled: true
     metricsVulnIdEnabled: true
     metricsExposedSecretInfo: true
@@ -129,8 +121,7 @@ trivy-operator:
     repository: aquasec/trivy-operator
     tag: "0.34.0@sha256:8123bd89b5f089cb5148123bb2b7a23f4d3cee305dd59132616f73776ef8bc9a"
     pullPolicy: IfNotPresent
-    pullSecrets:
-    - name: platform-registry-auth
+    pullSecrets: []
   service:
     headless: false
   podAnnotations:

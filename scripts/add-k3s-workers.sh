@@ -38,9 +38,9 @@ fi
 WORKER_INSTALLER="$SCRIPT_DIR/install-k3s-worker.sh"
 K3S_APPARMOR_INSTALLER="$SCRIPT_DIR/configure-k3s-apparmor.sh"
 K3S_REGISTRY_MIRROR_SCRIPT="$SCRIPT_DIR/configure-k3s-registry-mirror.sh"
-K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../config/apparmor/cri-containerd.apparmor.d"
+K3S_APPARMOR_PROFILE="$SCRIPT_DIR/../config/host/cri-containerd.apparmor.d"
 LONGHORN_HOST_CONFIGURATOR="$SCRIPT_DIR/configure-longhorn-host.sh"
-LONGHORN_MULTIPATH_CONFIG="$SCRIPT_DIR/../config/multipath/multipath-longhorn.conf"
+LONGHORN_MULTIPATH_CONFIG="$SCRIPT_DIR/../config/host/multipath-longhorn.conf"
 SECURITY_HARDENER="$SCRIPT_DIR/configure-node-security.sh"
 LYNIS_SCHEDULER="$SCRIPT_DIR/configure-lynis-schedule.sh"
 NODE_AUDITOR="$SCRIPT_DIR/audit-cluster-nodes.sh"
@@ -293,6 +293,16 @@ command -v scp >/dev/null 2>&1 || error "scp is required."
 command -v kubectl >/dev/null 2>&1 || error "kubectl is required; run this script on a configured control-plane node."
 command -v jq >/dev/null 2>&1 || error "jq is required."
 kubectl cluster-info >/dev/null 2>&1 || error "Cannot reach the Kubernetes API with the current kubeconfig."
+# Standalone enrollment must inherit the installed identity just like the main
+# installer; remote hosts receive a minimal bundle without platform.env.
+command -v python3 >/dev/null 2>&1 || error "python3 is required to read the installed cluster identity."
+# shellcheck source=lib/platform-identity.sh
+source "$SCRIPT_DIR/lib/platform-identity.sh"
+platform_identity_load
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
+K3S_REGISTRY_HOST="${K3S_REGISTRY_HOST:-${DEFAULT_K3S_REGISTRY_HOST:-${PLATFORM_DOMAIN:+registry.$PLATFORM_DOMAIN}}}"
+K3S_REGISTRY_ENDPOINT="${K3S_REGISTRY_ENDPOINT:-${DEFAULT_K3S_REGISTRY_ENDPOINT:-http://10.43.255.251:5050}}"
+[[ -n "$K3S_REGISTRY_HOST" ]] || error "Cannot resolve the cluster registry; set PLATFORM_DOMAIN or K3S_REGISTRY_HOST."
 stored_ha_mode="$(kubectl -n infra get configmap bm-cluster-topology --ignore-not-found -o jsonpath='{.data.highAvailabilityEnabled}')"
 if [[ -z "${HIGH_AVAILABILITY_ENABLED:-}" ]]; then
     HIGH_AVAILABILITY_ENABLED="${stored_ha_mode:-false}"
@@ -859,15 +869,15 @@ install_worker() {
     remote_dir="$(ssh "${ssh_options[@]}" "$target" 'mktemp -d /tmp/bm-cluster-worker.XXXXXX')"
     [[ "$remote_dir" == /tmp/bm-cluster-worker.* ]] || error "Could not create a safe temporary directory on $target."
     printf -v quoted_dir '%q' "$remote_dir"
-    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/config $quoted_dir/config/apparmor $quoted_dir/config/multipath"
+    ssh "${ssh_options[@]}" "$target" "mkdir -m 700 $quoted_dir/scripts $quoted_dir/scripts/lib $quoted_dir/config $quoted_dir/config/host"
     info "Copying the $ENROLLMENT_ROLE installer and enforced AppArmor profile to $target..."
     scp "${scp_options[@]}" "$WORKER_INSTALLER" "$K3S_APPARMOR_INSTALLER" "$K3S_REGISTRY_MIRROR_SCRIPT" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$TAILSCALE_CONFIGURATOR" "$OVH_VRACK_CONFIGURATOR" "$target:$remote_dir/scripts/"
     scp "${scp_options[@]}" "$NETWORK_LIBRARY" "$PROMPT_LIBRARY" "$TRANSPORT_GUIDE_LIBRARY" "$target:$remote_dir/scripts/lib/"
     scp "${scp_options[@]}" "$K3S_NETWORK_CONFIGURATOR" "$target:$remote_dir/scripts/"
-    scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/config/apparmor/"
+    scp "${scp_options[@]}" "$K3S_APPARMOR_PROFILE" "$target:$remote_dir/config/host/"
     scp "${scp_options[@]}" "$LONGHORN_HOST_CONFIGURATOR" "$target:$remote_dir/scripts/"
-    scp "${scp_options[@]}" "$LONGHORN_MULTIPATH_CONFIG" "$target:$remote_dir/config/multipath/"
+    scp "${scp_options[@]}" "$LONGHORN_MULTIPATH_CONFIG" "$target:$remote_dir/config/host/"
     if [[ "$ENROLLMENT_ROLE" == "control-plane" ]]; then
         scp "${scp_options[@]}" "$LYNIS_SCHEDULER" "$NODE_AUDITOR" "${HA_CONTROL_PLANE_CONFIGURATOR:-$SCRIPT_DIR/configure-ha-control-planes.sh}" "$target:$remote_dir/scripts/"
         ssh "${ssh_options[@]}" "$target" "chmod 700 $(printf '%q' "$remote_dir/scripts/configure-lynis-schedule.sh") $(printf '%q' "$remote_dir/scripts/audit-cluster-nodes.sh")"
@@ -877,10 +887,10 @@ install_worker() {
     remote_installer="$remote_dir/scripts/install-k3s-worker.sh"
 
     printf -v quoted_installer '%q' "$remote_installer"
-    remote_command="chmod 700 $quoted_installer && $quoted_installer"
     remote_hardener="$remote_dir/scripts/configure-node-security.sh"
     printf -v quoted_hardener '%q' "$remote_hardener"
     remote_command="chmod 700 $quoted_installer $quoted_hardener $(printf '%q' "$remote_dir/scripts/configure-k3s-apparmor.sh") $(printf '%q' "$remote_dir/scripts/configure-longhorn-host.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-registry-mirror.sh") $(printf '%q' "$remote_dir/scripts/configure-tailscale.sh") $(printf '%q' "$remote_dir/scripts/configure-ovh-vrack.sh") $(printf '%q' "$remote_dir/scripts/configure-k3s-control-plane-network.sh") && $quoted_installer"
+    remote_command="export K3S_REGISTRY_HOST=$(printf '%q' "$K3S_REGISTRY_HOST") K3S_REGISTRY_ENDPOINT=$(printf '%q' "$K3S_REGISTRY_ENDPOINT"); $remote_command"
     if [[ "$ENROLLMENT_ROLE" == control-plane && "${HIGH_AVAILABILITY_ENABLED:-false}" == true ]]; then
         remote_command="export HIGH_AVAILABILITY_ENABLED=true; $remote_command"
     fi

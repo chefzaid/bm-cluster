@@ -92,7 +92,7 @@ def main():
 
     infra = get("pods", "infra")["items"]
     for kind, name, count, namespace in [
-        ("daemonset", "ingress-nginx-controller", 3, "infra"),
+        ("daemonset", "traefik", 3, "infra"),
         ("deployment", "coredns", 3, "kube-system"),
         ("deployment", "cloudnative-pg", 3, "cnpg-system"),
         ("statefulset", "shared-redis-ha-server", 3, "infra"),
@@ -105,7 +105,7 @@ def main():
         workload = get(kind, namespace, name)
         pods = infra if namespace == "infra" else get("pods", namespace)["items"]
         selected = distinct_ready_pods(pods, workload["spec"]["selector"]["matchLabels"], count, name)
-        if name == "ingress-nginx-controller":
+        if name == "traefik":
             require(all(any(c["name"] == "cloudflared" and c.get("ready") for c in p["status"].get("containerStatuses", [])) for p in selected),
                     "Every ingress pod must have a Ready tunnel connector")
     print("PASS: ingress, DNS, identity, secrets and delivery replicas occupy separate hosts")

@@ -2,7 +2,7 @@
 
 Vault stores platform credentials in integrated Raft storage. Installer and
 Ansible render [the shared Helm values](../config/vault-values.yaml), including
-the selected [image profile](security-images.md). Changes to those values need
+the pinned [upstream image](security-images.md). Changes to those values need
 a Helm reconciliation to update an existing release. External Secrets reads
 Vault through Kubernetes authentication; its store and secret mappings are in
 [vault.yaml](../k8s/platform/vault.yaml).
@@ -53,8 +53,8 @@ of that member's data. Keep both audit devices and off-host log collection enabl
 Use [the shared configurator](../scripts/configure-vault-ha.sh), rather than
 applying the overlay directly: Kubernetes cannot add a StatefulSet claim template
 in place. Schedule one maintenance operation from one control plane, verify a
-restoration backup, and select the existing compatible image profile first. Set
-`VAULT_VALUES_FILE` to that profile's rendered `config/vault-values.yaml`.
+restoration backup, and complete any [image transition](platform-migration.md)
+separately. Set `VAULT_VALUES_FILE` to the rendered `config/vault-values.yaml`.
 
 ```sh
 VAULT_HA_MIGRATE_EXISTING=true ./scripts/configure-vault-ha.sh \
@@ -79,16 +79,11 @@ by changing only the Helm replica count.
 
 ## Upgrade and recovery
 
-Test the candidate against the deployed image with disposable Docker data:
-
-```sh
-python3 scripts/test-vault-image.py "$CANDIDATE_IMAGE" \
-  --previous-image "$CURRENT_IMAGE" --logs "$PRIVATE_LOG_DIRECTORY"
-```
-
-The fixture checks existing-volume upgrade, stored secrets, access controls,
-authentication, transit decryption, UI assets, audit rotation and restart. It
-also restores a snapshot into a separate volume using the previous image.
+Test the candidate against the deployed image with disposable data outside the
+production cluster. Verify existing-volume upgrade, stored secrets, access
+controls, authentication, transit decryption, UI assets, audit rotation and
+restart. Restore a snapshot into a separate volume using the previous image
+to establish the recovery path. Keep the fixture and logs outside Git.
 
 Before a production Helm update, save a fresh Raft snapshot and verify its
 archive checksums. Test restoration into an isolated, network-disabled instance
@@ -106,7 +101,7 @@ binary directly against upgraded Raft data.
 ## Host unseal service
 
 The root-owned `bm-vault-unseal.service` is scheduled by
-[bm-vault-unseal.timer](../config/systemd/bm-vault-unseal.timer). Its
+[bm-vault-unseal.timer](../config/host/bm-vault-unseal.timer). Its
 [helper](../scripts/vault-unseal.sh) discovers running Vault server pods, checks
 seal status and reads
 `/var/lib/bm-cluster/vault-unseal-key` only when unsealing is needed. Keep that
@@ -140,9 +135,9 @@ this explicit distribution is requested.
 The anonymous `sys/unseal` request carries the key as JSON over
 `kubectl exec -i` stdin, keeping it out of process arguments and Kubernetes exec
 metadata. Preserve this handling when changing the helper or initial installer
-configuration. [The regression test](../scripts/test-vault-unseal.py) verifies
+configuration. [The regression test](../tests/test-vault-unseal.py) verifies
 stdin handling and error propagation; a real recovery fixture verifies actual
-unsealing. [HA tests](../scripts/test-vault-ha.py) cover survivor selection,
+unsealing. [HA tests](../tests/test-vault-ha.py) cover survivor selection,
 join/unseal ordering, quorum gates and recovery-file target validation.
 
 Check scheduling and the last result without displaying credentials:

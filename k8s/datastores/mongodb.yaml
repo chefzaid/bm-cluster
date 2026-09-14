@@ -58,8 +58,6 @@ spec:
       labels:
         app: mongodb
     spec:
-      imagePullSecrets:
-        - name: platform-registry-auth
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
@@ -73,7 +71,7 @@ spec:
         - name: mongodb
           # MongoDB 8.x refuses Linux 6.19-7.0.13; 7.0.40 is the newest
           # stable version compatible with Ubuntu 26.04's current 7.0.0 kernel.
-          image: registry.__PUBLIC_DOMAIN__/__GITLAB_GROUP_PATH__/__GITLAB_PROJECT_NAME__/security/mongodb:7.0.40-20260909.1@sha256:9573f6c233fd6ab8aa0de331186819415d7fd884ea89ca7c3b88e052930940f8
+          image: docker.io/library/mongo:7.0.40-jammy@sha256:8ef27524b4cde51b9f07bb0827a56d02c6d3b148d0b7d0ca8ff4dfd57351ff4f
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
