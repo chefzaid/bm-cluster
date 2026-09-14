@@ -1,11 +1,12 @@
 # Container image maintenance
 
 Platform workloads use digest-pinned public upstream images. Their owning
-manifests and Helm values are the source of truth; K3s and Longhorn use the
-component images from their pinned releases. There is no downstream image
-build pipeline, central image catalog, private platform registry dependency or
-runtime image substitution policy. Application images and their pull
-credentials remain application-owned.
+manifests and Helm values are the source of truth. K3s and Longhorn use their
+pinned release images, with two tested public CSI sidecar pins maintained by
+[system workload policy](../k8s/base/system-workload-hardening.yaml). There is no
+downstream image build pipeline, central image catalog or private platform
+registry dependency. Application images and their pull credentials remain
+application-owned.
 
 Existing installations must follow [the platform migration](platform-migration.md)
 before adopting these sources. The two files in `k8s/profiles/` deliberately fail

@@ -207,10 +207,12 @@ spec:
               cidr = value.strip
               network = IPAddr.new(cidr)
               raise 'Invalid ingress proxy CIDR' unless cidr.include?('/') && network.prefix.positive?
-              "#{network}/#{network.prefix}"
+              # Omnibus emits these as plain YAML scalars. Expand IPv6 so a
+              # leading :: cannot be interpreted as a Ruby YAML symbol.
+              "#{network.to_string}/#{network.prefix}"
             end
             gitlab_rails['trusted_proxies'] = (
-              ['127.0.0.0/8', '::1/128', 'fc00::/7', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] + edge_proxy_cidrs
+              ['127.0.0.0/8', '0:0:0:0:0:0:0:1/128', 'fc00::/7', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] + edge_proxy_cidrs
             ).uniq
             external_url 'https://gitlab.__PUBLIC_DOMAIN__'
             gitlab_rails['nginx']['listen_port'] = 80
