@@ -9,9 +9,10 @@ error() { echo "[ERROR] $*" >&2; exit 1; }
 
 check_secret_file() {
   local file="$1"
-  sudo test ! -L "$file" && sudo test -s "$file" && \
-    [[ "$(sudo stat -c '%u:%g:%a' "$file")" == 0:0:600 ]] || \
+  if sudo test -L "$file" || ! sudo test -s "$file" || \
+    [[ "$(sudo stat -c '%u:%g:%a' "$file")" != 0:0:600 ]]; then
     error "Recovery files must be nonempty, root-owned regular files with mode 0600"
+  fi
   sudo test -f "$file" || error "Recovery material must be a regular file"
 }
 

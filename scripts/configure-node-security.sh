@@ -129,8 +129,9 @@ inherit_private_control_plane_policy() {
     err "Private control-plane network configuration is not managed by this installer"
   private_ip="$(sed -n 's/^node-ip: "\([0-9.]*\)"$/\1/p' <<< "$configuration")"
   private_interface="$(sed -n 's/^flannel-iface: "\([A-Za-z0-9_.:-]*\)"$/\1/p' <<< "$configuration")"
-  trusted_private_ipv4 "$private_ip" && [[ -n "$private_interface" ]] || \
+  if ! trusted_private_ipv4 "$private_ip" || [[ -z "$private_interface" ]]; then
     err "Managed private control-plane address/interface is missing or invalid"
+  fi
   [[ "$(interface_owning_ip "$private_ip")" == "$private_interface" ]] || \
     err "Managed private control-plane address no longer belongs to its interface"
   [[ -z "${K3S_PRIVATE_ADDRESS:-}" || "$K3S_PRIVATE_ADDRESS" == "$private_ip" ]] || \
