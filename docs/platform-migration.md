@@ -45,12 +45,14 @@ not the default during overlap. Candidate mode refuses to replace an existing
 Traefik release; remove only a verified disposable candidate before repeating
 this preparation. Promotion uses the normal helper on the prepared release.
 
-The old and new controllers require different NetworkPolicy pod selectors.
-Keeping legacy traffic during overlap requires temporary copies of both the old
-Ingress objects and their ingress-allow policies. Applying the new app policies
-alone can disconnect the old controller. The simpler supported cutover is a
-maintenance window: update routes and policies together while writers and
-external traffic are paused. Preserve the old manifests for rollback.
+Keep the existing Ingress objects and ingress-allow NetworkPolicies unchanged
+while probing the candidate. The controllers use different pod selectors, so
+applying the new app policies alone can disconnect the old controller. NGINX
+admission can reject duplicate legacy host/path routes, and a ClusterIP candidate
+does not publish the address required by Argo CD's standard Ingress health check.
+Keep automated sync and deployment jobs paused until the maintenance cutover:
+update routes and policies together, then promote Traefik to the public endpoint.
+Preserve the old manifests for rollback.
 
 Verify HTTPS with the real origin certificate/SNI, HTTP redirects, OAuth login
 and return URL, identity headers, app request limits, WebSockets, Sonar scanner
