@@ -102,7 +102,9 @@ trivy-operator:
     # operator delete jobs immediately after it persists their reports.
     scanJobTTL: ""
     scanSecretTTL: 10m
-    scanJobTimeout: 10m
+    # Large GitLab scans need time for analysis and report compression/upload.
+    # Keep the Job deadline above the scanner timeout so errors can be reported.
+    scanJobTimeout: 25m
     scanJobsConcurrentLimit: 2
     scannerReportTTL: 24h
     builtInTrivyServer: true
@@ -169,7 +171,7 @@ trivy-operator:
     additionalVulnerabilityReportFields: Description,Links,CVSS,Target,Class,PackagePath,PackageType
     offlineScan: true
     slow: true
-    timeout: 10m
+    timeout: 20m
     storageClassEnabled: true
     storageClassName: longhorn
     storageSize: 5Gi
@@ -178,7 +180,7 @@ trivy-operator:
         cpu: 100m
         memory: 128Mi
       limits:
-        cpu: 500m
+        cpu: "1"
         memory: 512Mi
     server:
       podSecurityContext:
