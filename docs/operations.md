@@ -78,6 +78,11 @@ Keep `remove-snapshots-during-filesystem-trim=false` and per-volume
 `unmapMarkSnapChainRemoved` set to `ignored` or `disabled` to preserve snapshots.
 Delete and purge obsolete snapshots separately through Longhorn, then trim;
 never delete replica files directly.
+If allocation remains high after deletion, compare replica allocation with live
+filesystem usage. A filesystem can remember previous trim requests; reclaiming
+those blocks may require a planned workload stop, verified unmount, restart and
+another trim. Follow [Longhorn's trim guidance](https://longhorn.io/docs/1.12.1/nodes-and-volumes/volumes/trim-filesystem/)
+and preserve a verified recovery copy before that interruption.
 
 Retention is declared with the component that owns the data:
 
@@ -105,6 +110,14 @@ backup timer and optional off-node storage. The root-only archives under
 server credentials, K3s configuration, and available Vault/shared-database
 backups. [backup-k3s.sh](../scripts/backup-k3s.sh) defines the contents and
 retention; inspect the archive and service result when verifying coverage.
+
+GitLab needs its own native data backup plus matching configuration and secrets.
+For a Registry using the metadata database, verify that the backup also contains
+`db/registry_database.sql.gz`, or pair it with a verified PostgreSQL dump from the
+same write/GC freeze as the Registry files. `registry.tar.gz` alone does not cover
+that database. Check the installed [Registry backup configuration](https://docs.gitlab.com/omnibus/settings/backups/)
+and archive contents; a successful backup exit status does not establish complete
+coverage. Verify the replacement before rotating older recovery archives.
 
 ```bash
 sudo systemctl status bm-k3s-backup.timer
