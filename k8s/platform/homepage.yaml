@@ -495,11 +495,12 @@ spec:
               command: ["/bin/sh", "-c", "sleep 10"]
         startupProbe:
           httpGet:
-            path: /api/healthcheck
+            # Replace the image's default prerender with the mounted configuration.
+            path: /api/revalidate
             port: http
           failureThreshold: 30
-          periodSeconds: 5
-          timeoutSeconds: 3
+          periodSeconds: 10
+          timeoutSeconds: 10
         readinessProbe:
           httpGet:
             path: /api/healthcheck
