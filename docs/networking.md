@@ -242,8 +242,10 @@ app rate limiters also validate the chain locally. Verify the rule at the live
 edge during cutover, especially if Workers or additional proxies handle a host.
 
 The Traefik release publishes its trusted edge ranges in
-`infra/ingress-proxy-trust`. GitLab adds those ranges to its private proxy trust
-so direct-mode rate limits identify the visitor rather than the Cloudflare edge.
+`infra/ingress-proxy-trust`. GitLab uses those ranges with its private proxy trust
+in both Rails and its bundled NGINX. NGINX resolves the visitor recursively from
+`X-Forwarded-For` before forwarding that address to Workhorse, preserving the
+visitor identity for audit logs and rate limits.
 After changing ingress mode or edge ranges, restart GitLab in a maintenance
 window to reload that environment input. A GitLab installation without ingress
 uses private proxy defaults. The token needs Zone **Transform Rules Edit** in

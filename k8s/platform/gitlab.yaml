@@ -214,6 +214,11 @@ spec:
             gitlab_rails['trusted_proxies'] = (
               ['127.0.0.0/8', '0:0:0:0:0:0:0:1/128', 'fc00::/7', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] + edge_proxy_cidrs
             ).uniq
+            # Bundled NGINX forwards $remote_addr to Workhorse. Resolve the
+            # visitor through the same trusted chain before that replacement.
+            gitlab_rails['nginx']['real_ip_trusted_addresses'] = gitlab_rails['trusted_proxies']
+            gitlab_rails['nginx']['real_ip_header'] = 'X-Forwarded-For'
+            gitlab_rails['nginx']['real_ip_recursive'] = 'on'
             external_url 'https://gitlab.__PUBLIC_DOMAIN__'
             gitlab_rails['nginx']['listen_port'] = 80
             gitlab_rails['nginx']['listen_https'] = false
