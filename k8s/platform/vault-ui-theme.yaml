@@ -147,7 +147,7 @@ spec:
                   number: 8080
 
 ---
-# Same pinned Dark Reader site API and CSP adjustment as Sonar; see docs/platform-themes.md.
+# Same pinned Dark Reader site API and CSP adjustment as Sonar; see docs/maintenance.md#ui-themes.
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -2,61 +2,40 @@
 
 Run `./add-repos.sh` from this checkout on a configured control-plane host. It
 imports GitHub repositories into GitLab, configures two-way synchronization,
-and sets up the repositories selected for deployment. Run it again to add more
-repositories, change saved settings, or resume an interrupted deployment.
+and deploys selected applications. Rerun it to add repositories, change public
+settings or resume interrupted setup.
 
 The installer calls this helper after platform and Argo CD setup when repository
-onboarding is selected. [Ansible](ansible.md#optional-host-and-account-changes)
+onboarding is selected. [Ansible](installation.md#optional-host-and-account-changes)
 uses the same helper and unattended inputs. Application declarations stay in
 their repositories; `bm-cluster` has no application inventory.
 
 ## Guided flow
 
-1. Enter your GitHub username, a hidden personal access token, and comma-separated
-   repositories such as `catalog,org/api`. Bare names belong to your user.
-2. Confirm the public GitLab HTTPS URL and destination group. The URL defaults
-   from the platform domain or installed GitLab Ingress; the group uses the
-   installed platform identity when available and may be nested. Each source
-   keeps its repository name.
-3. Missing groups/projects are created privately. The managed GitHub sync workflow,
-   encrypted Actions secrets/variables and GitLab push/tag webhook are reconciled,
-   then initial synchronization is verified. An unrelated workflow at the managed
-   path is reported instead of overwritten.
-4. The deployment answer is prefilled with all successful repository names.
-   Accept all, enter a comma-separated subset, or enter `none`.
-5. The helper reads each selected repository's `infra/onboarding.json`, asks for
-   its declared inputs, and validates configuration and service prerequisites.
-   Previous public settings are offered as defaults.
-6. Public configuration is committed to the app's default branch with `[skip ci]`.
-   Requested registry/Vault/identity resources and bootstrap prerequisites are
-   reconciled, followed by application-owned DNS.
-7. An API pipeline receives the expected source SHA and a unique run ID. Its release job publishes
-   images and applies the application-owned Argo CD Application. The helper waits
-   for required jobs, the release's exact `Synced`/`Healthy` revision and declared
-   Deployment rollouts.
+1. Enter a GitHub username, hidden personal access token and comma-separated
+   repositories such as `catalog,org/api`; bare names belong to that user.
+2. Confirm the public GitLab HTTPS URL and destination group. Defaults come from
+   the installed platform identity/domain or GitLab Ingress. Nested groups are
+   supported; repository names are preserved.
+3. The helper creates missing groups/projects privately, configures synchronization
+   and verifies the initial copy. It manages the GitHub workflow, encrypted Actions
+   secrets/variables and GitLab push/tag webhook. A conflicting workflow is reported
+   rather than overwritten.
+4. Select deployments: accept all successful imports, choose a comma-separated
+   subset or enter `none`. Each selected repository must have the
+   [onboarding contract](application-onboarding.md).
+5. Supply declared app inputs; previous public choices are defaults. After
+   validation, the helper commits public configuration with `[skip ci]` and sets
+   up declared registry/Vault/identity resources, bootstrap prerequisites and DNS.
+6. An API pipeline receives the configured source SHA and a unique run ID. The
+   app publishes images and applies its Argo CD Application. The helper waits for
+   required jobs, the exact release revision to become `Synced`/`Healthy`, and
+   declared Deployment rollouts.
 
 Selecting deployment authorizes these configuration commits and service changes.
-The helper uses platform-owned operations, not downloaded setup scripts. It
-reports `[READY]` only after delivery and readiness succeed. Missing contracts,
+The helper reports `[READY]` only after delivery and readiness succeed. Missing contracts,
 prerequisites or required jobs produce `[CANNOT DEPLOY]`; imports remain available
 for correction and retry, and failures make the command exit nonzero.
-
-```mermaid
-flowchart TB
-    accTitle: Repeatable repository onboarding
-    accDescr: App selection validates a repository-owned declaration, commits public settings, provisions shared-service prerequisites and DNS, then waits for app CI and Kubernetes readiness.
-    Select["Select repositories"] --> Sync["Import and verify GitHub / GitLab sync"]
-    Sync --> Choose["Select deployments and app inputs"]
-    Choose --> Validate["Validate declaration and prerequisites"]
-    Validate --> Settings["Commit public settings<br/>Pause existing autosync when settings change"]
-    Settings --> Setup["Registry, Vault, optional identity<br/>Bootstrap prerequisites and owned DNS"]
-    Setup --> CI["API pipeline pinned to configured source"]
-    CI --> Release["App publishes images and desired state<br/>Applies its Argo CD Application"]
-    Release --> Ready["Required jobs succeed<br/>Application and Deployments ready"]
-    Setup -.-> State["Private local progress journal"]
-    CI -.-> State
-    State -.->|"Rerun after resolving a failure"| Validate
-```
 
 New projects have CI disabled during import; selecting a valid deployment enables
 CI and the shared runner. Skipped new projects keep CI disabled. Existing projects
@@ -68,11 +47,6 @@ is paused before the settings commit is published. Workloads remain running.
 The app's release job reapplies its committed Application after publishing images,
 restoring its sync policy. First deployment is also owned by that release job;
 onboarding does not start application workloads ahead of it.
-
-Repository onboarding does not add nodes, activate HA or change an app's selected
-deployment path. Follow the [HA guide](high-availability.md) and application-owned
-migration instructions when sufficient physical hosts exist. The shared `apps`
-namespace and its platform foundation do not depend on enabling Odoo in `corp`.
 
 ## Prerequisites and credentials
 
@@ -123,48 +97,20 @@ the installed private service zone; temporary loopback addresses are never saved
 as application endpoints. See [installed context discovery](application-onboarding.md#public-rendering-context)
 for defaults and explicit overrides.
 
-## Deployment contract
+## Application configuration
 
-The default branch must contain `infra/onboarding.json`, a valid `.gitlab-ci.yml`,
-and one Application at `infra/argocd/application.yaml` or `argocd/application.yaml`.
-Its source must be a local Kustomize directory or Helm chart following the default
-branch, targeting `apps` on `https://kubernetes.default.svc`. Its AppProject must
-already allow that source/destination. External charts and multi-source
-Applications are unsupported.
+The [app-author reference](application-onboarding.md) defines supported files,
+inputs, service setup and CI behavior. Public choices are saved in
+`infra/onboarding-values.json`; reruns replace prior rendered values so changed
+domains/groups survive releases. Existing Vault values are retained, not rotated.
 
-Deploying workloads in `apps` also enables automatic discovery for SonarQube and
-per-application Grafana and ELK/Kibana dashboards. Follow the [namespace and discovery requirements](application-onboarding.md#namespace-and-automatic-discovery)
-to configure source analysis and optional application metrics alongside deployment.
+Applications follow the [namespace and discovery contract](observability.md#namespace-and-discovery)
+for dashboards and source analysis. Their selected deployment paths remain
+app-owned; onboarding does not add nodes or activate [HA](high-availability.md).
+The shared `apps` foundation is available even when Odoo is disabled.
 
-Use repository-owned configuration rather than custom Argo CD source overrides;
-unsupported Helm/Kustomize source options are rejected so validation and deployment
-render the same resources.
-
-The [version-1 contract reference](application-onboarding.md) provides a generic
-example, fields and rendering context. Applications declare public/secret inputs,
-explicit public files and mappings, registry/Vault/optional identity setup, exact
-DNS hosts, bootstrap resources, required pipeline jobs and Deployment names.
-
-Public choices and replacement bindings are committed in
-`infra/onboarding-values.json` alongside rendered configuration. Reruns replace
-previous rendered values so changed domains/groups survive later releases. The
-helper normalizes the Application's GitLab URL, default-branch revision and `infra`
-namespace while preserving its source path/profile. App release jobs must honor
-these settings and validate `ONBOARDING_EXPECTED_SHA` before publication/deployment.
-
-Vault setup fills missing values with defaults or generated secrets using
-version-checked writes. Existing values win; a different supplied credential
-fails instead of rotating it. Deleted versions require recovery. Optional fields
-can remain empty until the operator enables their integration. Invalid registry
-credentials can be replaced, retaining prior tokens until consumers refresh.
-
-DNS changes affect only declared hosts in the selected zone. Direct ingress uses
-proxied A records to its unique public IPv4. HA uses proxied CNAME records only
-when the same-zone `publishedTunnelID` equals `tunnelID` in
-`infra/bm-cluster-public-ingress`. Conflicting address records or another app's
-Ingress ownership stop setup. Unrelated MX/TXT records are preserved. A hostname
-change does not delete old records; retire them explicitly after verifying the
-new route. See [DNS ownership](networking.md#application-dns-ownership).
+For hostname changes and direct/Tunnel routing, follow
+[application DNS ownership](networking.md#application-dns-ownership).
 
 ## Automation and reruns
 
@@ -222,8 +168,7 @@ in place. Completed setup is retained; there is no automatic repository deletion
 or data rollback. After configuration is published, the corrected release
 restores the Application's policy. If publication never happened, a rerun can
 restore the prior policy after verifying the source is unchanged. Other selected
-repositories continue, and any
-failure makes the command exit nonzero. A new host can recover public choices
+repositories continue. A new host can recover public choices
 from Git; transferring the private journal is necessary to resume its recorded
 pipeline rather than start a new operation.
 
@@ -238,8 +183,7 @@ packages, Git LFS objects and hosting metadata require separate migration.
 The platform GitOps URL is an independent installer choice. Importing this
 repository copies source; it does not replace platform installation or Odoo setup.
 
-Run `./scripts/validate-repository.sh` for deployment input and rendering checks.
-Verify onboarding changes with a disposable repository using the contract above:
+Run [repository validation](operations.md#validation), then verify onboarding
+changes with a disposable repository using the [app contract](application-onboarding.md):
 confirm private-source visibility, synchronization, a successful pinned pipeline,
-application readiness and an idempotent rerun. See
-[repository validation](operations.md#validation) for the maintained checks.
+application readiness and an idempotent rerun.

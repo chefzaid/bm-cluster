@@ -1,8 +1,34 @@
 # Operations
 
 Run cluster commands from a configured control-plane shell. Start with the
-[service directory](../README.md#services-and-urls) for dashboards and
+[service directory](#services-and-urls) for dashboards and
 [delivery](delivery.md) for GitOps reconciliation.
+
+## Services and URLs
+
+Homepage at `https://intranet.<your-domain>` is the service directory, including
+internal components and application-owned entries. Replace `<your-domain>`
+below with the domain supplied during installation. Administrative UIs
+use the access controls described in [security and identity](security.md).
+
+| Service | URL | Purpose |
+|---|---|---|
+| Odoo | `https://odoo.<your-domain>` | ERP and CRM |
+| Homepage | `https://intranet.<your-domain>` | Service catalog and cluster status |
+| GitLab | `https://gitlab.<your-domain>` | Source, CI, artifacts, and packages |
+| Container Registry | `https://registry.<your-domain>/v2/` | OCI image API; browse images in GitLab |
+| Argo CD | `https://argocd.<your-domain>` | GitOps delivery |
+| SonarQube | `https://sonarqube.<your-domain>` | Source quality analysis |
+| Grafana | `https://grafana.<your-domain>` | Metrics and security dashboards |
+| Kibana | `https://kibana.<your-domain>` | Logs and audit dashboards |
+| Keycloak | `https://keycloak.<your-domain>/auth/admin/master/console/` | Identity administration |
+| Vault | `https://vault.<your-domain>` | Secrets and policies |
+| Longhorn | `https://longhorn.<your-domain>` | Volumes, snapshots, and backups |
+| Portainer | `https://portainer.<your-domain>` | Kubernetes management |
+| DBGate | `https://dbgate.<your-domain>` | PostgreSQL, MongoDB, and Redis administration |
+| Kafbat UI | `https://kafka.<your-domain>` | Kafka administration |
+| Trivy reports | `https://grafana.<your-domain>/d/trivy-security/trivy-security-reports` | Current workload and cluster findings |
+| Lynis reports | `https://kibana.<your-domain>/app/dashboards#/view/lynis-security-audits` | Host audit history |
 
 ## Cluster status
 
@@ -21,47 +47,9 @@ to the application repository.
 
 ## Observability
 
-The platform discovers workloads without a central application inventory:
-
-| Signal | Application contract | Where to inspect it |
-|---|---|---|
-| Runtime metrics | Deploy a workload in `apps`; pod scrape annotations add application endpoint metrics | Grafana's Applications folder: one automatically managed dashboard per application |
-| Custom dashboards | ConfigMaps labeled `grafana_dashboard: "1"` | Grafana |
-| Container logs | Write to stdout/stderr from a workload in `apps` | Kibana's Applications / <application> / Logs dashboards |
-| Source analysis | App-owned scanner configuration and CI jobs | [Sonar discovery](sonar-discovery.md) |
-
-Fluent Bit collects container logs and adds Kubernetes metadata; records from
-`apps` receive `observability_scope=application`. Filebeat ships host Lynis
-records through Logstash to the Lynis Security Audits dashboard. Prometheus
-alerts cover capacity, workload health, jobs, storage, and scrape failures.
-Alertmanager sends firing and resolved events to the infrastructure project's
-**Monitor > Alerts** page in GitLab.
-
-Trivy Operator discovers workloads across namespaces and maintains image/SBOM,
-configuration, RBAC, exposed-secret, infrastructure, and compliance reports.
-Use current reports or Grafana's Trivy Security Reports dashboard when reviewing
-findings; committed scan snapshots become stale. Secret findings contain
-metadata, not the discovered secret values.
-
-For private application images, declare registry credentials through workload or
-ServiceAccount `imagePullSecrets` in the application namespace. Trivy Operator
-uses those references without a central list of application credential names;
-see its [private registry guidance](https://aquasecurity.github.io/trivy-operator/v0.27.0/tutorials/private-registries/).
-Application repositories own secret provisioning and rotation. Platform images
-are public and need no fallback registry credentials.
-
-```bash
-kubectl get vulnerabilityreports,configauditreports,exposedsecretreports -A
-```
-
-The [application dashboard guide](application-observability.md) explains automatic
-grouping, refresh, retention and troubleshooting. App repositories own their
-metrics endpoints, log format, and additional detailed dashboards. Shared
-discovery and dashboards are maintained in
-[monitoring.yaml](../k8s/platform/monitoring.yaml),
-[observability-discovery.yaml](../k8s/platform/observability-discovery.yaml), and
-[trivy.yaml](../k8s/platform/trivy.yaml); scanner settings live in
-[values.yaml](../k8s/values.yaml).
+Use [observability](observability.md) for platform alerts, application dashboards,
+logs, security findings and source analysis. It owns discovery requirements and
+troubleshooting; app repositories own their endpoints, log formats and custom dashboards.
 
 ## Storage and retention
 
@@ -92,7 +80,8 @@ Retention is declared with the component that owns the data:
 | Lynis audit indices | [elk.yaml](../k8s/platform/elk.yaml), separate ILM policy |
 | Shared Prometheus metrics | [monitoring.yaml](../k8s/platform/monitoring.yaml), time and size limits |
 | GitLab's internal metrics | [gitlab.yaml](../k8s/platform/gitlab.yaml), embedded Prometheus flags |
-| Images, packages, and CI artifacts | [Delivery retention](delivery.md#storage-and-retention) |
+| Images and packages | [GitLab retention job](../k8s/platform/gitlab-registry-retention.yaml) |
+| CI artifacts | Each application's pipeline retention settings |
 
 Read the configured values before changing retention. Update existing ILM
 policies in place so already managed indices receive the change. GitLab's
@@ -101,6 +90,19 @@ During log maintenance, remove only closed, processed archives outside the
 chosen retention window; preserve current logs, unprocessed `.u` files, and
 audit records. Use GitLab's supported cleanup paths for registry and artifact
 data so references remain consistent.
+
+### GitLab storage
+
+Repositories, Registry data, packages and artifacts share the `gitlab-data` PVC
+in [gitlab.yaml](../k8s/platform/gitlab.yaml). The daily retention job reconciles
+native container-tag cleanup for the configured group and subgroups, and removes
+Package Registry versions older than its declared retention period. GitLab
+preserves protected tags and `latest`. The job's token comes from Vault
+`secret/infra/gitlab` through External Secrets.
+
+Deleting tags and packages does not itself reclaim physical Registry storage.
+Use supported GitLab cleanup procedures; keep [recovery images](maintenance.md#runtime-and-recovery-constraints)
+before removing old data. Increasing PVC capacity is separate from cleanup.
 
 ## Backups and recovery
 
@@ -177,25 +179,7 @@ compatibility or failover. Rehearse installer/enrollment changes on disposable
 hosts and follow each service's upgrade/recovery guide. See [delivery](delivery.md)
 for the additional default-branch reconciliation and service checks.
 
-### Disposable rehearsal coverage
-
-The controller/image transition was rehearsed on 14 September 2026 without
-accessing the installed cluster. Evidence and temporary fixtures were kept
-outside Git; they are not another permanent test framework.
-
-| Area | Verified behavior |
-| --- | --- |
-| Installation wiring | Seven installer/GitOps render profiles; six safety suites; real Ansible with isolated host/cluster command substitutes across 24 scenarios; migration and ingress failure paths. |
-| K3s and ingress | Fresh pinned K3s server with embedded etcd and a joined worker; actual shared Traefik helper installation as an isolated candidate and promotion to direct ingress; native Ingress/CRD providers and all four app ingress NetworkPolicies. |
-| K3s recovery | Actual etcd snapshot restored with the original server token; earlier ConfigMap and encrypted Secret values returned, newer data disappeared, and both nodes rejoined Ready. |
-| HTTP behavior | All rendered platform/app Ingress paths, TLS/SNI, HTTPS redirects, auth return URLs/headers/cookies, backend 401, path boundaries, request limits, a 10 MiB authenticated POST, registry streaming upload, WebSocket echo and 90/10 native canary routing. |
-| Authentication | Actual OAuth2 Proxy and Traefik with a local OIDC/PKCE fixture, signed tokens, session cookies, identity/access-token headers and body-free authorization. |
-| Upstream state | PostgreSQL startup/persistence and SQL restore; MongoDB authenticated persistence; Vault Raft/unseal/snapshot; Keycloak production boot and database schema; SonarQube startup; GitLab API, Git repository/issue persistence and native repository/database backup/restore after synthetic mutations. |
-
-The K3s nodes were disposable Docker containers. This does not validate Ubuntu
-provisioning, physical disks/Longhorn replication, real host fencing, Cloudflare
-Tunnel failover, production OIDC sessions or restoration of existing private-image
-data. Rehearse those against the actual host environment and protected backup
-copies before the [maintenance cutover](platform-migration.md). A synthetic
-upstream restore establishes the candidate's recovery path, not old-data
-compatibility.
+Rehearse host provisioning, Longhorn recovery, physical fencing, Tunnel failover
+and production authentication in a representative environment before relying on
+them. A synthetic upstream restore does not establish compatibility with existing
+data; use protected copies of the actual backups for [migration rehearsal](platform-migration.md#prepare-and-rehearse).

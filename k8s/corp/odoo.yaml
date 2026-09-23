@@ -642,7 +642,7 @@ spec:
                   number: 8069
 
 ---
-# Vendored OCA web_dark_mode 19.0.1.0.0; see docs/platform-themes.md.
+# Vendored OCA web_dark_mode 19.0.1.0.0; see docs/maintenance.md#ui-themes.
 apiVersion: v1
 kind: ConfigMap
 metadata:

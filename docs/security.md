@@ -4,7 +4,7 @@ Vault owns infrastructure credentials; External Secrets supplies namespace-scope
 Kubernetes Secrets. Keep credentials, local environment files, setup tokens and
 recovery material outside Git. Rotate bootstrap credentials and revoke temporary
 setup tokens after use. See [Vault operations](vault.md) for audit, unseal and
-recovery procedures, and [image maintenance](security-images.md) for container
+recovery procedures, and [image maintenance](maintenance.md) for container
 updates and Trivy findings.
 
 ## Host policy

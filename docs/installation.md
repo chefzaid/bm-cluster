@@ -1,64 +1,61 @@
 # Installation
 
-Run commands from this repository on the first control-plane host as a non-root
-user with sudo access. Use an Ubuntu host and size CPU, memory, and disk for the
-selected services' [resource and volume requests](../k8s/), including headroom
-for builds, snapshots, and backups.
-Remote enrollment requires unique node names, SSH keys and passwordless sudo
-from the first control plane to every new Debian/Ubuntu host.
+Run commands from this checkout on the first control-plane host as a non-root
+user with sudo access. Use Ubuntu and size CPU, memory, and disk for the
+selected services' [resource and volume requests](../k8s/), with headroom for
+builds, snapshots, and backups. Unattended runs require passwordless sudo.
+
+Prepare your public domain, an accessible GitOps repository, and the
+[administrator credentials](security.md#administrator-sign-in). For multiple
+nodes, complete the [private transport prerequisites](networking.md#private-node-network)
+and [remote enrollment requirements](node-enrollment.md#remote-enrollment).
+Interactive setup guides account configuration before changing the firewall;
+unattended runs require it to be ready.
 
 ## Choose an entry point
 
-| Command | Purpose |
+| Task | Entry point |
 | --- | --- |
-| `./install-control-plane.sh` | Guided cluster installation, including planned nodes and platform services |
-| `./add-node.sh` | Add control planes or workers to an existing cluster |
-| `./add-repos.sh` | Import/synchronize repositories, configure selected applications and wait for their deployment |
-| `ansible/install.yml` | Run the full installer unattended through Ansible |
-| `ansible/deploy.yml` | Reconcile an installed platform through Ansible |
+| Guided installation | `./install-control-plane.sh` |
+| Unattended installation | [`./install-control-plane.sh --yes`](#unattended-installation) or [Ansible installation](#ansible-installation) |
+| Reconcile an installed platform | [Ansible reconciliation](#platform-reconciliation) |
+| Add control planes or workers | [`./add-node.sh`](node-enrollment.md) |
+| Import, synchronize and deploy applications | [`./add-repos.sh`](repository-onboarding.md) |
 
-Existing installations using ingress-nginx or private platform images must first
-follow [the platform migration](platform-migration.md). Ordinary reconciliation
-stops at a read-only migration check. New installations use public upstream
-images and the separately installed Traefik release.
-
-For a new cluster:
+For a new cluster, run:
 
 ```bash
 ./install-control-plane.sh
 ```
 
-The assistant first collects the organization, domain, GitLab project, SSO realm,
-TLS secret name, private DNS zone, node identity, and GitOps source. It then collects installation scope, topology,
-platform components, recovery destination, public access and administrator
-credentials. The recommended bundle installs the shared platform; declining it
-lets you select components individually. `infra + apps` adds centrally managed
-Odoo in `corp`. External applications remain in their own repositories and
-are onboarded through [repository onboarding](repository-onboarding.md).
-The `apps` namespace, its baseline networking, shared credentials and TLS
-foundation remain available with `INSTALL_SCOPE=infra`; Odoo does not need
-to be enabled for external applications.
+The assistant collects identity, installation scope, topology, components,
+recovery destination, public access and administrator credentials. Accept the
+recommended shared-platform bundle or select components individually.
+`INSTALL_SCOPE=apps` also installs Odoo in `corp`; `infra` omits it. Both scopes
+provide the `apps` namespace and its networking, credentials and TLS foundation
+for [application-owned deployments](repository-onboarding.md).
 
-Deploy external workloads in `apps` for automatic SonarQube, Prometheus/Grafana,
-and ELK/Kibana discovery once those services are configured. The [application onboarding guide](application-onboarding.md#namespace-and-automatic-discovery)
-documents the namespace settings, automatic dashboards, and scanner requirements.
+Existing ingress-nginx or private-image installations must first follow the
+[platform migration](platform-migration.md). Ordinary reconciliation stops at a
+read-only migration check; `platform_migration_approved=true` is reserved for a
+prepared Ansible maintenance run. Retired image-profile inputs are rejected.
+New installations use public upstream images and a separate Traefik release.
 
-Prepare a domain for public deployment and an accessible GitOps repository URL.
-For multiple nodes, choose one [private transport](networking.md#private-node-network)
-and complete its account prerequisites. Interactive setup guides these steps
-before changing the firewall. Unattended runs require them to be complete.
-The administrator password follows the [identity policy](security.md).
+## Topology and scheduling
+
+Choose an odd final control-plane count (`1`, `3`, `5`, …) and a total count that
+includes workers. Control planes must remain schedulable when there are no
+workers. See the [topology and exposure model](networking.md#node-topology) and
+[scheduling and storage rules](node-enrollment.md#scheduling-and-storage).
+Additional hosts alone do not activate the [HA profile](high-availability.md).
 
 ## Organization and installation identity
 
-The installer supports your own organization and domain on a supported Ubuntu
-host. Runtime configuration contains placeholders; the installer renders public
-URLs, registry paths, authentication issuers, discovery settings, and branding
-from your answers before installing services. The source checkout stays generic.
-The intranet title and cluster label are `<organization-name> Cloud`, derived
-from the required company display name. For example, `Example Company` becomes
-`Example Company Cloud`; the public domain does not determine the display name.
-Keycloak's realm display name and Odoo's main company also use this company name.
+The installer renders URLs, registry paths, authentication issuers, discovery
+settings and branding from your inputs; the source checkout stays generic.
+The required company display name gives the intranet its `<company name> Cloud`
+title and cluster label. Keycloak's realm display name and Odoo's main company
+use the company name without the suffix.
 
 | Environment input | Helm value | Default or requirement |
 |---|---|---|
@@ -79,8 +76,8 @@ Keycloak's realm display name and Odoo's main company also use this company name
 The generated Argo CD Application carries these settings into subsequent Helm
 reconciliation. The public `infra/bm-cluster-identity` ConfigMap records installed
 choices for installer reruns, Ansible, and provisioning helpers. Explicit
-environment inputs override stored choices. Credentials remain in the existing
-secret-management flow; do not commit generated configuration or cluster values.
+environment inputs override stored choices. Credentials stay in the
+[secret-management flow](security.md#recovery-credentials).
 
 To rebrand an existing installation, update `organizationName` in the installed
 `bm-cluster` Argo CD Application's Helm parameters and reconcile the platform.
@@ -97,30 +94,10 @@ names as explicit Helm parameters on the installed `bm-cluster` Application
 installer/Ansible rerun. This records the existing identity; changing a realm,
 domain, or repository path is a separate migration of accounts and resources.
 
-## Topology and scheduling
-
-Choose an odd final control-plane count (`1`, `3`, `5`, …) and a total node count
-that includes control planes and workers. For three control planes and four
-workers, enter `3` and `7`. Multiple control planes use embedded etcd; additional
-servers join sequentially over the private network.
-
-`CONTROL_PLANE_SCHEDULABLE=true` allows workloads on every control plane.
-`false` applies the control-plane `NoSchedule` taint after workers are Ready.
-Clusters without workers must permit control-plane workloads. Node enrollment
-also reconciles [Longhorn placement and replicas](node-enrollment.md#scheduling-and-storage).
-
-An etcd majority must remain available. The default public entry point remains
-the first host after node enrollment. For replicated public ingress, shared
-data services and application profiles, follow the separate
-[HA migration](high-availability.md) after enrolling sufficient hosts.
-Administrative API access uses a reachable control plane's private address;
-no floating API address is installed. See the
-[K3s embedded-etcd guide](https://docs.k3s.io/datastore/ha-embedded).
-
 ## Unattended installation
 
-`--yes` chooses the recommended component bundle and defaults to `INSTALL_SCOPE=apps`.
-This example uses a minimal topology with local exposure. Replace the domain,
+`--yes` selects the recommended component bundle and defaults to
+`INSTALL_SCOPE=apps`. This example uses local exposure; replace the identity,
 node name and GitOps URL with your own values:
 
 ```bash
@@ -141,20 +118,24 @@ export KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
 unset KEYCLOAK_SSO_BOOTSTRAP_PASSWORD
 ```
 
+Identity inputs and defaults are listed [above](#organization-and-installation-identity).
+Other installation inputs are:
+
 | Input | Meaning |
 | --- | --- |
-| `INSTALL_SCOPE=infra` | Omit Odoo; keep shared infrastructure |
-| `SERVER_EXPOSURE=internet` | Enable the public host security policy; unattended installation enables Cloudflare by default |
-| `INTERNAL_DNS_ZONE` | Optional override for `internal.<PLATFORM_DOMAIN>` |
-| `CLOUDFLARE_NODE_DNS_LABEL` | Public administration hostname label, independent of the Kubernetes node name; defaults to `node-01` |
-| `CLOUDFLARE_PUBLISH_APEX` | Defaults to `false`; explicitly opt in only if the platform should manage apex DNS |
-| `CONTROL_PLANE_COUNT`, `CLUSTER_NODE_COUNT` | Desired final counts, including already registered nodes |
-| `K3S_NODE_TRANSPORT` | `vrack` or `tailscale` for multi-node enrollment |
-| `K3S_CONTROL_PLANE_IPS`, `K3S_WORKER_IPS` | Comma-separated prepared vRack addresses; exclude the first host |
-| `K3S_CONTROL_PLANE_HOSTS`, `K3S_WORKER_HOSTS` | Comma-separated Tailscale bootstrap SSH targets such as `admin@host`; private addresses are discovered |
-| `K3S_CONTROL_PLANE_SSH_USER`, `K3S_WORKER_SSH_USER` | SSH users for address-based enrollment |
+| `INSTALL_SCOPE` | `apps` includes Odoo; `infra` omits it. |
+| `SERVER_EXPOSURE` | `local` or `internet`; internet exposure enables the public host policy and defaults to Cloudflare configuration. |
+| `CONTROL_PLANE_NODE_NAME` | Local Kubernetes node name; defaults to the lowercase host name. |
+| `CONTROL_PLANE_COUNT`, `CLUSTER_NODE_COUNT` | Desired final counts, including registered nodes; the control-plane count must be odd. |
+| `CONTROL_PLANE_SCHEDULABLE` | `true` permits workloads on all control planes; `false` applies `NoSchedule` after workers are Ready. Defaults to `true` without workers, otherwise `false`. |
+| `K3S_NODE_TRANSPORT` | `vrack` or `tailscale` for multi-node enrollment. |
+| `K3S_CONTROL_PLANE_IPS`, `K3S_WORKER_IPS` | Comma-separated prepared vRack addresses; exclude the first host. |
+| `K3S_CONTROL_PLANE_HOSTS`, `K3S_WORKER_HOSTS` | Comma-separated Tailscale bootstrap SSH targets such as `admin@host`; private addresses are discovered. |
+| `K3S_CONTROL_PLANE_SSH_USER`, `K3S_WORKER_SSH_USER` | SSH users for address-based enrollment. |
+| `CLOUDFLARE_NODE_DNS_LABEL` | Public administration label, independent of the Kubernetes node name; defaults to `node-01`. |
+| `CLOUDFLARE_PUBLISH_APEX` | `false`; opt in only if the platform should manage apex DNS. |
 
-For example, after supplying the identity and
+For example, after supplying identity, credentials and the
 [Tailscale inputs](networking.md#tailscale):
 
 ```bash
@@ -165,37 +146,177 @@ K3S_WORKER_HOSTS='admin@worker-01,admin@worker-02' \
   ./install-control-plane.sh --yes
 ```
 
-When rerunning with only a partial list of new hosts, set both final counts
-explicitly. Registered nodes count even when NotReady; completion requires the
-planned nodes to be Ready. Reruns preserve an existing K3s installation by
-default; they are not a K3s upgrade procedure. Use
-[node enrollment](node-enrollment.md) for later expansion.
+On retries with a partial list of new hosts, set both final counts explicitly.
+Registered nodes count even when NotReady; completion requires the planned nodes
+to be Ready. Reruns preserve installed K3s by default and do not upgrade it.
+Use [node enrollment](node-enrollment.md) for later expansion.
 
-## Optional integrations
+### Optional integrations
 
-- **Public DNS, TLS and Access:** use the [Cloudflare setup](networking.md#cloudflare).
-  For unattended internet exposure, supply `CLOUDFLARE_API_TOKEN` and
-  `CLOUDFLARE_ACCESS_ALLOWED_EMAILS`; set `CLOUDFLARE_ACCESS_TEAM_NAME` to your
-  existing Zero Trust team label. `CONFIGURE_CLOUDFLARE=false` uses local TLS
-  certificates while preserving existing TLS secrets; public DNS/TLS then
-  needs separate configuration.
-- **Encrypted offsite backups:** set `CONFIGURE_OFFSITE_BACKUPS=true` with
+Use the same integration credentials with either entry point. Keep secrets in
+hidden prompts, the process environment or Ansible Vault; never commit
+credentials or generated cluster configuration.
+
+- **Public DNS, TLS and Access:** follow [Cloudflare setup](networking.md#cloudflare)
+  for tokens, allowed emails, the existing Zero Trust team and account
+  prerequisites. In the shell installer, `CONFIGURE_CLOUDFLARE=false` uses local
+  TLS while preserving existing TLS secrets; public DNS/TLS then needs separate
+  configuration.
+- **Encrypted offsite backups:** set `CONFIGURE_OFFSITE_BACKUPS=true`,
   `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_REGION`,
   `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` and `BACKUP_REPOSITORY_PASSWORD`.
-  Keep the repository password outside the cluster for recovery.
+  Keep the password outside the cluster; see
+  [backup and recovery](operations.md#backups-and-recovery).
 - **Repository import and deployment:** set `CONFIGURE_REPOSITORY_SYNC=true`
-  with the inputs in [repository onboarding](repository-onboarding.md).
-  The installer calls `add-repos.sh` after the platform and Argo CD are ready.
-  Export `REPOSITORY_INPUTS_FILE`, `REPOSITORY_STATE_DIR` and
-  `ONBOARDING_TIMEOUT` when customizing unattended app setup or resuming it.
-  Selecting deployment includes app-owned public configuration commits,
-  requested service/DNS setup and waiting for CI and application readiness.
+  and supply the [onboarding automation inputs](repository-onboarding.md#automation-and-reruns).
+  The installer calls `add-repos.sh` after platform and Argo CD readiness,
+  forwarding `--yes` for unattended runs. Selecting deployment authorizes the
+  app configuration commits and service changes described in that guide.
 
-Supply secrets through hidden prompts, process environment or encrypted
-[Ansible variables](ansible.md#complete-installation). Never commit credentials
-or generated cluster values.
+## Ansible
+
+Both playbooks run locally from this checkout using the supplied `localhost`
+inventory. Adding inventory hosts does not distribute installation; node
+enrollment uses SSH. Bootstrap and default-mode reconciliation run on the first
+control plane; an HA platform can be reconciled from a surviving control plane.
+
+The playbooks share [platform defaults](../config/platform.env), manifest
+inventories and provisioning helpers with the shell installer. Longhorn, Vault,
+External Secrets and Argo CD releases use
+[`reconcile-platform-release.sh`](../scripts/reconcile-platform-release.sh)
+for chart options and readiness; each entry point controls selection and order.
+Vault readiness follows resource application and precedes secrets bootstrap.
+
+### Ansible installation
+
+Install the prerequisites on the first Ubuntu host:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ansible git python3
+```
+
+Export the [unattended inputs](#unattended-installation), then run the full
+installer through Ansible:
+
+```bash
+ansible-playbook -i ansible/inventory ansible/install.yml
+```
+
+An optional `installer_environment` mapping overrides selected process inputs.
+For example, store this mapping in an Ansible Vault encrypted extra-vars file:
+
+```yaml
+installer_environment:
+  ORGANIZATION_NAME: Example Company
+  ORGANIZATION_SLUG: example
+  PLATFORM_DOMAIN: example.com
+  CONTROL_PLANE_NODE_NAME: control-plane-01
+  SERVER_EXPOSURE: local
+```
+
+```bash
+ansible-playbook -i ansible/inventory ansible/install.yml \
+  -e @/secure/cluster-install.yml --ask-vault-pass
+```
+
+The installation task uses `no_log` because nested commands handle secrets.
+Failures stop the play; run the shared installer with the same inputs for visible
+diagnostics.
+
+### Platform reconciliation
+
+Use `ansible/deploy.yml` on an installed control plane with its matching
+kubeconfig, kubectl, Helm, jq, OpenSSL, Git, Python and Ansible. Preflight verifies
+the local K3s service, control-plane role and kubeconfig before host changes.
+Workers are rejected; joined private control planes are accepted when HA is
+requested or already recorded.
+
+Supply `KEYCLOAK_SSO_BOOTSTRAP_USERNAME` and `KEYCLOAK_SSO_BOOTSTRAP_PASSWORD`
+through the secret environment when reconciling platform services, then run:
+
+```bash
+ansible-playbook -i ansible/inventory ansible/deploy.yml
+```
+
+Installed [identity settings](#organization-and-installation-identity) are reused
+unless explicitly overridden. Set `CONTROL_PLANE_NODE_NAME` if the registered
+name differs from the local hostname. Exposure defaults to `internet`; use
+`-e server_exposure=local` for a locally exposed bootstrap host. Joined servers
+retain their private exposure.
+
+The playbook preserves control-plane scheduling unless
+`CONTROL_PLANE_SCHEDULABLE=true|false` explicitly changes it, reconciles
+[private SSH access](node-enrollment.md#control-plane-administration) from
+registered control-plane addresses, and applies the shared
+[storage placement rules](node-enrollment.md#scheduling-and-storage).
+
+Before activating HA, complete the PostgreSQL, Kafka and Vault migrations in
+[activation order](high-availability.md#activate-in-order). Reconcile with
+`HIGH_AVAILABILITY_ENABLED=true` and `PLATFORM_HA_VALUES_FILE`, including
+`-e configure_cloudflare=true` for the public Tunnel/DNS cutover. The playbook
+preserves recorded HA on later runs and rejects unfinished migrations or
+implicit downgrades.
+
+Feature switches select tasks and automatically include their dependencies:
+Odoo needs platform services, those services need data stores, data stores need
+Vault/External Secrets, and Cloudflare needs ingress.
+
+| Switch | Default |
+| --- | --- |
+| `install_longhorn`, `install_ingress`, `install_vault_stack` | `true` |
+| `deploy_data_stores`, `deploy_platform_services` | `true` |
+| `install_apps`, `install_odoo` | `true` |
+| `install_descheduler`, `install_argocd`, `manage_host_security` | `true` |
+| `configure_cloudflare`, `manage_private_transport` | `false` |
+
+`-e install_apps=false` omits Odoo while retaining the shared `apps` foundation.
+Disabling a switch does not uninstall components; Argo CD continues reconciling
+its configured scope. Application deployments remain owned by their repositories.
+
+### Optional host and account changes
+
+Private transport reconciliation is opt-in and runs before K3s network binding
+and UFW. Export the [transport inputs](networking.md#private-node-network) and
+choose the existing transport:
+
+```bash
+# Already attached and addressed vRack:
+ansible-playbook -i ansible/inventory ansible/deploy.yml \
+  -e manage_private_transport=true -e k3s_node_transport=vrack
+
+# Tailscale, with its API token supplied in the environment:
+ansible-playbook -i ansible/inventory ansible/deploy.yml \
+  -e manage_private_transport=true -e k3s_node_transport=tailscale
+```
+
+For API-managed vRack attachment, add `-e ovh_vrack_automate_account=true`
+and the OVH account inputs. Without transport reconciliation, supply
+`K3S_NODE_NETWORK_CIDR` when host security must trust node traffic.
+
+Cloudflare requires its [integration inputs](#optional-integrations) and
+`-e configure_cloudflare=true`. Offsite recovery and repository import use the
+same optional inputs as installation. Repository setup uses `no_log`, waits for
+required app jobs and readiness, and stops the play on failure. Run `add-repos.sh`
+with the same inputs and state directory for visible diagnostics and recovery.
+
+To request [local administrator password alignment](security.md#rotate-local-administrator-passwords):
+
+```bash
+read -rsp 'Local administrator password: ' LOCAL_ADMIN_PASSWORD
+echo
+export LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS=true
+ansible-playbook -i ansible/inventory ansible/deploy.yml
+unset LOCAL_ADMIN_PASSWORD ROTATE_LOCAL_ADMIN_PASSWORDS
+```
+
+The task passes the secret through stdin with `no_log`; it does not change SSO
+identities or application users.
 
 ## Verify the result
+
+The installer waits for selected components and reports their endpoints. Check
+cluster and GitOps status, then open `https://intranet.<your-domain>`:
 
 ```bash
 kubectl get nodes
@@ -203,7 +324,16 @@ kubectl get applications -n infra
 ./scripts/validate-repository.sh --live
 ```
 
-The installer waits for selected components and reports their endpoints. Open
-`https://intranet.<your-domain>` for the service catalog. See
-[Ansible](ansible.md) for repeatable platform reconciliation and
-[Argo CD](delivery.md#argo-cd-operations) for ongoing GitOps ownership.
+For source changes and Ansible syntax checks:
+
+```bash
+ansible-playbook -i ansible/inventory --syntax-check ansible/install.yml
+ansible-playbook -i ansible/inventory --syntax-check ansible/deploy.yml
+./scripts/validate-repository.sh
+```
+
+The live validator uses Kubernetes server-side dry-run without mutation.
+`install.yml --check` skips installation; `deploy.yml` rejects check mode because
+its tasks depend on command results. Validation does not replace a fresh
+installation on disposable hosts. See [validation coverage](operations.md#validation)
+and [Argo CD operations](delivery.md#argo-cd-operations) for ongoing maintenance.

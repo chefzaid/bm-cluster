@@ -1,9 +1,8 @@
 # Repository structure
 
-This repository owns the shared K3s platform and Odoo. Application repositories
-own their workloads, pipelines and Argo CD Applications. The three commands at
-the root are the operator entry points: `install-control-plane.sh`, `add-node.sh`
-and `add-repos.sh`. Ansible calls the same automation.
+Use this map when changing platform source. The [README](../README.md) explains
+platform boundaries and links operator workflows. Keep runtime resources in their
+owning application repository; this repository centrally owns Odoo.
 
 ## Directory map
 
@@ -50,7 +49,7 @@ The ownership boundaries and declarative source follow Kubernetes'
   `configure-repository-sync.sh` configures ongoing synchronization for one
   repository and remains a separate internal step.
 - **Image versions:** update the owning manifest and Helm values;
-  follow [image updates](security-images.md#image-updates) when replacing a
+  follow [image updates](maintenance.md#image-updates) when replacing a
   service with a compatible upstream release. No private platform image
   registry or profile selection is needed.
 
@@ -74,13 +73,17 @@ source inputs and rendered deployment output, then runs only these safety suites
 | `test-vault-ha.py` | Unsafe peer replacement, loss of recovery access and distributing keys to the wrong host. |
 | `test-node-fencing.py` | Powering off a healthy/wrong host or recovering storage before confirmed fencing. |
 
-The downstream image recipes and their Java, Ruby and other dependency tests
-have been retired together. Those tests checked replaced upstream dependencies.
-[Image maintenance](security-images.md) explains upstream pins and
-stateful migration requirements.
-
 Do not restore broad application, UI, source-text assertion or per-image test
 frameworks here. New tests need a concrete deployment or recovery failure that
 syntax, manifest policy and rendering cannot detect. Image promotion still
 requires isolated runtime and recovery checks; cluster availability still
-requires the documented host-failure drills. See [validation](operations.md#validation).
+requires the documented host-failure drills. See [validation](operations.md#validation) for commands and coverage, and
+[maintenance](maintenance.md#image-updates) for image promotion.
+
+## Documentation ownership
+
+The README is the entry point; each guide owns one workflow or reference.
+Put a procedure or input table in that guide and link to its heading from other
+pages. Keep prerequisites beside the step that needs them. Link configuration
+values to their source rather than copying inventories into several guides.
+Historical audits, execution receipts and generated output stay outside Git.

@@ -23,7 +23,7 @@ migration changes.
    images. Restore copies into disposable infrastructure. Check PostgreSQL
    collations/extensions and globals, MongoDB authentication/data, Vault unseal
    and Raft, GitLab repositories/secrets, and Keycloak/SonarQube database access.
-   [Image maintenance](security-images.md#runtime-and-recovery-constraints)
+   [Image maintenance](maintenance.md#runtime-and-recovery-constraints)
    explains runtime identity changes. Stop writers before the final migration
    backup and ownership changes. Never run old and new writers against one volume.
 3. Render the cluster with its existing identity and HA values using

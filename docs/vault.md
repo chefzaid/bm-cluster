@@ -2,7 +2,7 @@
 
 Vault stores platform credentials in integrated Raft storage. Installer and
 Ansible render [the shared Helm values](../config/vault-values.yaml), including
-the pinned [upstream image](security-images.md). Changes to those values need
+the pinned [upstream image](maintenance.md). Changes to those values need
 a Helm reconciliation to update an existing release. External Secrets reads
 Vault through Kubernetes authentication; its store and secret mappings are in
 [vault.yaml](../k8s/platform/vault.yaml).

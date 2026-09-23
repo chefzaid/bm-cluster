@@ -1,9 +1,8 @@
 # Networking
 
-Nodes communicate over one private transport. The default public entry point
-is the first control plane. After explicit [HA activation](high-availability.md),
-public traffic reaches a Tunnel connector and its local ingress on each
-control plane, with no dependency on the first host's public address.
+Configure private transport, service routing and Cloudflare here.
+Use [node enrollment](node-enrollment.md) to join hosts and set scheduling, and
+[high availability](high-availability.md) for activation order and service limits.
 
 ## Node topology
 
@@ -27,16 +26,23 @@ flowchart TB
     Servers <-->|HA: outbound Tunnels| Edge
 ```
 
-Solid links show runtime traffic; dotted links show enrollment. Additional
-control planes and workers depend on the selected topology. Workload scheduling
-and Longhorn placement follow the [node enrollment policy](node-enrollment.md#scheduling-and-storage). The default
-and HA ingress paths are alternatives: adding control planes leaves the first
-path in place until the explicit migration.
+Solid links show runtime traffic; dotted links show enrollment. Public traffic
+uses the first control plane until [HA activation](high-availability.md#activate-in-order)
+switches it to independent Tunnel connectors. Adding nodes alone does not change
+that route. See [scheduling and storage](node-enrollment.md#scheduling-and-storage)
+for workload placement and [control-plane administration](node-enrollment.md#control-plane-administration)
+for private SSH and API access.
 
-K3s agents learn the available API servers through their
-[built-in client load balancer](https://docs.k3s.io/architecture#how-agent-node-registration-works).
-Operator access uses a reachable control plane's private API and verified
-private SSH; no floating administrative API address is installed.
+### Namespaces
+
+| Namespace | Responsibility |
+| --- | --- |
+| `infra` | Shared platform services and Argo CD Applications |
+| `apps` | Workloads managed by application repositories |
+| `corp` | Centrally managed Odoo |
+| `gitlab-runners` | Isolated CI jobs |
+| `longhorn-system` | Persistent storage management |
+| `kube-system` | Kubernetes networking and system components |
 
 ## Private node network
 
@@ -120,7 +126,7 @@ reconciled.
 | Node | Inbound access |
 | --- | --- |
 | First control plane | Default local or internet exposure; direct public HTTP/HTTPS is restricted to Cloudflare networks. HA ingress uses an outbound Tunnel instead of public ServiceLB |
-| Additional control plane | Private SSH from verified control planes, private Kubernetes API and etcd peers; HA adds an outbound Tunnel with local ingress, without public ServiceLB advertisement |
+| Additional control plane | Private SSH from verified control planes, Kubernetes API TCP 6443 and etcd TCP 2379–2380 plus node peers; HA adds an outbound Tunnel with local ingress, without public ServiceLB advertisement |
 | Worker | Private SSH from verified control planes and required K3s/Longhorn peer traffic; no inbound server API, etcd or public ingress |
 
 Added nodes use default-deny inbound UFW. Both host input and forwarded
@@ -143,13 +149,6 @@ service endpoint. Cluster automation uses internal GitLab/API routes, while
 the Dependency Proxy uses canonical `gitlab.<your-domain>` HTTPS. Kubernetes
 API clients retain `kubernetes.default.svc`, which matches the server certificate.
 Public Docker clients use `registry.<your-domain>` over HTTPS.
-
-In the opt-in HA profile, CoreDNS runs three replicas across three hosts with
-an availability budget of two. The HA admission policy preserves that placement
-and replica count when K3s reapplies its packaged Deployment or a scale request
-is submitted. The installer triggers reconciliation after installing the policy.
-External Secrets uses two replicas per component; its main and certificate
-controllers elect leaders, while both webhook replicas accept requests.
 
 The shared HA cache accepts application traffic only through HAProxy on port
 6379 from `infra`, `apps` and `corp`. Its Redis and Sentinel ports accept traffic
@@ -185,6 +184,12 @@ required permissions. For automation, supply `CLOUDFLARE_API_TOKEN`,
 `CLOUDFLARE_ACCESS_ALLOWED_EMAILS` and `CLOUDFLARE_ACCESS_TEAM_NAME`. Complete
 registrar nameserver delegation and DNSSEC prerequisites before unattended
 setup; interactive setup pauses with the required registrar values.
+
+Registry clients cannot answer browser bot challenges. Reconciliation disables
+basic Bot Fight Mode, which has no hostname exceptions, and skips Super Bot
+Fight Mode only for the Registry hostname. Other WAF, rate-limit and TLS
+controls remain enabled. The token therefore needs **Bot Management Read** and
+**Edit**, in addition to the other permissions printed by the configurator.
 
 ### Application DNS ownership
 
@@ -280,9 +285,3 @@ traffic distribution or preserve an interrupted client connection. See
 [Cloudflare's replica and load-balancer distinction](https://developers.cloudflare.com/tunnel/routing/#replicas-versus-load-balancers).
 Public uploads still pass through Cloudflare's request limits. Verify Registry
 push/pull and application login through the tunnel before relying on failover.
-
-Registry clients cannot answer browser bot challenges. Reconciliation disables
-basic Bot Fight Mode, which has no hostname exceptions, and skips Super Bot
-Fight Mode only for the Registry hostname. Other WAF, rate-limit and TLS
-controls remain enabled. The token therefore needs **Bot Management Read** and
-**Edit**, in addition to the other permissions printed by the configurator.

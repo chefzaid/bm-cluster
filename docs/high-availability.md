@@ -1,23 +1,24 @@
 # High availability
 
-HA requires explicit activation and sufficient independent physical hosts.
-The default profile does not enable HA. Node enrollment alone adds
-control-plane redundancy.
-Shared data services, public ingress and each application have their own
-activation steps.
+Follow this workflow to enable and verify HA across independent physical hosts.
+Adding control planes alone does not replicate shared services or applications. Use [networking](networking.md) for transport and
+Cloudflare configuration, and [node enrollment](node-enrollment.md) for joining
+hosts and changing scheduling.
 
 ## Availability boundaries
 
 | Component | Opt-in behavior and limits |
 | --- | --- |
 | K3s | Three or more control planes with an odd embedded-etcd membership; a majority must remain available |
-| Public ingress | One Traefik pod and co-located Cloudflare Tunnel connector per control plane; public DNS targets the tunnel |
+| Public ingress | Independent [Traefik/Tunnel pairs](networking.md#ha-public-ingress) on control planes; public DNS targets the tunnel |
 | PostgreSQL | CloudNativePG primary and two standbys on different hosts; each commit requires one synchronous standby, and the canonical Service follows the primary |
 | Kafka | Three native KRaft controllers and brokers, replicated topics and an enforced minimum in-sync replica count after migration |
 | Vault | Three Raft voters on different control planes, with recovery material available on every verified control plane |
 | Shared Redis | Three Redis/Sentinel servers and redundant HAProxy endpoints; replication is asynchronous and recent cache writes can be lost |
-| DNS, secrets and identity | Replicated CoreDNS, External Secrets components and Keycloak; identity still depends on PostgreSQL |
-| Argo CD | Replicated API, repository and ApplicationSet services with a replicated cache; one application controller restarts after a host failure |
+| CoreDNS | Three replicas on three hosts, with at least two available during voluntary disruption; admission policy preserves placement and count when K3s or a scale request reapplies them |
+| External Secrets | Two replicas per component; main and certificate controllers elect leaders, while both webhook replicas accept requests |
+| Keycloak | Replicated identity service; still depends on PostgreSQL |
+| Argo CD | Replicated API, repository, ApplicationSet and cache services; see [Argo CD operations](delivery.md#argo-cd-operations) for controller recovery and Helm ownership |
 | External applications | Each repository owns its availability profile, replica placement, shared-state migration, secrets and background-work rules |
 | Persistent singleton tools | GitLab/Registry, SonarQube Community, Odoo and other unreplicated services recover by restarting their existing writer with its volume; they have an outage during recovery |
 
@@ -27,43 +28,15 @@ Cloudflare, the private transport and external identity/email/storage providers
 from the dependency chain. Replicas and Longhorn snapshots do not replace
 [offsite backups and restore testing](operations.md#backups-and-recovery).
 
-```mermaid
-flowchart TB
-    accTitle: Public request path after HA activation
-    accDescr: Cloudflare reaches an independent Tunnel connector and local ingress on every control plane. Kubernetes Services route requests to application replicas on separate hosts. PostgreSQL, Vault, Kafka and Redis have their own replication and failover mechanisms.
-    Edge["Cloudflare<br/>Public DNS targets the Tunnel"]
-    subgraph Planes["Three or more control planes"]
-        CP1["Control plane 1<br/>Tunnel + local Traefik"]
-        CP2["Control plane 2<br/>Tunnel + local Traefik"]
-        CP3["Control plane 3<br/>Tunnel + local Traefik"]
-        Etcd["Private K3s API and etcd quorum"]
-    end
-    Edge --> CP1
-    Edge --> CP2
-    Edge --> CP3
-    CP1 --- Etcd
-    CP2 --- Etcd
-    CP3 --- Etcd
-    CP1 --> Services["Internal Kubernetes Services"]
-    CP2 --> Services
-    CP3 --> Services
-    Services --> Apps["Application replicas<br/>Different eligible hosts"]
-    Apps --> PG["PostgreSQL<br/>Primary + two standbys"]
-    Apps --> Shared["Vault, Kafka and Redis<br/>Independent quorum/failover"]
-    PG --> Storage["Longhorn<br/>Three copies on separate hosts"]
-    Shared --> Storage
-```
-
-The diagram shows logical routing; control planes can also be the eligible
-application and storage hosts. The etcd quorum maintains Kubernetes state,
-while each data service maintains its own replication. Losing one public
-ingress host leaves the other Tunnel connections available.
+The [topology diagram](networking.md#node-topology) shows both ingress modes.
+K3s etcd maintains Kubernetes state; each data service manages its own
+replication and failover.
 
 ## Prepare hosts and capacity
 
 Use at least three Ready, uncordoned control planes and three storage-eligible
-hosts on the same [private node network](networking.md). Three control planes
-can also host applications and storage. With
+hosts on the same [private node network](networking.md#private-node-network).
+Three control planes can also host applications and storage. With
 `CONTROL_PLANE_SCHEDULABLE=false`, provide at least three workers for those
 workloads; ingress and Vault explicitly tolerate the control-plane taint.
 
@@ -75,13 +48,9 @@ copies of the database. Inspect actual usage and requested capacity, rather
 than treating a PVC size as allocated disk space. See
 [storage placement](node-enrollment.md#scheduling-and-storage).
 
-Arrange private SSH between verified control planes, passwordless sudo for
-the operator, and access to a surviving control plane. K3s agents discover API
-servers through their [built-in client load balancer](https://docs.k3s.io/architecture#how-agent-node-registration-works).
-External `kubectl` clients must use a reachable control plane's private API;
-this repository does not create a floating administrative API address.
-[Node enrollment](node-enrollment.md#control-plane-administration) covers
-reconciling access and enrolling through a surviving server.
+Verify [administrative access](node-enrollment.md#control-plane-administration)
+through a surviving control plane, including its private API and SSH account
+with passwordless sudo, before testing a failure.
 
 ## Activate in order
 
@@ -100,10 +69,10 @@ the transition from direct ingress to Tunnel ingress.
    ./add-node.sh --role worker --mode remote --count 3
    ```
 
-   The node assistant converts an existing K3s SQLite datastore to embedded
-   etcd when needed and joins hosts sequentially. Verify all planned
-   hosts are Ready before proceeding. See [node enrollment](node-enrollment.md)
-   for transport, final counts and scheduling choices.
+   Follow the [remote enrollment safeguards](node-enrollment.md#remote-enrollment)
+   for datastore conversion and final membership. Verify all planned hosts are
+   Ready and use the intended [scheduling policy](node-enrollment.md#scheduling-and-storage)
+   before proceeding.
 
 2. **Migrate PostgreSQL explicitly.** Follow [PostgreSQL HA](postgres-ha.md):
    prepare the isolated cluster, pause reconciliation and database writers,
@@ -131,9 +100,9 @@ the transition from direct ingress to Tunnel ingress.
    `postgresHa` and `kafkaHa` maps into a persistent platform values file. Do not
    replace either map with only an `enabled` flag or copy credentials into it.
    Supply the Cloudflare token and Access inputs from
-   [public networking](networking.md#cloudflare), including account-level
-   Tunnel Edit permission. Set the existing final node counts and scheduling
-   inputs, then use either entry point:
+   [Cloudflare configuration](networking.md#cloudflare) and
+   [Tunnel prerequisites](networking.md#ha-public-ingress). Set the existing
+   final node counts and scheduling inputs, then use either entry point:
 
    ```bash
    export HIGH_AVAILABILITY_ENABLED=true
@@ -148,10 +117,10 @@ the transition from direct ingress to Tunnel ingress.
    The installer renders shared Helm/Kubernetes resources and the platform
    Argo Application from the same verified profile. Preserve that profile in
    the installation's desired configuration so GitOps reconciliation retains
-   the migrated services. It increases Longhorn replication to three copies
-   and enforces separate-host placement; wait for actual replica health before
-   relying on storage recovery. Cloudflare publication waits for connectors on
-   at least three distinct Ready control planes and verified HTTPS origins.
+   the migrated services. It applies the [HA storage policy](node-enrollment.md#scheduling-and-storage)
+   and reconciles CoreDNS after installing its placement admission policy.
+   Wait for actual replica health and the [public-ingress readiness checks](networking.md#ha-public-ingress)
+   before relying on recovery.
 
    Shared Redis starts with an empty cache; cached responses and rate-limit
    counters rebuild after cutover. Its original PVC is retained. Durable
@@ -163,14 +132,11 @@ the transition from direct ingress to Tunnel ingress.
    authentication secrets, readiness probes and disruption budgets. Database
    schema migrations must finish safely before admitting new writers.
 
-   The application must define whether background workers can run concurrently
-   and how retries, leases and external side effects behave. Local files or
-   embedded databases need an explicit shared-storage or database migration;
-   increasing a replica count alone does not make them safe.
-
-   Persist the selected profile and source path in the application repository's
-   Argo CD Application and release automation. The platform does not choose or
-   apply application overlays, migrate application data, or control releases.
+   Define worker concurrency, retries, leases and external side effects before
+   scaling. Local files or embedded databases need an explicit shared-state
+   migration. Persist the selected profile and source path in that repository's
+   Argo CD Application and release automation; the platform does not choose
+   application overlays, migrate their data or control their releases.
 
 ## Reconciliation and recovery
 
@@ -196,12 +162,9 @@ K3s sequentially when the setting needs to change, checking that a fresh etcd
 majority survives every restart. New HA control planes receive the same policy.
 This is part of the planned activation maintenance window.
 
-Argo CD's application controller briefly stops reconciling when its one active
-pod is replaced; already running applications continue serving. PDBs constrain
-voluntary disruption, not hardware loss. Redis failover can lose recent cache
-or rate-limit state, and remote background effects can require retry or manual
-reconciliation. Keep each application's delivery and lease guarantees in its
-own guide; do not scale singleton workers solely because the cluster is HA.
+PDBs constrain voluntary disruption, not hardware loss. Account for lost
+cache/rate-limit state and retries of external side effects within each
+application's recovery rules.
 
 ## Verify before relying on HA
 
@@ -229,8 +192,8 @@ singleton recovery only after verified fencing. Test one failure at a time and
 restore healthy quorum and storage replicas between drills.
 
 Include configured public hostnames, OIDC redirects, trusted client IPs, Registry
-login and an image push/pull in public-path verification. Cloudflare still applies its
-normal request limits, and interrupted connections may need client retries.
+login and an image push/pull in public-path verification, respecting the
+[Tunnel connection and request limits](networking.md#ha-public-ingress).
 Finally restore a backup into an isolated environment and compare application
 data. Repository render/tests are useful preparation; host-failure behavior
 requires an exercise across independent physical hosts.

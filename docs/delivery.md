@@ -1,138 +1,75 @@
 # Delivery and GitOps
 
-`bm-cluster` supplies GitLab, the instance runner, registries, Argo CD and SonarQube.
-Application repositories own their CI jobs, credentials contracts, runtime
-manifests and Argo CD Applications.
+The platform supplies GitLab, an instance runner, registries and Argo CD.
+Application repositories own their CI, runtime manifests and Applications.
+Use [repository onboarding](repository-onboarding.md) to import or deploy an app;
+this guide explains the shared delivery path and how to maintain it.
 
 ## Ownership and bootstrap
 
-The platform project is `<gitlab-group>/<platform-project>` from the installed
-identity (`bm-cluster` is the default project name). Its
-[pipeline](../.gitlab-ci.yml) runs on the shared Kubernetes runner in
-`gitlab-runners`. The [root Application](../k8s/addons/bm-cluster-application.yaml)
-reconciles the platform from Git, including centrally owned Odoo in `corp` when
-`appsEnabled=true`. External applications run in `apps` and reconcile through
-their own Applications. The platform does not declare their repository names,
-resource paths, release policies or deployment profiles.
+The [root Application](../k8s/addons/bm-cluster-application.yaml) reconciles the
+platform chart, including Odoo when enabled. Each external application has its
+own Application and deployment guide. Application runtime changes belong in that
+repository; the platform has no application repository inventory.
 
-Each application's deployment guide owns its database, Vault, registry and CI
-inputs, bootstrap procedure and recovery steps. Changes to its runtime resources
-and Argo CD Application belong in that repository. Public records follow the
-[application DNS contract](networking.md#application-dns-ownership).
-The shared `apps` foundation remains installed when Odoo/`corp` is disabled.
-
-The installer and [Ansible](ansible.md) run
-[`configure-gitlab-ci.sh`](../scripts/configure-gitlab-ci.sh) to reconcile the
-platform group/project, Dependency Proxy, cleanup policies, instance runner and
-Vault-backed tokens. On the control plane, setup creates a short-lived GitLab
-administrator token through `gitlab-rails` and revokes it on exit; no manually
-created token is required. Credentials are not committed.
-
-To import GitHub repositories, configure two-way synchronization and select
-deployments, run `./add-repos.sh`. The installer and Ansible invoke the same
-helper after platform setup. It consumes the app-owned
-[`infra/onboarding.json` contract](application-onboarding.md), commits public
-settings, provisions declared prerequisites/DNS and requests an API pipeline
-pinned to that configuration. The app's release job owns first Application
-creation and restores any paused sync policy. Success requires declared jobs
-and app readiness, rather than merely pipeline creation. See
-[repository onboarding](repository-onboarding.md) for inputs and recovery.
+The installer and [Ansible](installation.md) run
+[configure-gitlab-ci.sh](../scripts/configure-gitlab-ci.sh) to reconcile the
+configured group/project, Dependency Proxy, retention policies, instance runner
+and Vault-backed tokens. Setup creates a temporary GitLab administrator token
+through `gitlab-rails` on the control plane and revokes it on exit. No manually
+created token is required.
 
 ## Pipelines and outputs
 
 ### Application delivery
 
 ```mermaid
-flowchart TB
-    accTitle: Application CI and GitOps delivery
-    accDescr: App CI publishes outputs and commits image selection to Git; app-owned Argo Applications reconcile workloads and CI verifies rollout.
-    GitHub["GitHub repository (optional)"] <-->|"Sync workflow and webhooks"| GitLab["App repository in GitLab"]
-    GitLab --> Runner["Kubernetes runner jobs<br/>gitlab-runners namespace"]
-    Runner --> Build["Build and verification<br/>Application-owned checks and policy"]
-    Build -.-> Reports["App tests / coverage and Sonar<br/>optional E2E / security reports"]
-    Build --> Publish["Publish release<br/>according to app CI rules"]
-    Publish --> Images["Container Registry<br/>runtime images"]
-    Publish --> Packages["Package Registry<br/>Application release artifacts"]
-    Publish --> Commit["Update app-owned desired state<br/>Immutable image tags or digests"]
-    GitLab -->|"Tracks app-owned desired state"| Argo["App-owned Argo CD Application<br/>infra namespace"]
-    Commit --> Argo
-    Argo -->|"Application sync policy"| Apps["Application workloads<br/>apps namespace"]
-    Images -->|"Kubelet pulls images"| Apps
-    Apps -.-> Verify["CI waits for the exact Git revision<br/>Synced / Healthy and smoke checks"]
-    Argo -.-> Verify
+flowchart LR
+    accTitle: Application delivery
+    accDescr: Application CI checks source, publishes an image and commits its selection. Argo CD deploys it and CI verifies that exact revision.
+    Source["App source in GitLab"] --> CI["App-owned checks<br/>Shared Kubernetes runner"]
+    CI --> Publish["Publish image / packages"]
+    Publish --> Commit["Commit image selection<br/>to app desired state"]
+    Commit --> Argo["App Argo CD Application"]
+    Argo --> Runtime["Workloads in apps"]
+    Runtime --> Verify["CI verifies exact revision<br/>health and smoke checks"]
 ```
 
-This diagram describes the integration boundary. Each application's CI defines
-its required tests, report failure policy, release approval rules, artifacts and
-rollout verification. Publishing an image does not update a deployment by itself:
-the application must update its desired state and reconcile its own Application.
-Keep image selection and any bootstrap path changes in the application's Git
-history so later releases preserve them.
-
-The [source-analysis contract](sonar-discovery.md) supports automatic discovery
-and manual scan-only pipelines. An application implementing that contract must
-exclude publication and deployment from scan-only runs.
+GitHub/GitLab synchronization is configured by [repository onboarding](repository-onboarding.md).
+Each app defines its release policy, artifacts and checks. Publishing an image
+alone does not deploy it: commit image selection and bootstrap path changes in
+its desired state, then verify that revision through Argo CD. See the
+[source-analysis contract](observability.md#source-analysis) for scan-only CI.
 
 ### Infrastructure reconciliation and verification
 
-```mermaid
-flowchart TB
-    accTitle: Independent infrastructure reconciliation and CI verification
-    accDescr: Argo CD automatically reconciles main while CI validates the repository, observes synchronization and checks delivery services and Registry access.
-    Git["bm-cluster main"] -->|"Tracks k8s chart"| Argo["bm-cluster Argo CD Application"]
-    Argo -->|"Automatic sync, prune and self-heal"| Platform["Platform resources<br/>Odoo when enabled"]
-    Git --> Validate["CI: validate repository"]
-    Validate --> GitOps["CI: verify same commit<br/>Synced and Healthy"]
-    Validate --> Registry["CI: Registry push/read check"]
-    GitOps --> Delivery["CI: delivery-service checks"]
-    Argo -.->|"Read status"| GitOps
-    Platform -.->|"Read health and metrics"| Delivery
-```
+The [platform pipeline](../.gitlab-ci.yml) and Argo CD act independently:
 
-The [infrastructure pipeline](../.gitlab-ci.yml) runs on the shared Kubernetes
-runner. Default-branch verification observes reconciliation; Argo CD starts its
-sync independently of CI validation. Installer/Ansible still own the Argo CD Helm
-release itself, as described in [Argo CD operations](#argo-cd-operations).
+| Path | Responsibility |
+| --- | --- |
+| Argo CD | Reconcile `main` into platform resources with automatic sync, prune and self-heal. |
+| CI | Run [repository validation](operations.md#validation); on the default branch, verify the same commit is Synced/Healthy and check delivery services and Registry push/read. |
+
+CI observes reconciliation; it does not gate the start of Argo's sync.
+The separately installed Argo CD Helm release follows the upgrade procedure below.
 
 ## Registry and dependencies
 
-Private OCI images use `registry.<public-domain>`. CI uses the internal GitLab
-API/clone and Registry service routes, while user-facing links retain the public
-hostnames. K3s/containerd maps the public Registry hostname to its internal service.
-The Dependency Proxy uses the canonical `gitlab.<public-domain>` HTTPS route:
-containerd mirror query parameters interfere with Workhorse cache uploads.
-Machine requests must be able to use these routes without browser-only Access
-authentication or bot challenges.
+Use the [service DNS and registry routing contract](networking.md#service-dns-and-registry-routing)
+for public names, internal CI/containerd routes and the Dependency Proxy. These
+machine endpoints must remain usable without browser-only authentication or challenges.
 
 The infrastructure pipeline pins its public Alpine image by digest; the runner's
-`IfNotPresent` policy reuses the node-local image. The group Dependency Proxy is
-available for upstream image acceleration. Maven/npm dependencies come from
-their public upstreams and use the persistent
-[runner cache](../k8s/platform/gitlab-runner.yaml). App image jobs can rebuild
-their disposable Kaniko layers. A cold pipeline must still build, test and
-release successfully; caches are an optimization.
+`IfNotPresent` policy reuses the node-local image. The group Dependency Proxy can
+accelerate upstream pulls. Maven/npm use their public upstreams and the persistent
+[runner cache](../k8s/platform/gitlab-runner.yaml); app builds may use disposable
+Kaniko layers. A cold pipeline must still build, test and release successfully.
 
-## Storage and retention
-
-GitLab repositories, Registry data, packages and artifacts share the `gitlab-data`
-PVC in [the GitLab manifest](../k8s/platform/gitlab.yaml). Installer, Ansible and
-GitOps consume that declaration. Capacity expansion does not reclaim old data;
-see [operations](operations.md) for storage maintenance and backups.
-
-The daily [retention job](../k8s/platform/gitlab-registry-retention.yaml) reconciles
-GitLab's native container-tag cleanup policy for projects in the configured group
-and its subgroups, and deletes Package Registry versions older than the declared
-retention period. GitLab retains protected tags and the literal `latest` tag.
-The group API token comes from Vault `secret/infra/gitlab` through External Secrets.
-Removing tags or packages and reclaiming physical Registry storage are separate
-operations. Keep recovery images available before removing old image data; the
-[image guide](security-images.md) explains public image pins and offline recovery.
-
-GitLab and runner metrics feed the provisioned GitLab Delivery Grafana dashboard;
-their container logs feed Elasticsearch/Kibana. See
-[observability](operations.md#observability) and [validation](operations.md#validation).
+[Operations](operations.md#gitlab-storage) owns Registry/package retention and
+storage cleanup. [Observability](observability.md) covers delivery metrics and logs.
 
 ## Argo CD operations
+
 
 The installer and `ansible/deploy.yml` install Argo CD through Helm using rendered
 [`config/argocd-values.yaml`](../config/argocd-values.yaml) and version pins from

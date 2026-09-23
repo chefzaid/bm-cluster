@@ -481,7 +481,7 @@ spec:
     app: sonarqube
 
 ---
-# Vendored Dark Reader site API; see docs/platform-themes.md for the CSP adjustment.
+# Vendored Dark Reader site API; see docs/maintenance.md#ui-themes for the CSP adjustment.
 apiVersion: v1
 kind: ConfigMap
 metadata:

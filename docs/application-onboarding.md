@@ -1,48 +1,17 @@
 # Application onboarding contract
 
-Applications opt into [`add-repos.sh`](repository-onboarding.md) by committing
-`infra/onboarding.json`. Version 1 is declarative: the platform performs the
-supported service operations without running repository scripts or playbooks.
+Applications opt into `add-repos.sh` by committing `infra/onboarding.json`.
+This reference is for application authors; the
+[operator guide](repository-onboarding.md) covers setup credentials and reruns.
+Version 1 declares supported platform operations without running repository
+scripts or playbooks. Deploy workloads in `apps` using the
+[namespace and discovery contract](observability.md#namespace-and-discovery).
 
-## Namespace and automatic discovery
-
-Deploy application workloads in the **`apps` Kubernetes namespace**. With the
-shared observability and Sonar services installed and configured, this is the
-namespace used for automatic discovery by SonarQube, Prometheus/Grafana, and
-ELK/Kibana. Applications do not need an entry in a central application inventory.
-
-Keep the Argo CD `Application` resource in `infra` and set its destination to
-`apps`. These are the relevant fields in `infra/argocd/application.yaml`:
-
-```yaml
-metadata:
-  namespace: infra
-spec:
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: apps
-```
-
-Render application resources into `apps` too: set `namespace: apps` in the
-application's Kustomization, or use `apps` as the namespace in Helm-rendered and
-plain manifests. These application discovery flows target `apps`; `infra` and
-`corp` have separate platform and corporate responsibilities.
-
-| Service | Automatic result | Application requirements |
-|---|---|---|
-| SonarQube | Discovers source projects, provisions Sonar projects, and schedules missing or stale analyses. | Argo CD tracking must map the workload to a supported GitLab repository. Commit `sonar-project.properties` and `.sonar-auto.json`, and implement the [scanner and scan-only CI contract](sonar-discovery.md#application-contract). Namespace placement alone does not supply scanner configuration or source coverage. |
-| Prometheus / Grafana | Creates `Applications / <application>` in Grafana's **Applications** folder, showing CPU, memory, network traffic, readiness, and restarts. | Baseline metrics use existing platform collectors. Application endpoint metrics additionally require a reachable endpoint and [pod-template scrape annotations](application-observability.md#metrics-and-logs). |
-| ELK / Kibana | Creates `Applications / <application> / Logs`, with searchable logs, log volume, and logs by container. | Write logs to container stdout/stderr; Fluent Bit collects them with Kubernetes metadata. No per-application dashboard registration is required. |
-
-Dashboard discovery runs every minute, with Grafana loading changes within its
-30-second provisioning interval. Sonar discovery runs every 15 minutes and
-schedules scans according to analysis freshness and pipeline availability.
-See [automatic application dashboards](application-observability.md) for grouping,
-customization, and troubleshooting, and [Sonar discovery](sonar-discovery.md) for
-source mapping, scan scheduling, and manual scans. Components managed by the same
-Argo CD Application share dashboards; components deployed without Argo CD can use
-a shared `app.kubernetes.io/part-of` label for dashboard grouping, while Sonar
-discovery still requires the Argo CD source mapping.
+The default branch needs a valid `.gitlab-ci.yml` and one Argo CD Application at
+`infra/argocd/application.yaml` or `argocd/application.yaml`. Its source must be a
+repository-local Kustomize directory or Helm chart using its defaults, with an
+existing AppProject permitting the source/destination. External charts,
+multi-source Applications and custom Helm/Kustomize source overrides are unsupported.
 
 ## Onboarding declaration
 
@@ -84,8 +53,8 @@ app's actual pipeline and rendered manifests.
 | Field | Contract |
 |---|---|
 | `version` | Must be `1`; unknown top-level fields are rejected. |
-| `application` | One Application at `infra/argocd/application.yaml` or `argocd/application.yaml`, following the default branch and targeting `apps` through an existing AppProject. |
-| `inputs` | Named values with `label`, `type`, `default`, optional `required` and `secret`. Declare `APP_SUBDOMAIN` to derive `APP_HOST`. |
+| `application` | Path to the Application described above. It must follow the default branch and target `apps` on `https://kubernetes.default.svc`. |
+| `inputs` | Unique `name` values with optional `label`, `type`, `default`, `required` and `secret`. Declare `APP_SUBDOMAIN` to derive `APP_HOST`. |
 | `files` | Unique, explicit local public files. No symlinks, paths outside the checkout, credential files, contract or saved-settings file. |
 | `replacements` | Literal `from` text and a `to` template; simultaneous longest-match replacement uses prior rendered bindings on reruns. |
 | `registry` | Required Vault `path` for verified `read_registry`/`read_repository` credentials, also projected into Argo CD through External Secrets. |
@@ -112,8 +81,10 @@ belong in public files, replacements or pipeline variables.
 Registry/Vault paths must stay under `apps/<Application-name>/`. `generate`
 requests 16–256 random bytes before `hex` or `base64` encoding. Literal `value`
 fields are string defaults. Version-checked writes merge missing fields and
-retain existing/unrelated values. Changing a declaration does not rotate a
-populated credential; rotation and deleted-value recovery are explicit operations.
+retain existing/unrelated values; a different supplied credential fails instead
+of rotating it. Deleted versions require explicit recovery. Invalid registry
+credentials can be replaced while prior tokens remain available for consumer
+refresh; changing a declaration does not rotate a populated Vault value.
 
 An optional Keycloak file must define a public HTTPS OIDC client using
 Authorization Code with PKCE `S256`, limited to declared app hosts. Password,
@@ -133,7 +104,7 @@ mappers. It does not import demonstration realms, users or secrets.
 | `GITHUB_OWNER`, `GITHUB_REPOSITORY` | Imported GitHub source identity. |
 | `KEYCLOAK_REALM` | Existing platform realm, discovered from the installed SSO issuer unless explicitly supplied. |
 | `POD_CIDR` | Platform pod network; supply the actual `K3S_CLUSTER_CIDR` if it differs from the default. |
-| `PLATFORM_SECURITY_PROJECT_PATH` | Installed platform repository path plus `/security`, or an explicit override; independent of the app destination group. |
+| `PLATFORM_SECURITY_PROJECT_PATH` | Shared helper-image project, discovered from the platform Application repository plus `/security`; independent of the app destination group. |
 | `SONAR_PROJECT_KEY` | GitLab project path with `/` converted to `:`. |
 
 Explicit `PLATFORM_DOMAIN`, `INTERNAL_DNS_ZONE` and `KEYCLOAK_REALM` settings
@@ -143,24 +114,25 @@ private-zone fallback; OAuth2 Proxy's OIDC issuer provides public-domain and
 realm fallbacks. The private zone is never guessed from the public domain, and
 missing required settings stop deployment.
 
-The shared helper-image prefix comes from the installed platform Application's
-repository URL, with `/security` appended. Set `PLATFORM_SECURITY_PROJECT_PATH`
-to override it. If a contract uses this value and discovery cannot find it,
-interactive onboarding asks for it; unattended onboarding requires an explicit
-value. Importing an app into another group does not move the platform's images.
+Set `PLATFORM_SECURITY_PROJECT_PATH` to override helper-image discovery. If a
+contract uses it and discovery fails, interactive setup asks for the value;
+unattended setup requires it explicitly.
 
 Declared public inputs add context names and cannot override platform values.
 `infra/onboarding-values.json` stores version `1`, public `context` and `bindings`
-mapping original literals to their last rendered values. It contains no secret
-inputs, credentials or cluster identity. Keep it with rendered configuration so
-operators and later pipelines share the same settings.
+mapping original literals to their last rendered values. These public settings
+contain no secret inputs or credentials; the execution journal stays outside Git.
+Keep the settings with rendered configuration so later pipelines reuse them.
+Rendering normalizes the
+Application's GitLab URL, default-branch revision and `infra` namespace while
+preserving its source path/profile. Release jobs must preserve these choices.
 
 ## Required delivery behavior
 
 The default-branch pipeline must accept source `api` and automatically run its
-declared jobs with `APP_ONBOARDING=true`. Scan-only pipelines exclude image
-publication, release and deployment. Ordinary manual-release behavior remains
-independent of onboarding.
+declared jobs with `APP_ONBOARDING=true`. Ordinary manual-release behavior remains
+independent of onboarding; source-analysis pipelines follow the separate
+[scanner contract](observability.md#scanner-contract).
 
 Before publication, validate that `CI_COMMIT_SHA` equals a valid
 `ONBOARDING_EXPECTED_SHA`, the branch is the default branch and source is `api`.
@@ -188,11 +160,9 @@ applies the committed Application once prerequisites exist. That restores any
 temporarily paused automatic sync policy. CI waits for its intended revision and
 application-specific health checks. The generic helper then requires every
 declared job to succeed, checks Argo CD's exact release revision, and verifies
-Application/Deployment health. Keep required
-work in ordinary jobs; optional reports may remain manual/non-blocking without
+Application/Deployment health. Keep required work in ordinary jobs; optional
+reports may remain manual/non-blocking without
 being listed as required delivery jobs.
 
-Missing configuration or a failed/manual required job stops onboarding. Merely
-creating a pipeline or registering an Application cannot count as success. See
-[reruns and recovery](repository-onboarding.md#automation-and-reruns) for private
-journals and partial-setup behavior.
+See [reruns and recovery](repository-onboarding.md#automation-and-reruns) for
+private journals and partial-setup behavior.
