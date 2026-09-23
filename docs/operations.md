@@ -190,7 +190,7 @@ outside Git; they are not another permanent test framework.
 | K3s recovery | Actual etcd snapshot restored with the original server token; earlier ConfigMap and encrypted Secret values returned, newer data disappeared, and both nodes rejoined Ready. |
 | HTTP behavior | All rendered platform/app Ingress paths, TLS/SNI, HTTPS redirects, auth return URLs/headers/cookies, backend 401, path boundaries, request limits, a 10 MiB authenticated POST, registry streaming upload, WebSocket echo and 90/10 native canary routing. |
 | Authentication | Actual OAuth2 Proxy and Traefik with a local OIDC/PKCE fixture, signed tokens, session cookies, identity/access-token headers and body-free authorization. |
-| Upstream state | PostgreSQL startup/persistence and SQL restore; MongoDB authenticated persistence; Vault Raft/unseal/snapshot; Keycloak production boot and database schema; SonarQube startup; GitLab API, Git repository/issue persistence and complete backup/restore after synthetic mutations. |
+| Upstream state | PostgreSQL startup/persistence and SQL restore; MongoDB authenticated persistence; Vault Raft/unseal/snapshot; Keycloak production boot and database schema; SonarQube startup; GitLab API, Git repository/issue persistence and native repository/database backup/restore after synthetic mutations. |
 
 The K3s nodes were disposable Docker containers. This does not validate Ubuntu
 provisioning, physical disks/Longhorn replication, real host fencing, Cloudflare
