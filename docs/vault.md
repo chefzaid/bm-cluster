@@ -129,7 +129,7 @@ actual SSH endpoints. Only those hosts receive the unseal key and bootstrap
 token, as root-owned `0600` files in a `0700` directory. Values travel through
 encrypted SSH stdin; differing existing recovery material is never overwritten.
 Workers receive neither file. Control-plane root access therefore includes Vault
-recovery authority. The original single-host timer remains the default until
+recovery authority. The original control-plane timer remains the default until
 this explicit distribution is requested.
 
 The anonymous `sys/unseal` request carries the key as JSON over

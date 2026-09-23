@@ -126,6 +126,15 @@ case "$group_status" in
     ;;
 esac
 group_id="$(jq -er '.id' "$work_dir/group.json")"
+if [[ "$(jq -r '.name' "$work_dir/group.json")" != "$GITLAB_GROUP_NAME" ]]; then
+  jq -n --arg name "$GITLAB_GROUP_NAME" '{name:$name}' > "$work_dir/group-display-name.json"
+  api_json PUT "groups/$group_id" --header 'Content-Type: application/json' \
+    --data-binary "@$work_dir/group-display-name.json" > "$work_dir/group-updated.json"
+  jq -e --arg name "$GITLAB_GROUP_NAME" --arg path "$GITLAB_GROUP_PATH" --argjson id "$group_id" \
+    '.id == $id and .full_path == $path and .name == $name' "$work_dir/group-updated.json" >/dev/null || \
+    fail "GitLab group display-name reconciliation did not preserve the group identity"
+  info "Updated the GitLab group display name without changing its repository path."
+fi
 jq -n --arg group_path "$GITLAB_GROUP_PATH" \
   '{query:"mutation($groupPath: ID!) { updateDependencyProxySettings(input: {enabled: true, groupPath: $groupPath}) { dependencyProxySetting { enabled } errors } }",variables:{groupPath:$group_path}}' \
   > "$work_dir/dependency-proxy.json"

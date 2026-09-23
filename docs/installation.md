@@ -55,10 +55,14 @@ The installer supports your own organization and domain on a supported Ubuntu
 host. Runtime configuration contains placeholders; the installer renders public
 URLs, registry paths, authentication issuers, discovery settings, and branding
 from your answers before installing services. The source checkout stays generic.
+The intranet title and cluster label are `<organization-name> Cloud`, derived
+from the required company display name. For example, `Example Company` becomes
+`Example Company Cloud`; the public domain does not determine the display name.
+Keycloak's realm display name and Odoo's main company also use this company name.
 
 | Environment input | Helm value | Default or requirement |
 |---|---|---|
-| `ORGANIZATION_NAME` | `organizationName` | Required by the installer; company display name, including spaces and punctuation. |
+| `ORGANIZATION_NAME` | `organizationName` | Required company display name, including spaces and punctuation; the intranet appends ` Cloud`. |
 | `ORGANIZATION_SLUG` | `organizationSlug` | First label of the public domain; a lowercase DNS label. |
 | `PLATFORM_DOMAIN` | `publicDomain` | Required public base domain, such as `example.com`. |
 | `INTERNAL_DNS_ZONE` | `internalDnsZone` | `internal.<PLATFORM_DOMAIN>`; must differ from the public domain. |
@@ -77,6 +81,14 @@ reconciliation. The public `infra/bm-cluster-identity` ConfigMap records install
 choices for installer reruns, Ansible, and provisioning helpers. Explicit
 environment inputs override stored choices. Credentials remain in the existing
 secret-management flow; do not commit generated configuration or cluster values.
+
+To rebrand an existing installation, update `organizationName` in the installed
+`bm-cluster` Argo CD Application's Helm parameters and reconcile the platform.
+Use the same `ORGANIZATION_NAME` for installer or Ansible overrides. Display
+settings such as `GITLAB_GROUP_NAME` and `CLOUDFLARE_ACCESS_IDP_NAME` are stored
+separately; update them explicitly when their labels also need to change.
+Keep the domain, organization slug, SSO realm and repository paths unchanged
+when changing display names.
 
 For an existing installation created before this identity contract, preserve its
 current realm, GitLab group/project, TLS secret, organization name, and integration
@@ -108,7 +120,7 @@ no floating API address is installed. See the
 ## Unattended installation
 
 `--yes` chooses the recommended component bundle and defaults to `INSTALL_SCOPE=apps`.
-This example installs a single node with local exposure. Replace the domain,
+This example uses a minimal topology with local exposure. Replace the domain,
 node name and GitOps URL with your own values:
 
 ```bash

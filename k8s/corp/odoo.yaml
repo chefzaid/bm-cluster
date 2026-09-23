@@ -333,6 +333,7 @@ spec:
               cat <<'PY' | odoo shell --config=/etc/odoo-generated/odoo.conf --database=odoo
               import os
 
+              env.ref('base.main_company').write({'name': os.environ['ORGANIZATION_NAME']})
               admin = env.ref('base.user_admin')
               admin.write({
                   'login': os.environ['SSO_PRIMARY_EMAIL'],
@@ -397,6 +398,8 @@ spec:
                 secretKeyRef:
                   name: odoo-secret
                   key: ODOO_ADMIN_PASSWORD
+            - name: ORGANIZATION_NAME
+              value: __ORGANIZATION_NAME_JSON__
             - name: SSO_PRIMARY_EMAIL
               valueFrom:
                 secretKeyRef:

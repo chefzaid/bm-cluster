@@ -551,7 +551,7 @@ access_app_name() {
 
 configure_access() {
     local organization_response organization_file organization_auth_domain callback_url
-    local idp_response idp_count oidc_idp_id oidc_client_secret
+    local idp_response idp_count oidc_idp_id oidc_client_secret idp_auth_url idp_matches
     local idp_file policy_response policy_count policy_id policy_file update_response
     local access_emails_json app_response app_count app_id app_file app_name fqdn label retired_label
     local current_fingerprint desired_fingerprint
@@ -610,8 +610,22 @@ configure_access() {
 
     idp_response="$(cf_request GET "/accounts/$ACCOUNT_ID/access/identity_providers")"
     require_success "$idp_response" "Reading Access identity providers"
-    idp_count="$(jq --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" '[.result[] | select(.type == "oidc" and .name == $name)] | length' <<< "$idp_response")"
-    ((idp_count <= 1)) || error "More than one Access identity provider is named $CLOUDFLARE_ACCESS_IDP_NAME."
+    idp_auth_url="https://keycloak.$ZONE_NAME/auth/realms/$KEYCLOAK_REALM/protocol/openid-connect/auth"
+    # Display names can change. The Keycloak client and realm identify the
+    # managed provider so a rename preserves its ID and existing Access links.
+    idp_matches="$(jq --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" --arg auth_url "$idp_auth_url" '
+        [.result[] | select(.name == $name or
+            (.type == "oidc" and .config.client_id == "cloudflare-access" and .config.auth_url == $auth_url))]
+        ' <<< "$idp_response")"
+    idp_count="$(jq 'length' <<< "$idp_matches")"
+    ((idp_count <= 1)) || error "More than one Access identity provider matches the managed Keycloak client or display name."
+    if ((idp_count == 1)); then
+        jq -e --arg auth_url "$idp_auth_url" \
+            '.[0].type == "oidc" and .[0].config.client_id == "cloudflare-access" and .[0].config.auth_url == $auth_url' \
+            <<< "$idp_matches" >/dev/null || \
+            error "An unrelated Access identity provider already uses the requested display name."
+        oidc_idp_id="$(jq -er '.[0].id' <<< "$idp_matches")"
+    fi
     idp_file="$WORK_DIR/access-keycloak-idp.json"
     jq -n \
         --arg client_secret "$oidc_client_secret" \
@@ -639,7 +653,6 @@ configure_access() {
         oidc_idp_id="$(jq -r '.result.id' <<< "$update_response")"
         info "Created the Keycloak OIDC identity provider for Cloudflare Access."
     else
-        oidc_idp_id="$(jq -r --arg name "$CLOUDFLARE_ACCESS_IDP_NAME" '.result[] | select(.type == "oidc" and .name == $name) | .id' <<< "$idp_response")"
         update_response="$(cf_request PUT "/accounts/$ACCOUNT_ID/access/identity_providers/$oidc_idp_id" "$idp_file")"
         require_success "$update_response" "Updating the Access Keycloak identity provider"
         info "Reconciled the Keycloak OIDC identity provider for Cloudflare Access."

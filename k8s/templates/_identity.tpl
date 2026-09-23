@@ -38,5 +38,5 @@
     "__GITLAB_GROUP_NAME_JSON__" (toJson $groupName) "__KEYCLOAK_REALM__" $realm
     "__TLS_SECRET_NAME__" $tls "__SONAR_ALM_SETTING__" $alm
     "__CLOUDFLARE_ACCESS_IDP_NAME_JSON__" (toJson $idp)
-    "__PLATFORM_TITLE_JSON__" (toJson (printf "%s Intranet" $name)) | toJson -}}
+    "__PLATFORM_TITLE_JSON__" (toJson (printf "%s Cloud" $name)) | toJson -}}
 {{- end -}}

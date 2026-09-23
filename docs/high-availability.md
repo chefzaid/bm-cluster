@@ -1,8 +1,8 @@
 # High availability
 
-HA is an explicit migration for a cluster with additional physical hosts. The
-single-server deployment remains the default; this guide does not mean HA is
-already running there. Node enrollment alone adds control-plane redundancy.
+HA requires explicit activation and sufficient independent physical hosts.
+The default profile does not enable HA. Node enrollment alone adds
+control-plane redundancy.
 Shared data services, public ingress and each application have their own
 activation steps.
 
@@ -100,8 +100,8 @@ the transition from direct ingress to Tunnel ingress.
    ./add-node.sh --role worker --mode remote --count 3
    ```
 
-   The node assistant handles the existing single-server K3s database's
-   conversion to embedded etcd and joins hosts sequentially. Verify all planned
+   The node assistant converts an existing K3s SQLite datastore to embedded
+   etcd when needed and joins hosts sequentially. Verify all planned
    hosts are Ready before proceeding. See [node enrollment](node-enrollment.md)
    for transport, final counts and scheduling choices.
 
@@ -232,8 +232,8 @@ Include configured public hostnames, OIDC redirects, trusted client IPs, Registr
 login and an image push/pull in public-path verification. Cloudflare still applies its
 normal request limits, and interrupted connections may need client retries.
 Finally restore a backup into an isolated environment and compare application
-data. Repository render/tests are useful preparation; they cannot establish
-host-failure behavior on a single server.
+data. Repository render/tests are useful preparation; host-failure behavior
+requires an exercise across independent physical hosts.
 
 The maintained defaults are in [Helm values](../k8s/values.yaml),
 [HA templates](../k8s/templates/), and [component profiles](../config/).

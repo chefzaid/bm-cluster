@@ -22,7 +22,7 @@ def render(root):
         "__ORGANIZATION_NAME_JSON__": json.dumps(settings["ORGANIZATION_NAME"]),
         "__GITLAB_GROUP_NAME_JSON__": json.dumps(settings["GITLAB_GROUP_NAME"]),
         "__CLOUDFLARE_ACCESS_IDP_NAME_JSON__": json.dumps(settings["CLOUDFLARE_ACCESS_IDP_NAME"]),
-        "__PLATFORM_TITLE_JSON__": json.dumps(settings["ORGANIZATION_NAME"] + " Intranet"),
+        "__PLATFORM_TITLE_JSON__": json.dumps(settings["ORGANIZATION_NAME"] + " Cloud"),
         "__APPS_ENABLED__": os.environ["INSTALL_APPS"],
         "__DESCHEDULER_ENABLED__": os.environ["INSTALL_DESCHEDULER"],
         "__HA_VALUES_OBJECT__": '{"highAvailabilityEnabled":false}',

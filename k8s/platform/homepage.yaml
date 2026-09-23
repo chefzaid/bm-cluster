@@ -64,7 +64,7 @@ data:
 
   settings.yaml: |
     title: __PLATFORM_TITLE_JSON__
-    description: Applications, infrastructure, data, delivery, and observability
+    description: Private cloud applications, infrastructure, data, delivery, and observability
     startUrl: https://intranet.__PUBLIC_DOMAIN__
     theme: dark
     color: slate
@@ -150,10 +150,10 @@ data:
             podSelector: app=sonarqube
 
     - Cluster Management:
-        - Cluster Dashboard:
+        - Cloud Dashboard:
             icon: homepage.png
             href: https://intranet.__PUBLIC_DOMAIN__
-            description: This Homepage service catalog
+            description: Private cloud service catalog
             namespace: infra
             podSelector: app=homepage
         - Portainer:
@@ -337,7 +337,7 @@ data:
           cpu: true
           memory: true
           showLabel: true
-          label: BM Cluster
+          label: __PLATFORM_TITLE_JSON__
         nodes:
           show: true
           cpu: true
@@ -444,7 +444,7 @@ spec:
         app.kubernetes.io/name: homepage
         app.kubernetes.io/part-of: bm-cluster
       annotations:
-        bm-cluster/config-revision: "7"
+        bm-cluster/config-revision: "8"
         # settings.yaml uses subPath; replace pods when the organization title changes.
         bm-cluster/organization-name: __ORGANIZATION_NAME_JSON__
     spec:

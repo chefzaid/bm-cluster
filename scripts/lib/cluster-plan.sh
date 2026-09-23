@@ -73,7 +73,7 @@ configure_cluster_topology_plan() {
             if cluster_plan_positive_integer "$CONTROL_PLANE_COUNT" && (( CONTROL_PLANE_COUNT % 2 == 1 )); then
                 break
             fi
-            warn "Enter an odd positive whole number: 1 for a single server, or 3, 5, ... for etcd quorum."
+            warn "Enter an odd positive control-plane count: 1, 3, 5, ...; etcd requires a majority for quorum."
             CONTROL_PLANE_COUNT=""
         done
     else

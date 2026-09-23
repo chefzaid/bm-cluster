@@ -1,11 +1,14 @@
-# Bare-Metal Cluster
+# Private Cloud Platform
 
-K3s infrastructure for a single server or a cluster of control planes and workers.
-This repository installs and manages the shared platform: networking, storage,
-identity, databases, delivery, observability, security, and Odoo.
+Build and operate your organization's private cloud on bare-metal infrastructure.
+This K3s platform brings application delivery, identity, networking, storage,
+databases, observability, security, and Odoo together under your own domain.
+Automated installation and GitOps keep the platform repeatable as your
+infrastructure grows.
 
-The installer prompts for your organization, domain, node, and delivery identity
-before installation. Configuration is parameterized for each deployment; see
+The installer collects your company name and presents the intranet as
+**`<company name> Cloud`**. Your domain, node, and delivery identity are also
+installation inputs; no company name is built in. See
 [organization settings](docs/installation.md#organization-and-installation-identity)
 for interactive setup, unattended inputs, and preservation of existing settings.
 
@@ -77,29 +80,29 @@ for the deployment view.
 
 ## Services and URLs
 
-[Homepage](https://intranet.swirlit.dev) is the live service directory, including
-internal components and application-owned entries. The links below use
-`swirlit.dev`; installation renders the domain you select. Administrative UIs
+Homepage at `https://intranet.<your-domain>` is the service directory, including
+internal components and application-owned entries. Replace `<your-domain>`
+below with the domain supplied during installation. Administrative UIs
 use the access controls described in [security and identity](docs/security.md).
 
 | Service | URL | Purpose |
 |---|---|---|
-| Odoo | [odoo.swirlit.dev](https://odoo.swirlit.dev) | ERP and CRM |
-| Homepage | [intranet.swirlit.dev](https://intranet.swirlit.dev) | Service catalog and cluster status |
-| GitLab | [gitlab.swirlit.dev](https://gitlab.swirlit.dev) | Source, CI, artifacts, and packages |
-| Container Registry | [registry.swirlit.dev](https://registry.swirlit.dev/v2/) | OCI image API; browse images in GitLab |
-| Argo CD | [argocd.swirlit.dev](https://argocd.swirlit.dev) | GitOps delivery |
-| SonarQube | [sonarqube.swirlit.dev](https://sonarqube.swirlit.dev) | Source quality analysis |
-| Grafana | [grafana.swirlit.dev](https://grafana.swirlit.dev) | Metrics and security dashboards |
-| Kibana | [kibana.swirlit.dev](https://kibana.swirlit.dev) | Logs and audit dashboards |
-| Keycloak | [keycloak.swirlit.dev](https://keycloak.swirlit.dev/auth/admin/master/console/) | Identity administration |
-| Vault | [vault.swirlit.dev](https://vault.swirlit.dev) | Secrets and policies |
-| Longhorn | [longhorn.swirlit.dev](https://longhorn.swirlit.dev) | Volumes, snapshots, and backups |
-| Portainer | [portainer.swirlit.dev](https://portainer.swirlit.dev) | Kubernetes management |
-| DBGate | [dbgate.swirlit.dev](https://dbgate.swirlit.dev) | PostgreSQL, MongoDB, and Redis administration |
-| Kafbat UI | [kafka.swirlit.dev](https://kafka.swirlit.dev) | Kafka administration |
-| Trivy reports | [Grafana dashboard](https://grafana.swirlit.dev/d/trivy-security/trivy-security-reports) | Current workload and cluster findings |
-| Lynis reports | [Kibana dashboard](https://kibana.swirlit.dev/app/dashboards#/view/lynis-security-audits) | Host audit history |
+| Odoo | `https://odoo.<your-domain>` | ERP and CRM |
+| Homepage | `https://intranet.<your-domain>` | Service catalog and cluster status |
+| GitLab | `https://gitlab.<your-domain>` | Source, CI, artifacts, and packages |
+| Container Registry | `https://registry.<your-domain>/v2/` | OCI image API; browse images in GitLab |
+| Argo CD | `https://argocd.<your-domain>` | GitOps delivery |
+| SonarQube | `https://sonarqube.<your-domain>` | Source quality analysis |
+| Grafana | `https://grafana.<your-domain>` | Metrics and security dashboards |
+| Kibana | `https://kibana.<your-domain>` | Logs and audit dashboards |
+| Keycloak | `https://keycloak.<your-domain>/auth/admin/master/console/` | Identity administration |
+| Vault | `https://vault.<your-domain>` | Secrets and policies |
+| Longhorn | `https://longhorn.<your-domain>` | Volumes, snapshots, and backups |
+| Portainer | `https://portainer.<your-domain>` | Kubernetes management |
+| DBGate | `https://dbgate.<your-domain>` | PostgreSQL, MongoDB, and Redis administration |
+| Kafbat UI | `https://kafka.<your-domain>` | Kafka administration |
+| Trivy reports | `https://grafana.<your-domain>/d/trivy-security/trivy-security-reports` | Current workload and cluster findings |
+| Lynis reports | `https://kibana.<your-domain>/app/dashboards#/view/lynis-security-audits` | Host audit history |
 
 Supporting components include K3s/CoreDNS/ServiceLB, Traefik Ingress, Longhorn,
 External Secrets, the Descheduler, Prometheus/Alertmanager, node exporter,

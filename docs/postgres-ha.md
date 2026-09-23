@@ -3,7 +3,7 @@
 This opt-in profile replaces one PostgreSQL writer with a CloudNativePG primary
 and two synchronous standbys on three different hosts. It is for a cluster with
 at least three Ready control planes and three schedulable storage hosts. The
-current single-node installation keeps its existing Deployment and PVC until an
+existing PostgreSQL installation keeps its Deployment and PVC until an
 explicit migration. Merely enabling general cluster HA does not migrate data.
 
 [postgres-ha-values.yaml](../config/postgres-ha-values.yaml) defines the database profile;

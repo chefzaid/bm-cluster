@@ -48,8 +48,9 @@ dashboard; audit retention is separate from ordinary logs.
 
 Normal browser access uses the administrator login selected during installation.
 [Keycloak reconciliation](../k8s/platform/keycloak-sso.yaml) maintains matching
-managed identities in `master` and `swirlit`. A username gets the primary email
-`<username>@<your-domain>`; an email login stays unchanged. The `master` identity
+managed identities in `master` and the configured `KEYCLOAK_REALM`. A username
+gets the primary email `<username>@<your-domain>`; an email login stays unchanged.
+The `master` identity
 can administer every realm at
 `https://keycloak.<your-domain>/auth/admin/master/console/`.
 
@@ -61,7 +62,7 @@ for the hostname inventory and boundary configuration.
 
 | Service | Managed administrator access |
 | --- | --- |
-| Keycloak | Master `admin` and `swirlit` realm administration. |
+| Keycloak | Master `admin` and configured SSO realm administration. |
 | GitLab | Existing canonical `root` instance administrator. |
 | Grafana / Argo CD | Grafana server administrator / Argo CD `role:admin`. |
 | Vault | `platform-admin`, including all paths and `sudo`. |

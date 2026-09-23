@@ -27,10 +27,9 @@ flowchart TB
     Servers <-->|HA: outbound Tunnels| Edge
 ```
 
-Solid links show runtime traffic; dotted links show enrollment. Single-server
-installations omit the additional nodes and run workloads and storage on the
-control plane. With workers, scheduling and Longhorn placement follow the
-[node enrollment policy](node-enrollment.md#scheduling-and-storage). The default
+Solid links show runtime traffic; dotted links show enrollment. Additional
+control planes and workers depend on the selected topology. Workload scheduling
+and Longhorn placement follow the [node enrollment policy](node-enrollment.md#scheduling-and-storage). The default
 and HA ingress paths are alternatives: adding control planes leaves the first
 path in place until the explicit migration.
 
