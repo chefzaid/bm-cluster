@@ -1183,8 +1183,9 @@ if [[ "$RUN_K8S_FEATURES" == "true" ]]; then
 Create a Cloudflare User API Token:
   1. Open https://dash.cloudflare.com/profile/api-tokens.
   2. Create a custom user token for the selected account.
-  3. Grant Zone/DNS/Zone Settings/SSL/WAF/Cache edit, Access Apps and
-     Organizations edit, Memberships read, and Registrar Domains read.
+  3. Grant Zone read/edit; DNS, Zone Settings, SSL, WAF, Cache Rules and
+     Transform Rules edit; Bot Management read/edit; Access Apps and
+     Organizations edit; Memberships and Registrar Domains read.
   4. For a new zone, scope zone permissions to all zones in the account.
   5. Paste the cfut_ token below; it is used only for this installer run.
 EOF
