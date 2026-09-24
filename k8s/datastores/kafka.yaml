@@ -133,6 +133,9 @@ spec:
   - name: broker
     port: 9092
     targetPort: 9092
+  - name: applications
+    port: 9094
+    targetPort: 9094
   selector:
     app: kafka
 

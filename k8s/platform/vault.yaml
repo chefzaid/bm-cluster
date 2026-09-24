@@ -65,6 +65,10 @@ kind: ClusterSecretStore
 metadata:
   name: vault-backend
 spec:
+  # Environment namespaces use their own restricted stores. The legacy store
+  # can read platform credentials and must never be available to branch apps.
+  conditions:
+    - namespaces: [infra, apps, corp, gitlab-runners]
   provider:
     vault:
       server: http://vault.__INTERNAL_DNS_ZONE__:8200

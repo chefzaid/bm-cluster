@@ -188,6 +188,8 @@ spec:
       containers:
         - name: kube-state-metrics
           image: registry.k8s.io/kube-state-metrics/kube-state-metrics@sha256:01171220c7c059afc85034ffe687bfe7249e41c0cc46fbe9a5128503ceee3016
+          args:
+            - --metric-labels-allowlist=namespaces=[bm-cluster.io/application-workloads],pods=[app]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -1068,6 +1070,8 @@ spec:
     metadata:
       labels:
         app: grafana
+      annotations:
+        bm-cluster.io/application-observability: pending
     spec:
       serviceAccountName: grafana
       automountServiceAccountToken: true

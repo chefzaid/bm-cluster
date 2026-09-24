@@ -110,6 +110,18 @@ spec:
               value: "6379"
             - name: ENGINE_redis
               value: "redis@dbgate-plugin-redis"
+            - name: USER_redis
+              valueFrom:
+                secretKeyRef:
+                  name: application-redis-legacy-auth
+                  key: username
+                  optional: true
+            - name: PASSWORD_redis
+              valueFrom:
+                secretKeyRef:
+                  name: application-redis-legacy-auth
+                  key: password
+                  optional: true
           volumeMounts:
             - name: dbgate-data
               mountPath: /home/node/.dbgate

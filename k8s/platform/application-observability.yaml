@@ -1,8 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: application-observability-reader
-  namespace: apps
 rules:
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets, replicasets]
@@ -17,7 +16,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: application-observability-reader
+  name: application-observability-workloads
   namespace: apps
 subjects:
   - kind: ServiceAccount
@@ -25,8 +24,33 @@ subjects:
     namespace: infra
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: application-observability-reader
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: application-discovery-namespaces
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: application-discovery-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: grafana
+    namespace: infra
+  - kind: ServiceAccount
+    name: sonar-apps-discovery
+    namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: application-discovery-namespaces
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -43,37 +67,38 @@ data:
     import { join } from 'node:path';
     import { pathToFileURL } from 'node:url';
 
-    export const workloadPaths = [
-      '/apis/apps/v1/namespaces/apps/deployments',
-      '/apis/apps/v1/namespaces/apps/statefulsets',
-      '/apis/apps/v1/namespaces/apps/daemonsets',
-      '/apis/apps/v1/namespaces/apps/replicasets',
-      '/apis/batch/v1/namespaces/apps/cronjobs',
-      '/apis/batch/v1/namespaces/apps/jobs',
-      '/api/v1/namespaces/apps/pods',
+    export const workloadPaths = namespace => [
+      `/apis/apps/v1/namespaces/${namespace}/deployments`,
+      `/apis/apps/v1/namespaces/${namespace}/statefulsets`,
+      `/apis/apps/v1/namespaces/${namespace}/daemonsets`,
+      `/apis/apps/v1/namespaces/${namespace}/replicasets`,
+      `/apis/batch/v1/namespaces/${namespace}/cronjobs`,
+      `/apis/batch/v1/namespaces/${namespace}/jobs`,
+      `/api/v1/namespaces/${namespace}/pods`,
     ];
     const hash = value => createHash('sha256').update(value).digest('hex');
     const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const kindKey = object => `${object.kind}/${object.metadata.name}`;
 
-    export function discover(objects) {
-      const workloads = objects.filter(object => object.metadata?.namespace === 'apps');
-      const byName = new Map(workloads.map(object => [kindKey(object), object]));
+    const resourceKey = object => `${object.metadata.namespace}/${kindKey(object)}`;
+    export function discover(objects, namespaces = ['apps']) {
+      const workloads = objects.filter(object => namespaces.includes(object.metadata?.namespace));
+      const byName = new Map(workloads.map(object => [resourceKey(object), object]));
       const roots = new Map();
       for (const object of workloads) {
         let root = object;
         const visited = new Set();
         while (true) {
-          const key = kindKey(root);
+          const key = resourceKey(root);
           if (visited.has(key)) throw new Error('Workload ownership cycle');
           visited.add(key);
           const owner = root.metadata.ownerReferences?.find(reference => reference.controller);
           if (!owner) break;
-          const parent = byName.get(`${owner.kind}/${owner.name}`);
+          const parent = byName.get(`${root.metadata.namespace}/${owner.kind}/${owner.name}`);
           if (!parent || (owner.uid && parent.metadata.uid !== owner.uid)) break;
           root = parent;
         }
-        const key = kindKey(root);
+        const key = resourceKey(root);
         if (!roots.has(key)) roots.set(key, { root, pods: new Set() });
         if (object.kind === 'Pod') roots.get(key).pods.add(object.metadata.name);
       }
@@ -82,20 +107,21 @@ data:
         const metadata = root.metadata;
         const template = root.kind === 'CronJob' ? root.spec?.jobTemplate?.spec?.template : root.spec?.template;
         const labels = { ...template?.metadata?.labels, ...metadata.labels };
-        const tracking = metadata.annotations?.['argocd.argoproj.io/tracking-id']?.match(/^([^:]+):([^:]+):apps\/(.+)$/);
+        const tracking = metadata.annotations?.['argocd.argoproj.io/tracking-id']?.match(/^([^:]+):([^:]+):([^/]+)\/(.+)$/);
         let identity;
-        if (tracking && tracking[2].split('/').at(-1) === root.kind && tracking[3] === metadata.name) {
+        if (tracking && tracking[2].split('/').at(-1) === root.kind && tracking[3] === metadata.namespace && tracking[4] === metadata.name) {
           identity = ['argocd', tracking[1]];
         } else {
           const label = ['app.kubernetes.io/part-of', 'app.kubernetes.io/instance', 'app.kubernetes.io/name', 'app']
             .find(key => labels[key]);
           const owner = metadata.ownerReferences?.find(reference => reference.controller);
-          identity = label ? [label, labels[label]] : ['workload', owner && !byName.has(`${owner.kind}/${owner.name}`)
+          identity = label ? [label, labels[label]] : ['workload', owner && !byName.has(`${metadata.namespace}/${owner.kind}/${owner.name}`)
             ? `${owner.kind}/${owner.name}` : kindKey(root)];
         }
-        const key = JSON.stringify(identity);
+        const key = JSON.stringify(metadata.namespace === 'apps' ? identity : [metadata.namespace, ...identity]);
         if (!applications.has(key)) applications.set(key, {
-          key, uid: `apps-${hash(key).slice(0, 20)}`, name: identity[1], workloads: [], patterns: new Set(),
+          key, uid: `apps-${hash(key).slice(0, 20)}`, namespace: metadata.namespace,
+          name: metadata.namespace === 'apps' ? identity[1] : `${identity[1]} (${metadata.namespace})`, workloads: [], patterns: new Set(),
         });
         const application = applications.get(key);
         application.workloads.push(kindKey(root));
@@ -116,7 +142,7 @@ data:
     }
 
     export function grafanaDashboard(application, kibanaUrl) {
-      const selector = `namespace="apps",pod=~${JSON.stringify(application.patterns.join('|'))}`;
+      const selector = `namespace=${JSON.stringify(application.namespace)},pod=~${JSON.stringify(application.patterns.join('|'))}`;
       const datasource = { type: 'prometheus', uid: 'prometheus' };
       const panel = (id, title, expressions, unit, x, y, type = 'timeseries') => ({
         id, title, type, datasource, gridPos: { x, y, w: type === 'stat' ? 6 : 12, h: type === 'stat' ? 4 : 8 },
@@ -131,7 +157,7 @@ data:
       });
       return {
         uid: application.uid, title: `Applications / ${application.name}`,
-        description: `Automatically managed from apps: ${application.workloads.join(', ')}. CPU, memory, readiness and restarts use cluster metrics. Scrape panels need prometheus.io/scrape annotations; no data means no metric series, not a healthy target.`,
+        description: `Automatically managed from ${application.namespace}: ${application.workloads.join(', ')}. CPU, memory, readiness and restarts use cluster metrics. Scrape panels need prometheus.io/scrape annotations; no data means no metric series, not a healthy target.`,
         tags: ['applications', 'auto-discovered', 'bm-cluster'], timezone: 'browser', schemaVersion: 41,
         version: 1, refresh: '30s', time: { from: 'now-6h', to: 'now' }, editable: false,
         links: [{ title: 'Application logs in Kibana', type: 'link', url: `${kibanaUrl}/app/dashboards#/view/${application.uid}-logs`, targetBlank: true }],
@@ -157,9 +183,9 @@ data:
       const indexReference = 'kibanaSavedObjectMeta.searchSourceJSON.index';
       const references = [{ name: indexReference, type: 'index-pattern', id }];
       const filters = [{
-        meta: { alias: `apps / ${application.name}`, disabled: false, negate: false },
+        meta: { alias: `${application.namespace} / ${application.name}`, disabled: false, negate: false },
         query: { bool: { filter: [
-          { term: { 'kubernetes.namespace_name': 'apps' } },
+          { term: { 'kubernetes.namespace_name': application.namespace } },
           { regexp: { 'kubernetes.pod_name': { value: application.patterns.join('|'), flags: 'NONE' } } },
         ] } },
       }];
@@ -196,7 +222,7 @@ data:
         }),
         saved('dashboard', id, {
           title: `Applications / ${application.name} / Logs`,
-          description: `Automatically managed from apps: ${application.workloads.join(', ')}. Clone this dashboard before customizing.`,
+          description: `Automatically managed from ${application.namespace}: ${application.workloads.join(', ')}. Clone this dashboard before customizing.`,
           hits: 0, timeRestore: false,
           optionsJSON: JSON.stringify({ useMargins: true, syncColors: false, hidePanelTitles: false }),
           panelsJSON: JSON.stringify([
@@ -276,8 +302,11 @@ data:
 
     export async function reconcile({ kubernetes, kibana, directory, kibanaUrl, imported = new Map(), now = Date.now() }) {
       // A failed or partial Kubernetes snapshot must never replace the last known dashboards.
-      const objects = (await Promise.all(workloadPaths.map(path => kubernetes.list(path)))).flat();
-      const applications = discover(objects);
+      const namespaces = (await kubernetes.list('/api/v1/namespaces')).filter(namespace =>
+        namespace.metadata.name === 'apps' || namespace.metadata.labels?.['bm-cluster.io/application-workloads'] === 'true'
+      ).map(namespace => namespace.metadata.name);
+      const objects = (await Promise.all(namespaces.flatMap(workloadPaths).map(path => kubernetes.list(path)))).flat();
+      const applications = discover(objects, namespaces);
       for (const application of applications) await writeDashboard(directory, grafanaDashboard(application, kibanaUrl));
       const errors = [];
       for (const application of applications) {

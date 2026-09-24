@@ -19,11 +19,22 @@ data:
       "templating": {
         "list": [
           {
+            "name": "namespace",
+            "label": "Environment namespace",
+            "type": "query",
+            "datasource": {"type": "prometheus", "uid": "prometheus"},
+            "query": {"query": "label_values(kube_namespace_labels{label_bm_cluster_io_application_workloads=\"true\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "includeAll": true,
+            "multi": true,
+            "refresh": 1,
+            "current": {"text": "All", "value": ["$__all"]}
+          },
+          {
             "name": "application",
             "label": "Application label",
             "type": "query",
             "datasource": {"type": "prometheus", "uid": "prometheus"},
-            "query": {"query": "label_values(kube_pod_labels{namespace=\"apps\",label_app!=\"\"}, label_app)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+            "query": {"query": "label_values(kube_pod_labels{namespace=~\"$namespace\",label_app!=\"\"}, label_app)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
             "includeAll": true,
             "allValue": ".*",
             "multi": true,
@@ -39,7 +50,7 @@ data:
           "title": "Scrape Targets Up",
           "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum(up{job=\"kubernetes-pods\",namespace=\"apps\",app=~\"$application\"})", "instant": true}],
+          "targets": [{"refId": "A", "expr": "sum(up{job=\"kubernetes-pods\",namespace=~\"$namespace\",app=~\"$application\"})", "instant": true}],
           "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "red"}, {"color": "green", "value": 1}]}}, "overrides": []},
           "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
         },
@@ -49,7 +60,7 @@ data:
           "title": "Unavailable Deployments",
           "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum((kube_deployment_spec_replicas{namespace=\"apps\"} - kube_deployment_status_replicas_available{namespace=\"apps\"}) > 0)", "instant": true}],
+          "targets": [{"refId": "A", "expr": "sum((kube_deployment_spec_replicas{namespace=~\"$namespace\"} - kube_deployment_status_replicas_available{namespace=~\"$namespace\"}) > 0)", "instant": true}],
           "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}, "overrides": []},
           "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
         },
@@ -59,7 +70,7 @@ data:
           "title": "Restarts (1h)",
           "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"apps\"}[1h]))", "instant": true}],
+          "targets": [{"refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}[1h]))", "instant": true}],
           "fieldConfig": {"defaults": {"unit": "short", "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
           "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}, "colorMode": "value", "graphMode": "none"}
         },
@@ -79,7 +90,7 @@ data:
           "title": "CPU by Application Pod",
           "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=\"apps\",container!=\"\",image!=\"\"}[5m])) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=\"apps\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",container!=\"\",image!=\"\"}[5m])) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=~\"$namespace\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []},
           "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
         },
@@ -89,7 +100,7 @@ data:
           "title": "Memory by Application Pod",
           "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=\"apps\",container!=\"\",image!=\"\"}) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=\"apps\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
+          "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~\"$namespace\",container!=\"\",image!=\"\"}) * on(namespace,pod) group_left(label_app) kube_pod_labels{namespace=~\"$namespace\",label_app=~\"$application\"}", "legendFormat": "{{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
           "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
         },
@@ -99,7 +110,7 @@ data:
           "title": "Prometheus Scrape Duration",
           "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "scrape_duration_seconds{job=\"kubernetes-pods\",namespace=\"apps\",app=~\"$application\"}", "legendFormat": "{{app}} / {{pod}}"}],
+          "targets": [{"refId": "A", "expr": "scrape_duration_seconds{job=\"kubernetes-pods\",namespace=~\"$namespace\",app=~\"$application\"}", "legendFormat": "{{app}} / {{pod}}"}],
           "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
           "options": {"legend": {"displayMode": "table", "placement": "bottom"}}
         },
@@ -109,7 +120,7 @@ data:
           "title": "Deployment Availability",
           "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
           "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "targets": [{"refId": "A", "expr": "kube_deployment_status_replicas_available{namespace=\"apps\"}", "legendFormat": "{{deployment}}", "instant": true, "format": "table"}],
+          "targets": [{"refId": "A", "expr": "kube_deployment_status_replicas_available{namespace=~\"$namespace\"}", "legendFormat": "{{deployment}}", "instant": true, "format": "table"}],
           "options": {"showHeader": true}
         }
       ]
@@ -124,8 +135,8 @@ metadata:
 data:
   applications-namespace.ndjson: |
     {"type":"index-pattern","id":"kubernetes-container-logs","attributes":{"title":"kubernetes-logs-*","timeFieldName":"@timestamp","fields":"[]","fieldFormatMap":"{}","runtimeFieldMap":"{}","sourceFilters":"[]"},"references":[],"migrationVersion":{"index-pattern":"7.11.0"},"coreMigrationVersion":"7.17.0"}
-    {"type":"search","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Automatically discovered Kubernetes container logs from the apps namespace.","columns":["@timestamp","app","kubernetes.pod_name","kubernetes.container_name","level","message","log"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"kubernetes.namespace_name : \\\"apps\\\"\",\"language\":\"kuery\"},\"filter\":[],\"highlightAll\":true,\"version\":true,\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"kubernetes-container-logs"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
-    {"type":"dashboard","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Auto-discovered logs for every workload in the apps namespace.","hits":0,"timeRestore":false,"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":0,\"w\":48,\"h\":28,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"search","id":"applications-namespace-logs"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"search","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Automatically discovered logs from managed application namespaces.","columns":["@timestamp","app","kubernetes.namespace_name","kubernetes.pod_name","kubernetes.container_name","level","message","log"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"observability_scope : \\\"application\\\" or kubernetes.namespace_name : \\\"apps\\\"\",\"language\":\"kuery\"},\"filter\":[],\"highlightAll\":true,\"version\":true,\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"kubernetes-container-logs"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"dashboard","id":"applications-namespace-logs","attributes":{"title":"Applications Namespace Logs","description":"Logs from managed application namespaces.","hits":0,"timeRestore":false,"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":0,\"w\":48,\"h\":28,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"search","id":"applications-namespace-logs"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
 
 ---
 apiVersion: batch/v1
@@ -201,8 +212,8 @@ data:
     {"type":"index-pattern","id":"lynis-audits","attributes":{"title":"lynis-audits-*","timeFieldName":"@timestamp","fields":"[]","fieldFormatMap":"{}","runtimeFieldMap":"{}","sourceFilters":"[]"},"references":[],"migrationVersion":{"index-pattern":"7.11.0"},"coreMigrationVersion":"7.17.0"}
     {"type":"visualization","id":"lynis-hardening-index-trend","attributes":{"title":"Lynis Hardening Index Trend","description":"Monthly hardening index reported by Lynis.","uiStateJSON":"{}","version":1,"visState":"{\"title\":\"Lynis Hardening Index Trend\",\"type\":\"line\",\"params\":{\"type\":\"line\",\"grid\":{\"categoryLines\":false},\"categoryAxes\":[{\"id\":\"CategoryAxis-1\",\"type\":\"category\",\"position\":\"bottom\",\"show\":true,\"scale\":{\"type\":\"linear\"},\"labels\":{\"show\":true,\"filter\":true,\"truncate\":100},\"title\":{},\"style\":{}}],\"valueAxes\":[{\"id\":\"ValueAxis-1\",\"name\":\"LeftAxis-1\",\"type\":\"value\",\"position\":\"left\",\"show\":true,\"scale\":{\"type\":\"linear\",\"mode\":\"normal\"},\"labels\":{\"show\":true,\"rotate\":0,\"filter\":false,\"truncate\":100},\"title\":{\"text\":\"Hardening index\"},\"style\":{}}],\"seriesParams\":[{\"show\":true,\"type\":\"line\",\"mode\":\"normal\",\"data\":{\"label\":\"Average hardening index\",\"id\":\"1\"},\"valueAxis\":\"ValueAxis-1\",\"drawLinesBetweenPoints\":true,\"lineWidth\":2,\"interpolate\":\"linear\",\"showCircles\":true}],\"addTooltip\":true,\"detailedTooltip\":true,\"palette\":{\"type\":\"palette\",\"name\":\"default\"},\"addLegend\":false,\"legendPosition\":\"right\",\"fittingFunction\":\"linear\",\"times\":[],\"addTimeMarker\":false,\"labels\":{},\"radiusRatio\":9,\"thresholdLine\":{\"show\":false,\"value\":80,\"width\":1,\"style\":\"full\",\"color\":\"#E7664C\"}},\"aggs\":[{\"id\":\"1\",\"enabled\":true,\"type\":\"avg\",\"params\":{\"field\":\"lynis.numeric_value\"},\"schema\":\"metric\"},{\"id\":\"2\",\"enabled\":true,\"type\":\"date_histogram\",\"params\":{\"field\":\"@timestamp\",\"timeRange\":{\"from\":\"now-1y\",\"to\":\"now\"},\"useNormalizedEsInterval\":true,\"scaleMetricValues\":false,\"interval\":\"M\",\"drop_partials\":false,\"min_doc_count\":1,\"extended_bounds\":{}},\"schema\":\"segment\"}]}","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.key : \\\"hardening_index\\\"\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"visualization":"7.14.0"},"coreMigrationVersion":"7.17.0"}
     {"type":"visualization","id":"lynis-findings-by-type","attributes":{"title":"Lynis Findings by Type","description":"Warnings and suggestions reported during the selected period.","uiStateJSON":"{}","version":1,"visState":"{\"title\":\"Lynis Findings by Type\",\"type\":\"pie\",\"params\":{\"type\":\"pie\",\"addTooltip\":true,\"addLegend\":true,\"legendPosition\":\"right\",\"isDonut\":true,\"labels\":{\"show\":true,\"values\":true,\"last_level\":true,\"truncate\":100}},\"aggs\":[{\"id\":\"1\",\"enabled\":true,\"type\":\"count\",\"params\":{},\"schema\":\"metric\"},{\"id\":\"2\",\"enabled\":true,\"type\":\"terms\",\"params\":{\"field\":\"lynis.finding_type\",\"orderBy\":\"1\",\"order\":\"desc\",\"size\":5,\"otherBucket\":false,\"otherBucketLabel\":\"Other\",\"missingBucket\":false,\"missingBucketLabel\":\"Missing\"},\"schema\":\"segment\"}]}","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.finding_type : *\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"visualization":"7.14.0"},"coreMigrationVersion":"7.17.0"}
-    {"type":"search","id":"lynis-findings","attributes":{"title":"Lynis Findings","description":"Actionable Lynis warnings and suggestions retained for twelve months.","columns":["@timestamp","host.name","lynis.finding_type","lynis.test_id","lynis.finding","lynis.detail","lynis.solution"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"lynis.finding_type : *\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
-    {"type":"dashboard","id":"lynis-security-audits","attributes":{"title":"Lynis Security Audits","description":"Twelve-month view of monthly Lynis hardening scores, warnings, and suggestions.","hits":0,"timeRestore":true,"timeFrom":"now-1y","timeTo":"now","refreshInterval":{"pause":true,"value":0},"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":0,\"y\":0,\"w\":32,\"h\":14,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"},{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":32,\"y\":0,\"w\":16,\"h\":14,\"i\":\"2\"},\"panelIndex\":\"2\",\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"},{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":14,\"w\":48,\"h\":24,\"i\":\"3\"},\"panelIndex\":\"3\",\"embeddableConfig\":{},\"panelRefName\":\"panel_2\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"visualization","id":"lynis-hardening-index-trend"},{"name":"panel_1","type":"visualization","id":"lynis-findings-by-type"},{"name":"panel_2","type":"search","id":"lynis-findings"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"search","id":"lynis-findings","attributes":{"title":"Lynis Findings","description":"Automatically discovered logs from managed application namespaces.","columns":["@timestamp","host.name","kubernetes.namespace_name","lynis.finding_type","lynis.test_id","lynis.finding","lynis.detail","lynis.solution"],"sort":[["@timestamp","desc"]],"grid":{},"hideChart":false,"kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"observability_scope : \\\"application\\\" or kubernetes.namespace_name : \\\"apps\\\"\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}"}},"references":[{"name":"kibanaSavedObjectMeta.searchSourceJSON.index","type":"index-pattern","id":"lynis-audits"}],"migrationVersion":{"search":"7.9.3"},"coreMigrationVersion":"7.17.0"}
+    {"type":"dashboard","id":"lynis-security-audits","attributes":{"title":"Lynis Security Audits","description":"Logs from managed application namespaces.","hits":0,"timeRestore":true,"timeFrom":"now-1y","timeTo":"now","refreshInterval":{"pause":true,"value":0},"optionsJSON":"{\"useMargins\":true,\"syncColors\":false,\"hidePanelTitles\":false}","panelsJSON":"[{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":0,\"y\":0,\"w\":32,\"h\":14,\"i\":\"1\"},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_0\"},{\"version\":\"7.17.25\",\"type\":\"visualization\",\"gridData\":{\"x\":32,\"y\":0,\"w\":16,\"h\":14,\"i\":\"2\"},\"panelIndex\":\"2\",\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"},{\"version\":\"7.17.25\",\"type\":\"search\",\"gridData\":{\"x\":0,\"y\":14,\"w\":48,\"h\":24,\"i\":\"3\"},\"panelIndex\":\"3\",\"embeddableConfig\":{},\"panelRefName\":\"panel_2\"}]","kibanaSavedObjectMeta":{"searchSourceJSON":"{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"}},"references":[{"name":"panel_0","type":"visualization","id":"lynis-hardening-index-trend"},{"name":"panel_1","type":"visualization","id":"lynis-findings-by-type"},{"name":"panel_2","type":"search","id":"lynis-findings"}],"migrationVersion":{"dashboard":"7.17.3"},"coreMigrationVersion":"7.17.0"}
 
 ---
 apiVersion: batch/v1

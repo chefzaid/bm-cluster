@@ -15,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/lib"))
-from deployment_environments import load_inventory
+from deployment_environments import load_inventory, validate_inventory, environment_context
 from environment_onboarding import EnvironmentOnboarding, EnvironmentServices
 from repository_onboarding import OnboardingError
 from onboarding_services import ServiceError
@@ -24,7 +24,7 @@ spec = importlib.util.spec_from_file_location("application_dns", ROOT / "scripts
 dns = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dns)
 
-INVENTORY = load_inventory(ROOT / "config/deployment-environments.example.yaml")
+INVENTORY = load_inventory(ROOT / "config/deployment-environments.remote.example.yaml")
 CONTEXT = {"PUBLIC_DOMAIN":"example.com", "INTERNAL_DNS_ZONE":"internal.example.com", "KEYCLOAK_REALM":"example",
            "APPLICATION_NAME":"devapp", "APP_SUBDOMAIN":"portal", "APP_HOST":"portal.example.com",
            "GITLAB_REPOSITORY_URL":"http://gitlab.internal.example.com/team/devapp.git",
@@ -35,21 +35,46 @@ TEMPLATE = {"apiVersion":"argoproj.io/v1alpha1", "kind":"Application", "metadata
             "spec":{"project":"applications", "destination":{"server":"https://kubernetes.default.svc","namespace":"apps"},
                     "source":{"repoURL":CONTEXT["GITLAB_REPOSITORY_URL"],"path":"infra/k8s","targetRevision":"main"}}}
 
+def local_inventory(hostname_style="nested"):
+    inventory = copy.deepcopy(INVENTORY)
+    inventory["platform"].pop("gateway", None)
+    inventory["platform"]["hostnameStyle"] = hostname_style
+    services = inventory["platform"]["services"]
+    services["postgres"] = {"host": "postgres.infra.svc.cluster.local", "port": 5432}
+    services["redis"] = {"host": "redis.infra.svc.cluster.local", "port": 6379}
+    services["kafka"] = {"bootstrapServers": "kafka-0.kafka.infra.svc.cluster.local:9094",
+                         "securityProtocol": "SASL_PLAINTEXT", "brokers": [{"id": 0, "host": "kafka-0.kafka.infra.svc.cluster.local", "port": 9094}]}
+    services["vault"] = {"url": "http://vault.infra.svc.cluster.local:8200"}
+    for env in inventory["environments"]:
+        inventory["environments"][env] = {"mode": "local", "ingressAddress": "203.0.113.10", "podCIDR": "10.42.0.0/16"}
+    return validate_inventory(inventory)
+
+
 class Platform:
     api = object()
     def __init__(self):
         self.inventory = copy.deepcopy(INVENTORY)
         self.insecure = False
+        self.registration_type = None
+        self.api_server = "https://127.0.0.1:6443"
     def kubectl(self, *args):
+        if args[:2] == ("config", "view"):
+            return {"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]}
         if args[1] == "configmap":
             return {"data":{"environments.json":json.dumps(self.inventory)}}
         env = args[2].removeprefix("application-cluster-")
         target = self.inventory["environments"][env]
-        data = {"name":target["clusterName"],"server":target["server"],"namespaces":"apps","clusterResources":"false",
+        data = {"name":target["clusterName"],"server":target["server"],"namespaces":target["namespace"],"clusterResources":"false",
                 "project":"applications-"+env,"config":json.dumps({"bearerToken":"fixture-token",
                  "tlsClientConfig":{"insecure":self.insecure,"caData":"Zml4dHVyZS1jYQ=="}})}
-        return {"metadata":{"labels":{"bm-cluster.io/application-environment":env}},
-                "data":{k:base64.b64encode(v.encode()).decode() for k,v in data.items()}}
+        labels = {"bm-cluster.io/application-environment": env}
+        if target.get("mode", "remote") == "local":
+            data["apiServer"] = self.api_server
+        else:
+            labels["argocd.argoproj.io/secret-type"] = "cluster"
+        if self.registration_type:
+            labels["argocd.argoproj.io/secret-type"] = self.registration_type
+        return {"metadata":{"labels":labels}, "data":{k:base64.b64encode(v.encode()).decode() for k,v in data.items()}}
 
 class Checkout:
     def __init__(self, root): self.root = root
@@ -82,6 +107,24 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(Path(path).stat().st_mode & 0o777,0o600)
             self.assertEqual(config["clusters"][0]["cluster"]["server"],INVENTORY["environments"]["uat"]["server"])
         self.assertFalse(Path(path).exists())
+    def test_local_targets_keep_separate_namespaces_and_scoped_operator_credentials(self):
+        self.platform.inventory = local_inventory()
+        manager = self.manager()
+        self.assertEqual(manager.application(TEMPLATE)["spec"]["destination"], {"name": "in-cluster", "namespace": "apps-int"})
+        for env in ("int", "uat", "prod"):
+            with manager.target_kubeconfig(env) as path:
+                config = json.loads(Path(path).read_text())
+            self.assertEqual(config["contexts"][0]["context"]["namespace"], "apps-" + env)
+            self.assertEqual(config["clusters"][0]["cluster"]["server"], "https://127.0.0.1:6443")
+            self.assertEqual(config["users"][0]["user"], {"token": "fixture-token"})
+        self.platform.registration_type = "cluster"
+        with self.assertRaisesRegex(OnboardingError, "built-in"):
+            self.manager()
+        self.platform.registration_type = None
+        self.platform.api_server = "https://another.example.com:6443"
+        with self.assertRaisesRegex(OnboardingError, "another platform endpoint"):
+            self.manager()
+
     def test_registration_requires_verified_tls_and_stable_saved_targets(self):
         self.manager()
         self.platform.insecure=True
@@ -127,6 +170,15 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(client["clientId"],"devapp-"+env+"-web")
             self.assertEqual(client["protocolMappers"][0]["config"]["included.client.audience"],client["clientId"])
             self.assertEqual(client["webOrigins"],["https://portal."+target["domain"]])
+        suffix = local_inventory("suffix")
+        for env in ("int", "uat", "prod"):
+            target = environment_context(suffix, env)
+            with patch("onboarding_services.Services._client", return_value=("example", copy.deepcopy(original))):
+                service = EnvironmentServices(object(), self.platform.kubectl, CONTEXT, target=target)
+                _, client = service._client({}, self.root)
+            expected = "https://portal" + ("" if env == "prod" else "-" + env) + ".example.com"
+            self.assertEqual(client["webOrigins"], [expected])
+            self.assertEqual(client["redirectUris"], [expected + "/*"])
 
 class CertificateTests(unittest.TestCase):
     def test_valid_public_origin_certificate_is_preserved(self):
@@ -157,7 +209,7 @@ class CertificateTests(unittest.TestCase):
                 return json.dumps({"metadata": {"labels": {"app.kubernetes.io/managed-by": "external-manager"}}, "data": {}})
             raise AssertionError(arguments)
         from argparse import Namespace
-        args = Namespace(config=str(ROOT / "config/deployment-environments.example.yaml"), environment="int",
+        args = Namespace(config=str(ROOT / "config/deployment-environments.remote.example.yaml"), environment="int",
                          host_label="devapp", target_kubeconfig="/fixture", certificate_only=True, check=True)
         with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "fixture"}), patch.object(dns, "HTTP", return_value=API()), \
                 patch.object(dns, "run", side_effect=kubectl), patch.object(dns, "certificate_valid", return_value=True):
@@ -167,6 +219,108 @@ class CertificateTests(unittest.TestCase):
                 patch.object(dns, "run", side_effect=kubectl), patch.object(dns, "certificate_valid", return_value=False):
             with self.assertRaisesRegex(ServiceError, "externally managed"):
                 dns.reconcile(args)
+
+    def test_local_certificate_targets_namespace_and_verified_operator_endpoint(self):
+        calls = []
+        class API:
+            def request(self, method, path, data):
+                return {"success": True, "result": [{"id": "zone"}]}
+        def kubectl(arguments, **_kwargs):
+            calls.append(arguments)
+            if "view" in arguments:
+                return json.dumps({"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]})
+            if "namespace" in arguments:
+                self.assertIn("apps-int", arguments)
+                return json.dumps({"metadata": {"labels": {"bm-cluster.io/application-environment": "int"}}})
+            if "secret" in arguments:
+                self.assertEqual(arguments[arguments.index("-n") + 1], "apps-int")
+                return "{}"
+            raise AssertionError(arguments)
+        args = SimpleNamespace(config="public.yaml", environment="int", host_label="devapp",
+                               target_kubeconfig="/fixture", certificate_only=True, check=True)
+        with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "fixture"}), patch.object(dns, "HTTP", return_value=API()), \
+                patch.object(dns, "load_inventory", return_value=local_inventory()), \
+                patch.object(dns, "run", side_effect=kubectl), patch.object(dns, "certificate_valid", return_value=True):
+            dns.reconcile(args)
+        self.assertIn(["kubectl", "config", "view", "--minify", "-o", "json"], calls)
+
+    def test_local_suffix_tls_key_stays_in_infra_with_central_operator_access(self):
+        calls = []
+        inventory = local_inventory("suffix")
+        secret_name = inventory["environments"]["int"]["tlsSecretName"]
+        class API:
+            def request(self, method, path, data):
+                self_test.assertEqual(method, "GET")
+                return {"success": True, "result": [{"id": "zone"}]}
+        self_test = self
+        def kubectl(arguments, **_kwargs):
+            calls.append(arguments)
+            if "view" in arguments:
+                return json.dumps({"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]})
+            if "namespace" in arguments:
+                self.assertEqual(arguments[arguments.index("--kubeconfig") + 1], "/scoped")
+                return json.dumps({"metadata": {"labels": {"bm-cluster.io/application-environment": "int"}}})
+            self.assertEqual(arguments[arguments.index("--kubeconfig") + 1], "/central")
+            self.assertEqual(arguments[arguments.index("-n") + 1], "infra")
+            if "tlsstore" in arguments:
+                return json.dumps({"spec": {"defaultCertificate": {"secretName": secret_name}}})
+            if "secret" in arguments:
+                return json.dumps({"metadata": {"labels": {"app.kubernetes.io/managed-by": "external-manager"}}, "data": {}})
+            raise AssertionError(arguments)
+        args = SimpleNamespace(config="public.yaml", environment="int", host_label="devapp", target_kubeconfig="/scoped",
+                               platform_kubeconfig="/central", certificate_only=True, check=False)
+        with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "fixture"}), patch.object(dns, "HTTP", return_value=API()), \
+                patch.object(dns, "load_inventory", return_value=inventory), patch.object(dns, "run", side_effect=kubectl), \
+                patch.object(dns, "certificate_valid", return_value=True):
+            dns.reconcile(args)
+            secret_name = "wrong-central-certificate"
+            with self.assertRaisesRegex(ServiceError, "central Traefik default certificate"):
+                dns.reconcile(args)
+        self.assertFalse(any("apply" in command for command in calls))
+        self.assertTrue(any("secret" in command for command in calls))
+
+    def test_local_hostname_reuse_requires_self_referencing_same_application_owner(self):
+        target = {"namespace": "apps-prod", "environment": "prod"}
+        for namespace, owner, valid in (("apps", "devapp", True), ("apps-prod", "devapp-prod", True),
+                                        ("apps", "website", False), ("apps-uat", "devapp-uat", False),
+                                        ("apps", "devapp-prod", False), ("apps-prod", "", False)):
+            metadata = {"name": "existing", "namespace": namespace, "annotations": {
+                "argocd.argoproj.io/tracking-id": f"{owner}:networking.k8s.io/Ingress:{namespace}/existing"}}
+            ingress = {"metadata": metadata, "spec": {"rules": [{"host": "devapp.example.com"}]}}
+            with self.subTest(namespace=namespace, owner=owner), patch.object(dns, "run", return_value=json.dumps({"items": [ingress]})):
+                if valid:
+                    dns.verify_hostname_owner(["kubectl"], target, "devapp.example.com", "devapp")
+                else:
+                    with self.assertRaisesRegex(ServiceError, "unverified local Ingress"):
+                        dns.verify_hostname_owner(["kubectl"], target, "devapp.example.com", "devapp")
+            metadata["annotations"]["argocd.argoproj.io/tracking-id"] = "devapp:networking.k8s.io/Ingress:apps/copied-from-another-resource"
+            with patch.object(dns, "run", return_value=json.dumps({"items": [ingress]})):
+                with self.assertRaisesRegex(ServiceError, "unverified local Ingress"):
+                    dns.verify_hostname_owner(["kubectl"], target, "devapp.example.com", "devapp")
+
+    def test_existing_website_apex_blocks_dns_even_when_address_and_empty_comment_would_match(self):
+        inventory = local_inventory("suffix")
+        target = inventory["environments"]["prod"]
+        # This record would pass the old DNS-only ownership condition.
+        existing_record = {"type": "A", "content": target["ingressAddress"], "comment": ""}
+        self.assertEqual(existing_record["content"], target["ingressAddress"])
+        def kubectl(arguments, **_kwargs):
+            if "view" in arguments:
+                return json.dumps({"clusters": [{"cluster": {"server": "https://127.0.0.1:6443"}}]})
+            if "namespace" in arguments:
+                return json.dumps({"metadata": {"labels": {"bm-cluster.io/application-environment": "prod"}}})
+            if "ingresses" in arguments:
+                return json.dumps({"items": [{"metadata": {"name": "website", "namespace": "apps", "annotations": {
+                    "argocd.argoproj.io/tracking-id": "website:networking.k8s.io/Ingress:apps/website"}},
+                    "spec": {"rules": [{"host": "example.com"}]}}]})
+            raise AssertionError(arguments)
+        args = SimpleNamespace(config="public.yaml", environment="prod", host_label="@", application_name="devapp",
+                               target_kubeconfig="/scoped", platform_kubeconfig="/central", certificate_only=False, check=False)
+        with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "fixture"}), patch.object(dns, "HTTP") as provider, \
+                patch.object(dns, "load_inventory", return_value=inventory), patch.object(dns, "run", side_effect=kubectl):
+            with self.assertRaisesRegex(ServiceError, "already belongs"):
+                dns.reconcile(args)
+        provider.assert_not_called()
 
     def test_parent_wildcard_does_not_cover_nested_application_hostname(self):
         self.assertFalse(dns.covers("*.example.com","devapp.int.example.com"))
@@ -210,10 +364,24 @@ class DeliveryBoundaryTests(unittest.TestCase):
         expression = policy["spec"]["validations"][0]["expression"]
         for boundary in ('"applications-int"', '"apps-int"', '"infra/environments/int"',
                          CONTEXT["GITLAB_REPOSITORY_URL"], '!(has(object.spec.sources))', 'object.operation == null',
-                         "object.spec.destination.namespace == 'apps'", "!has(object.spec.destination.server)"):
+                         'object.spec.destination.namespace == "apps"', "!has(object.spec.destination.server)"):
             self.assertIn(boundary, expression)
         self.assertNotIn("apps-prod", expression)
         self.assertEqual(policy["spec"]["failurePolicy"], "Fail")
+
+    def test_local_delivery_binds_namespace_even_when_cluster_name_is_shared(self):
+        inventory = local_inventory()
+        manager = self.manager({env: environment_context(inventory, env) for env in ("int", "uat", "prod")})
+        policies = [item for item in manager.permissions() if item["kind"] == "ValidatingAdmissionPolicy"]
+        integration = next(item for item in policies if item["metadata"]["name"].endswith("-int"))
+        expression = integration["spec"]["validations"][0]["expression"]
+        self.assertIn('object.spec.destination.name == "in-cluster"', expression)
+        self.assertIn('object.spec.destination.namespace == "apps-int"', expression)
+        self.assertNotIn("apps-uat", expression)
+        self.assertNotIn("apps-prod", expression)
+        release = next(item for item in policies if item["metadata"]["name"].endswith("-release"))
+        for env in ("int", "uat", "prod"):
+            self.assertIn('object.spec.destination.namespace == "apps-' + env + '"', release["spec"]["validations"][0]["expression"])
 
     def test_runners_have_fixed_accounts_and_no_shared_writable_cache(self):
         import tomllib

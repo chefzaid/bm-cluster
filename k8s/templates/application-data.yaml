@@ -29,6 +29,55 @@ data:
   # requires SCRAM and receives application-specific topic/group ACLs.
   KAFKA_SUPER_USERS: User:ANONYMOUS
 ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-application-access
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka
+  policyTypes: [Ingress]
+  ingress:
+    # Existing platform and legacy application clients retain their private
+    # listener. CI jobs and environment workloads cannot bypass SCRAM through it.
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [infra, apps, corp]
+      ports:
+        - {protocol: TCP, port: 9092}
+        - {protocol: TCP, port: 9094}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              bm-cluster.io/application-workloads: "true"
+      ports:
+        - {protocol: TCP, port: 9094}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-controller-access
+  namespace: infra
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka-controller
+  policyTypes: [Ingress]
+  ingress:
+    # The unauthenticated controller listener is for broker/controller traffic.
+    # Unprotected CI jobs must not reach it through the shared cluster network.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+      ports:
+        - {protocol: TCP, port: 9093}
+---
 {{- end }}
 apiVersion: v1
 kind: ConfigMap

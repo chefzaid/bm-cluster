@@ -4,8 +4,8 @@ Applications opt into `add-repos.sh` by committing `infra/onboarding.json`.
 This reference is for application authors; the
 [operator guide](repository-onboarding.md) covers setup credentials and reruns.
 Contracts declare supported platform operations without running repository
-scripts or playbooks. DevApp uses version 2 for central delivery to independent
-application clusters; version 1 remains compatible with existing applications. Deploy workloads in `apps` using the
+scripts or playbooks. DevApp uses version 2 for delivery to local or remote environment namespaces;
+version 1 remains compatible with existing applications in `apps`. Follow the
 [namespace and discovery contract](observability.md#namespace-and-discovery).
 
 ## Shared-platform contract (version 2)
@@ -46,7 +46,7 @@ Reruns also reject a changed saved `appSubdomain`: hostname migration must
 preserve DNS and login callbacks for environments still running their pinned release.
 
 Each selected Application must use `applications-<env>`, the registered cluster
-name, namespace `apps`, and a full Git commit for its runtime source. CI must
+name and namespace, and a full Git commit for its runtime source. CI must
 expose an `int`/`uat`/`prod` selector, default to `int`, update only that
 Application, and verify the destination, images and exact revision after sync.
 Integration may deploy branch snapshots; `uat` and `prod` require finalized
@@ -54,7 +54,7 @@ releases. Project-scoped runners and Application admission rules enforce the
 integration/protected-release boundary described in [delivery](delivery.md#application-delivery).
 The final pointer commit carries the onboarding trailers described below;
 the pinned runtime commit precedes it. Onboarding verifies both commits and
-checks Deployment readiness on the selected remote cluster.
+checks Deployment readiness on the selected cluster.
 
 One registry credential serves all environments. PostgreSQL, Redis and Kafka
 credentials live under `apps/<app>/<env>/{database,redis,kafka}` in central Vault;
@@ -76,9 +76,21 @@ The `KEYS`/`SCAN` commands needed for cache eviction can still list names from
 other environments in the shared cache; key names must not contain secrets or
 personal data. This is value isolation, not complete metadata isolation.
 
-Remote access is opt-in because existing anonymous Redis consumers must migrate
-before authentication is enabled. On the central platform, prepare the password
-and ACL Secret using the inventory and the existing Vault administrator access:
+Environment data isolation requires authenticated Redis and Kafka. For an existing
+platform with anonymous Redis clients, first prepare a compatibility credential
+without changing their current access:
+
+```bash
+python3 scripts/configure-application-data.py \
+  --config /secure/deployment-environments.yaml --prepare-legacy-auth
+```
+
+Migrate legacy consumers to `infra/application-redis-legacy-auth` (username and
+password). OAuth2 Proxy and DBGate read that optional Secret automatically after
+rollout. Application owners supply it through their existing runtime configuration.
+This compatibility user retains the trusted legacy clients' existing access;
+new environments always receive restricted users. Verify client reconnects before
+enabling authentication. Then prepare the final ACL profile:
 
 ```bash
 KUBECONFIG=/secure/platform.yaml python3 scripts/configure-application-data.py \
@@ -88,12 +100,12 @@ KUBECONFIG=/secure/platform.yaml python3 scripts/configure-application-data.py \
 ```
 
 That command prepares credentials; it does not expose ports or change a running
-Redis listener. Migrate existing Redis consumers to the platform-only password
-stored at Vault `infra/application-redis`, then enable the generated
+Redis listener. The platform administrator password stays at Vault `infra/application-redis`;
+applications never receive it. Enable the generated
 [application-data profile](../config/application-data-values.yaml). Its broker
 endpoints come directly from the inventory. Application consumers receive separate scoped
-users, never this platform password. Use a coordinated maintenance window for the
-existing-client change and authentication activation. The helper writes the public profile outside
+users, never this platform password. The staged compatibility credential keeps migrated clients working during
+authentication activation. The helper writes the public profile outside
 the checkout and refuses to overwrite an existing file. Reconcile through the
 existing platform installer:
 

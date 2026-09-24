@@ -22,6 +22,9 @@ from lib.onboarding_services import ServiceError, Services
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,62}\Z")
 REDIS_SECRET = "application-redis-auth"
 REDIS_ADMIN_PATH = "infra/application-redis"
+REDIS_LEGACY_PATH = "infra/application-redis-legacy"
+REDIS_LEGACY_SECRET = "application-redis-legacy-auth"
+REDIS_LEGACY_USER = "legacy_platform"
 
 
 def run(args, payload=None):
@@ -86,7 +89,9 @@ def redis_secret(admin, current=None, user_line=None):
             for line in previous:
                 if line.startswith("user default "):
                     continue
-                if not re.fullmatch(r"user [a-z][a-z0-9_]+ on #[0-9a-f]{64} ~[a-z0-9:-]+\* resetchannels -@all [a-z+| ]+", line):
+                scoped = re.fullmatch(r"user [a-z][a-z0-9_]+ on #[0-9a-f]{64} ~[a-z0-9:-]+\* resetchannels -@all [a-z+| ]+", line)
+                legacy = re.fullmatch(r"user legacy_platform on #[0-9a-f]{64} ~\* &\* \+@all", line)
+                if not scoped and not legacy:
                     raise ValueError()
                 lines.append(line)
         except (KeyError, ValueError, UnicodeError):
@@ -213,6 +218,37 @@ def provision_redis(api, spec, admin):
             raise ServiceError("The application Redis credential could not authenticate on every shared peer")
 
 
+def prepare_legacy_redis(api):
+    """Stage compatibility credentials without disabling existing anonymous clients.
+
+    This fixed user preserves the previous legacy trust boundary during rollout.
+    Environment workloads never receive its credentials. The saved ACL file is
+    ready for the subsequent authenticated profile activation.
+    """
+    admin = credentials(api, REDIS_ADMIN_PATH, {"username": "default"})
+    legacy = credentials(api, REDIS_LEGACY_PATH, {"username": REDIS_LEGACY_USER})
+    line = (f"user {REDIS_LEGACY_USER} on #{hashlib.sha256(legacy['password'].encode()).hexdigest()} "
+            "~* &* +@all")
+    current = kubectl("-n", "infra", "get", "secret", REDIS_SECRET, "--ignore-not-found", "-o", "json")
+    apply(redis_secret(admin["password"], current or None, line))
+    apply({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": REDIS_LEGACY_SECRET, "namespace": "infra"},
+           "type": "Opaque", "stringData": legacy})
+    for pod in redis_pods():
+        anonymous = run(["kubectl", "-n", "infra", "exec", pod, "-c", "redis", "--", "redis-cli", "--raw", "PING"])
+        if anonymous == "PONG":
+            authentication = ""
+        elif anonymous.startswith("NOAUTH"):
+            if redis_command(pod, admin["password"], "PING") != "PONG":
+                raise ServiceError("The current Redis administrator credential cannot authenticate")
+            authentication = resp("AUTH", admin["password"])
+        else:
+            raise ServiceError("Cannot determine the current Redis authentication state")
+        payload = authentication + resp("ACL", "SETUSER", REDIS_LEGACY_USER, "reset", *line.split(" ")[2:])
+        run(["kubectl", "-n", "infra", "exec", "-i", pod, "-c", "redis", "--", "redis-cli", "--pipe"], payload)
+        if redis_command(pod, legacy["password"], "--user", REDIS_LEGACY_USER, "PING") != "PONG":
+            raise ServiceError("The legacy Redis credential could not authenticate on every shared peer")
+
+
 def kafka(*args, payload=None):
     return run(["kubectl", "-n", "infra", "exec", "-i", "kafka-0", "--", *args], payload)
 
@@ -279,7 +315,10 @@ def main():
     parser.add_argument("--application", default="devapp")
     parser.add_argument("--environment", choices=("int", "uat", "prod"))
     parser.add_argument("--adopt-existing-database")
-    parser.add_argument("--prepare-auth", action="store_true")
+    preparation = parser.add_mutually_exclusive_group()
+    preparation.add_argument("--prepare-auth", action="store_true")
+    preparation.add_argument("--prepare-legacy-auth", action="store_true",
+                             help="Stage the compatibility user while preserving the current anonymous/default behavior")
     parser.add_argument("--output-values", type=Path, help="Write the public auth profile with broker endpoints from this inventory")
     parser.add_argument("--legacy-clients-migrated", action="store_true")
     parser.add_argument("--check", "--check-ready", action="store_true", dest="check")
@@ -294,10 +333,14 @@ def main():
             installed.get("INTERNAL_DNS_ZONE") != inventory["platform"]["internalDomain"]):
         raise ServiceError("The selected kubeconfig is not the inventory's shared platform")
     if inventory["platform"]["services"]["kafka"].get("securityProtocol") != "SASL_PLAINTEXT":
-        raise ServiceError("The managed Kafka listener currently requires SASL_PLAINTEXT over the registered encrypted transport")
+        raise ServiceError("The managed Kafka listener requires SASL_PLAINTEXT inside the shared cluster or registered encrypted transport")
     services = Services(None, kubectl, {"APPLICATION_NAME": args.application,
                         "GITLAB_PROJECT_ID": "data", "GITLAB_PROJECT_PATH": "application-data"})
     with services._vault() as api:
+        if args.prepare_legacy_auth:
+            prepare_legacy_redis(api)
+            print("Legacy Redis credentials staged. Migrate existing trusted clients to application-redis-legacy-auth, then prepare and activate the authenticated profile.")
+            return
         if args.prepare_auth:
             if not args.legacy_clients_migrated:
                 raise ServiceError("Review and migrate existing Redis clients first; --legacy-clients-migrated acknowledges that prerequisite")
@@ -321,7 +364,7 @@ def main():
             raise ServiceError("Prepare shared Redis authentication and apply the application-data Helm profile first")
         require_ready(inventory, admin["password"])
         if args.check:
-            print("Shared Redis authentication and Kafka remote listeners are ready.")
+            print("Shared Redis authentication and Kafka application listeners are ready.")
             return
         if not args.environment:
             raise ServiceError("Choose --environment int, uat or prod")

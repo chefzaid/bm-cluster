@@ -20,7 +20,7 @@ unattended runs require it to be ready.
 | Unattended installation | [`./install-control-plane.sh --yes`](#unattended-installation) or [Ansible installation](#ansible-installation) |
 | Reconcile an installed platform | [Ansible reconciliation](#platform-reconciliation) |
 | Add control planes or workers | [`./add-node.sh`](node-enrollment.md) |
-| Create an application environment on another machine | [Application deployment clusters](#application-deployment-clusters) |
+| Configure local or remote application environments | [Application deployment clusters](#application-deployment-clusters) |
 | Import, synchronize and deploy applications | [`./add-repos.sh`](repository-onboarding.md) |
 
 For a new cluster, run:
@@ -44,112 +44,104 @@ New installations use public upstream images and a separate Traefik release.
 
 ## Application deployment clusters
 
-Install the shared platform once. Dedicated `int`, `uat` and `prod` machines run
-application workloads; they use the same GitLab, Argo CD, Vault, registry,
-Keycloak and data services. The platform installer and `INSTALL_SCOPE` do not
-create these targets.
+Install the shared platform once. `int`, `uat` and `prod` can run in separate
+namespaces on that cluster, or an environment can use its own application cluster.
+GitLab, Argo CD, Vault, registry, Keycloak and data services remain shared.
 
 Copy [`deployment-environments.example.yaml`](../config/deployment-environments.example.yaml)
-to your installation configuration and supply all three target entries. Shared
-service addresses belong under `platform`; each environment supplies its own
-cluster/API address, node allocation, ingress address and application domain.
+outside the checkout and supply your domain, ingress address and pod CIDR. The
+example uses the existing cluster. `mode: local` reuses its controllers and
+networking; `mode: remote` requires a separate cluster and Tailscale connectivity.
 
-| Environment | Application domain | Example DevApp hostname |
+| Environment | Default local namespace | Example application hostname |
 | --- | --- | --- |
-| `int` | `int.example.com` | `devapp.int.example.com` |
-| `uat` | `uat.example.com` | `devapp.uat.example.com` |
-| `prod` | `example.com` | `devapp.example.com` |
+| `int` | `apps-int` | `devapp-int.example.com` |
+| `uat` | `apps-uat` | `devapp-uat.example.com` |
+| `prod` | `apps-prod` | `devapp.example.com` |
 
-Prepare a Tailscale connection between the platform and target hosts. Use
-distinct role tags and explicit tailnet grants: platform Argo/Vault nodes need
-the target API on TCP 6443; application nodes need the shared gateway ports
-declared in the inventory. Target clusters have disjoint node CIDRs. Pod/service
-CIDRs may repeat only while pod networks are not routed between clusters. Never
-reuse another cluster's bootstrap token or recovery destination.
+Each local environment has a distinct namespace, restricted Argo project, Vault
+store, network rules and resource quota. In suffix mode, application ingress uses
+the shared Traefik certificate kept in `infra`; branch workloads never receive
+its private key. Set `resourceQuota` in its inventory
+entry to fit available capacity. Environments on the same cluster share its
+outages, upgrades and underlying resources; quotas limit application consumption.
+The legacy `apps` namespace keeps existing deployments until an explicit cutover.
 
-The managed gateway uses the platform node's Tailscale address. If Kubernetes
-advertises another private address, set `platform.gateway.nodeName` to the
-registered node name; verification checks that its `tailscale0` owns the given
-address. PostgreSQL, Redis, each Kafka broker, Vault and the registry have
-separate gateway ports. A small shared TCP proxy keeps internal service
-addresses private and admits only configured Tailscale node CIDRs. Authentication
-remains mandatory; plain vRack transport alone does not meet this contract.
-The gateway currently has one declared node, so its availability is a separate
-limit from datastore replication.
+`platform.hostnameStyle: suffix` produces the hostnames above and uses ordinary
+base-domain wildcard certificate coverage. `nested` produces
+`devapp.int.example.com` and `devapp.uat.example.com`; omitted values retain this
+older style. The application label and company domain remain installation inputs.
 
-Before opening the gateway, enable the guarded shared-data authentication
-profile described in [application data access](application-onboarding.md#shared-application-data).
-Existing anonymous Redis clients must migrate first. Registration runs
-`configure-application-data.py --check` and stops if Redis/Kafka authentication
-or broker endpoints have not converged.
+### Register an environment
 
-On each prepared Ubuntu target, install `python3-yaml`, `curl`, `jq`, `openssl`,
-`nftables`, and Tailscale, then run as a sudo-capable user:
-
-```bash
-./scripts/install-application-cluster.sh \
-  --config /secure/deployment-environments.yaml --environment int
-```
-
-Repeat with the matching environment on its own host. Bootstrap installs pinned
-K3s, the explicit shared-registry mirror, AppArmor policy and a persistent guard
-for private K3s control/overlay ports. It binds the API and kubelet to Tailscale,
-keeps credentials in a separate `~/.kube/<clusterName>.yaml`, and refuses to
-convert an existing unrelated cluster. It installs no platform services or
-default persistent storage. Preserve the host's existing SSH access policy.
-
-Transfer the generated target administrator kubeconfig securely to your
-administration host. From the platform checkout, register one target:
+First prepare [shared data authentication](application-onboarding.md#shared-application-data).
+Keep administrator kubeconfigs, Vault tokens and TLS keys outside Git. Register a
+local environment from the platform administration host:
 
 ```bash
 python3 scripts/configure-deployment-environments.py \
   --config /secure/deployment-environments.yaml --environment int \
-  --platform-kubeconfig /secure/platform.yaml \
-  --target-kubeconfig /secure/apps-int.yaml \
-  --vault-token-file /secure/platform-vault-admin-token
+  --platform-kubeconfig "$HOME/.kube/config" \
+  --vault-token-file /var/lib/bm-cluster/vault-bootstrap-token
 ```
 
-Both kubeconfigs must verify their API certificates. The Vault token is used
-only through the central kubeconfig and is never copied to an application
-cluster. Supply `CLOUDFLARE_API_TOKEN` through the environment for an environment
-origin certificate, or provide `--tls-cert` and `--tls-key` for an existing
-certificate chain covering the environment domain and its wildcard. For a
-private HTTPS Vault endpoint, set `vault.caSecretName` and supply `--vault-ca`.
-The example uses HTTP Vault inside the verified encrypted Tailscale path.
+Repeat for `uat` and `prod`. Supply `CLOUDFLARE_API_TOKEN` for origin certificates,
+or `--tls-cert` and `--tls-key` for a certificate covering the environment domain
+and its wildcard. Existing valid certificates are reused. Registration verifies
+cluster identity, scoped API and Vault access, authenticated data services and
+TLS before publishing the target in `infra/deployment-environments`.
 
-Registration installs Traefik and External Secrets, then checks actual node
-routes, API access, shared dependencies, Vault authentication and ingress TLS.
-It grants central Argo access only to `apps` in the selected cluster through
-`applications-<environment>`. Central Vault uses a separate
-`kubernetes-<environment>` auth mount with short-lived client tokens; policies
-can read that environment's application credentials and shared application
-registry credentials, never platform administrator secrets.
+For installer-driven registration, set `DEPLOYMENT_ENVIRONMENTS_FILE` to this
+prepared inventory when running `install-control-plane.sh`. After platform setup,
+the installer registers its local entries before repository onboarding. Data
+authentication and certificate prerequisites still apply; remote entries are
+registered separately with their target kubeconfig.
 
-Only a successful registration publishes the selected target into
-`infra/deployment-environments`. [Repository onboarding](repository-onboarding.md)
-and CI use that verified inventory; merely adding a YAML entry does not enable
-deployment. Reruns preserve the cluster identity and reject another environment's
-CA/UID. `--rotate-argocd-token` verifies a replacement scoped Argo credential
-before replacing the central registration and revoking the old credential.
-Keep administrator kubeconfigs and Vault recovery material outside Git.
+### Optional separate application cluster
 
-Cloudflare publishing additionally requires an active edge certificate for the
-exact application hostname: the usual `*.example.com` certificate does not cover
-`devapp.int.example.com`. The [application DNS helper](../scripts/configure-application-dns.py)
-checks coverage before changing DNS. For a new nested hostname, pre-issue an
-Advanced or Custom edge certificate: enabling Total TLS alone cannot pass this
-guard because Total TLS needs the DNS record before issuing coverage. Valid
-publicly trusted custom origin certificates remain externally managed; the helper
-refuses to replace an invalid custom certificate. Certificate preparation does not move
-existing production DNS. Do not cut over an existing production app until its
-data and application readiness have been verified.
+A remote entry specifies `mode: remote`, a unique `clusterName` and HTTPS `server`,
+its `ingressAddress`, `podCIDR` and disjoint Tailscale `nodeCIDRs`. Its namespace
+can be configured and defaults to `apps`. Set `platform.gateway` and shared
+service endpoints to the protected Tailscale gateway; the
+[inventory schema](../scripts/lib/deployment_environments.py) validates these
+inputs. In a mixed inventory, local entries can supply a complete `services`
+override for cluster-local endpoints. Kafka broker advertisements must remain
+reachable from every selected environment.
 
-Argo CD tracks these applications centrally. Target metrics/log forwarding and
-target persistent storage are not installed by this minimal foundation; central
-Prometheus's local namespace discovery does not monitor another cluster. See
-[delivery](delivery.md) for environment promotion and verification, and
-[application node enrollment](node-enrollment.md#application-cluster-nodes) before
-expanding a target.
+On each prepared Ubuntu target, install `python3-yaml`, `curl`, `jq`, `openssl`,
+`nftables` and Tailscale, then run as a sudo-capable user:
+
+```bash
+./scripts/install-application-cluster.sh \
+  --config /secure/deployment-environments.yaml --environment prod
+```
+
+Remote bootstrap installs pinned K3s and its network guard, with no duplicate
+platform services. It refuses to convert an unrelated cluster. Transfer the
+generated administrator kubeconfig securely, then use the registration command
+above with `--environment prod --target-kubeconfig /secure/apps-prod.yaml`.
+Registration installs the remote ingress and secret controllers and verifies
+Tailscale routes and the shared-service gateway. Do not run remote bootstrap on
+the platform host. See [application node enrollment](node-enrollment.md#application-cluster-nodes)
+for expansion and [observability](observability.md#namespace-and-discovery) for
+remote collection requirements.
+
+### Publication and maintenance
+
+Only registered targets are deployable. Run [repository onboarding](repository-onboarding.md#environment-deployment)
+to prepare application data, identity, DNS and CI access, then use the GitLab
+environment dropdown. Reruns preserve cluster/namespace identities; changing an
+existing binding requires an explicit migration. `--rotate-argocd-token` verifies
+a replacement operator credential before revoking the previous one. Local
+registration never replaces Argo CD's built-in cluster credentials.
+
+Cloudflare needs active edge coverage for each application hostname. The default
+suffix example works with `*.example.com`; nested names need additional coverage.
+The [DNS helper](../scripts/configure-application-dns.py) checks coverage before
+publishing records. For nested names, prepare Advanced/Custom edge coverage;
+Total TLS alone needs DNS first and cannot satisfy this pre-publication check.
+Certificate preparation does not move production traffic. Preserve the existing
+production database and verify the replacement application before its cutover.
 
 ### Prepare application CI before targets exist
 

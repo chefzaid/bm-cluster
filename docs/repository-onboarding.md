@@ -50,7 +50,7 @@ onboarding does not start application workloads ahead of it.
 
 ## Environment deployment
 
-DevApp uses contract version 2. First [register the application clusters](installation.md#application-deployment-clusters)
+DevApp uses contract version 2. First [register the local or remote environments](installation.md#application-deployment-clusters)
 and enable [shared data access](application-onboarding.md#shared-application-data).
 Run `add-repos.sh` once on the central platform to import the one repository.
 Version 2 needs Cloudflare Zone Read, DNS Edit and SSL and Certificates Edit
@@ -62,8 +62,10 @@ It also provisions project-scoped integration/release runners and their scoped
 Application permissions. The default branch must be protected; the project no
 longer uses the shared instance runner. See [delivery permissions](delivery.md#application-delivery).
 
-`APP_SUBDOMAIN` is one shared app label: `devapp` produces
-`devapp.int.example.com`, `devapp.uat.example.com` and `devapp.example.com`.
+`APP_SUBDOMAIN` is one shared app label. With `platform.hostnameStyle: suffix`,
+`devapp` produces `devapp-int.example.com`, `devapp-uat.example.com` and
+`devapp.example.com`. The [installation guide](installation.md#application-deployment-clusters)
+also covers nested hostnames and their certificate requirements.
 Onboarding applies that label to all registered environments. It defaults the
 initial deployment to `int`; export `ONBOARDING_DEPLOYMENT_ENVIRONMENT=uat` or
 `prod` to choose a different initial target. This does not change the normal CI
@@ -87,7 +89,7 @@ installer supplies the Ubuntu/Debian packages. Deployment also needs the
 control-plane kubeconfig, `kubectl`, Argo CD in `infra`, the instance runner and
 requested shared services. Local Helm charts require Helm. Vault must be unsealed
 with its KV-v2 `secret/` mount; External Secrets and public ingress/TLS must work.
-Before publishing configuration, onboarding checks the selected `apps` foundation,
+Before publishing configuration, onboarding checks the selected application namespace foundation,
 the AppProject's repository/destination permissions and certificate coverage for
 the declared hosts. Repository credentials must complete a fresh successful
 ExternalSecret refresh before delivery starts.

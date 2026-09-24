@@ -5,6 +5,10 @@
 {{- $root := index . 0 -}}
 {{- $path := index . 1 -}}
 {{- $content := $root.Files.Get $path -}}
+{{- range $annotation, $source := dict "bm-cluster.io/application-observability" "platform/application-observability.yaml" "bm-cluster.io/logging-agent" "platform/logging-agent.yaml" -}}
+{{- $checksum := printf "%s\n%s" ($root.Files.Get $source) (include "bm-cluster.identity" $root) | sha256sum -}}
+{{- $content = replace (printf "%s: pending" $annotation) (printf "%s: %s" $annotation $checksum) $content -}}
+{{- end -}}
 {{- $content = replace "bm-cluster.io/application-data: disabled" (printf "bm-cluster.io/application-data: %s" (toJson ($root.Values.applicationData | default dict) | sha256sum)) $content -}}
 {{- range $token, $value := (include "bm-cluster.identity" $root | fromJson) -}}
 {{- $content = replace $token $value $content -}}

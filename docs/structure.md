@@ -75,7 +75,7 @@ source inputs and rendered deployment output, then runs only these safety suites
 | `test-vault-unseal.py` | Recovery keys leaking into process arguments and false unseal success. |
 | `test-vault-ha.py` | Unsafe peer replacement, loss of recovery access and distributing keys to the wrong host. |
 | `test-node-fencing.py` | Powering off a healthy/wrong host or recovering storage before confirmed fencing. |
-| `test-application-clusters.py` | Registering the platform/wrong cluster, shared network allocations and unsafe gateway or target access. |
+| `test-application-clusters.py` | Wrong cluster/namespace identity, unsafe shared-cluster ingress, and unverified remote gateway access. |
 | `test-application-data.py` | Cross-environment data access, anonymous remote cache access and unsafe database adoption; optional disposable datastore checks. |
 | `test-environment-onboarding.py` | Wrong-target publication, runner privilege crossover, credential leakage and accepting a certificate that does not cover an environment hostname. |
 

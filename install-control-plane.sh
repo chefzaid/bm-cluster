@@ -101,6 +101,7 @@ PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-${DEFAULT_PLATFORM_DOMAIN:-}}"
 INTERNAL_DNS_ZONE="${INTERNAL_DNS_ZONE:-}"
 CONTROL_PLANE_NODE_NAME="${CONTROL_PLANE_NODE_NAME:-}"
 CONFIGURE_REPOSITORY_SYNC="${CONFIGURE_REPOSITORY_SYNC:-}"
+DEPLOYMENT_ENVIRONMENTS_FILE="${DEPLOYMENT_ENVIRONMENTS_FILE:-}"
 GITLAB_GROUP_PATH="${GITLAB_GROUP_PATH:-}"
 GITLAB_GROUP_NAME="${GITLAB_GROUP_NAME:-}"
 GITLAB_PROJECT_PATH="${GITLAB_PROJECT_PATH:-}"
@@ -1319,6 +1320,44 @@ EOF
     fi
 else
     warn "All Kubernetes feature groups were skipped."
+fi
+
+if [[ -n "$DEPLOYMENT_ENVIRONMENTS_FILE" ]]; then
+    step "Registering application environments on this cluster..."
+    [[ -r "$DEPLOYMENT_ENVIRONMENTS_FILE" ]] || error "Deployment inventory is not readable: $DEPLOYMENT_ENVIRONMENTS_FILE"
+    if [[ -z "$INSTALLER_TEMP_DIR" ]]; then
+        INSTALLER_TEMP_DIR="$(mktemp -d /tmp/bm-cluster-installers.XXXXXX)"
+    fi
+    environment_config_dir="$INSTALLER_TEMP_DIR/application-environments"
+    install -d -m 0700 "$environment_config_dir"
+    kubectl config view --minify --raw --flatten > "$environment_config_dir/platform.yaml"
+    chmod 600 "$environment_config_dir/platform.yaml"
+    if ! python3 - "$SCRIPT_DIR" "$DEPLOYMENT_ENVIRONMENTS_FILE" "$environment_config_dir/platform.yaml" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root, path, kubeconfig = sys.argv[1:]
+sys.path.insert(0, str(Path(root) / "scripts/lib"))
+from deployment_environments import load_inventory
+
+inventory = load_inventory(path, allow_partial=True)
+for environment, target in inventory["environments"].items():
+    if target["mode"] != "local":
+        print(f"Register {environment} separately with its remote administrator kubeconfig.")
+        continue
+    subprocess.run([sys.executable, str(Path(root) / "scripts/configure-deployment-environments.py"),
+                    "--config", path, "--environment", environment,
+                    "--platform-kubeconfig", kubeconfig,
+                    "--vault-token-file", os.environ.get("VAULT_BOOTSTRAP_TOKEN_FILE", "/var/lib/bm-cluster/vault-bootstrap-token")],
+                   check=True)
+PY
+    then
+        rm -rf -- "$environment_config_dir"
+        error "Application environment registration failed; review its data authentication and TLS prerequisites."
+    fi
+    rm -rf -- "$environment_config_dir"
 fi
 
 if [[ "$CONFIGURE_REPOSITORY_SYNC" == true ]]; then

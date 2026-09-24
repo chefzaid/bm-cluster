@@ -39,29 +39,29 @@ flowchart LR
     GitLab["One GitLab project and registry"] --> CI["Choose int / uat / prod"]
     CI --> Pin["Commit selected environment and image digests"]
     Pin --> Argo["One central Argo CD"]
-    Argo --> Int["int application cluster"]
-    Argo --> Uat["uat application cluster"]
-    Argo --> Prod["prod application cluster"]
+    Argo --> Int["int namespace / cluster"]
+    Argo --> Uat["uat namespace / cluster"]
+    Argo --> Prod["prod namespace / cluster"]
     Int --> Data["Shared PostgreSQL, Redis, Kafka, Vault and Keycloak"]
     Uat --> Data
     Prod --> Data
 ```
 
 Each Application (`devapp-int`, `devapp-uat`, `devapp-prod`) uses its own restricted
-AppProject, named registered cluster and immutable runtime configuration commit.
+AppProject, registered cluster/namespace pair and immutable runtime configuration commit.
 A second commit records that revision in the selected Application. Updating
 shared source or deploying integration therefore does not move the production
 pointer. CI verifies destination, revision, deployment health, image digests and
 public smoke checks; it never patches workloads directly.
 
 The central `infra/deployment-environments` ConfigMap contains only successfully
-registered targets. CI reads this public inventory, without access to remote
+registered targets. CI reads this public inventory, without access to
 administrator credentials. It rejects missing targets and a changed cluster
 binding. Register targets and provision each application's scoped services
 through [installation](installation.md#application-deployment-clusters) and
 [onboarding](repository-onboarding.md#environment-deployment), then select the
 destination in CI. Shared GitLab, registry, Argo CD and identity URLs keep the
-platform domain; only applications use `int.` or `uat.` domains.
+platform domain; application hosts follow the configured suffix or nested naming style.
 
 Release/version publication shares one lock because it changes the same branch
 and version counter. Deployments use a lock per environment and reject a stale

@@ -26,7 +26,7 @@ def request(url, *, token=None, ca=None, accept=(200,)):
 
 if settings["mode"] == "api":
     token = Path("/credentials/token").read_text()
-    request(settings["server"] + "/apis/apps/v1/namespaces/apps/deployments?limit=1", token=token, ca="/credentials/ca.crt")
+    request(settings["server"] + "/apis/apps/v1/namespaces/" + settings.get("namespace", "apps") + "/deployments?limit=1", token=token, ca="/credentials/ca.crt")
     request(settings["server"] + "/api/v1/namespaces/infra/secrets?limit=1", token=token, ca="/credentials/ca.crt", accept=(403,))
     request(settings["server"] + "/api/v1/nodes?limit=1", token=token, ca="/credentials/ca.crt", accept=(403,))
 elif settings["mode"] == "ingress":
@@ -46,7 +46,7 @@ else:
     with socket.create_connection((services["redis"]["host"], services["redis"]["port"]), timeout=10) as redis:
         redis.sendall(b"*1\r\n$4\r\nPING\r\n")
         if not redis.recv(1024).startswith(b"-NOAUTH"):
-            raise SystemExit("Remote Redis must reject anonymous commands")
+            raise SystemExit("Shared Redis must reject anonymous commands")
     ca = "/credentials/ca.crt" if Path("/credentials/ca.crt").is_file() else None
     request(services["vault"]["url"] + "/v1/sys/health?standbyok=true", ca=ca)
     request(services["registry"]["mirrorEndpoint"] + "/v2/", accept=(200, 401))

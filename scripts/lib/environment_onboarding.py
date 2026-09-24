@@ -11,7 +11,7 @@ import tempfile
 
 import yaml
 
-from deployment_environments import validate_inventory, environment_context, inventory_json
+from deployment_environments import validate_inventory, environment_context, inventory_json, application_hostname
 from onboarding_services import Services, ServiceError
 
 
@@ -34,7 +34,7 @@ class EnvironmentServices(Services):
         self.target = target
 
     def _dns_read(self, contract):
-        # DNS belongs to the registered target, never the shared platform ingress.
+        # DNS follows the selected environment target, whether local or remote.
         return None
 
     def _client(self, contract, checkout):
@@ -44,7 +44,7 @@ class EnvironmentServices(Services):
         realm, desired = client
         old_host = self.context["APP_HOST"]
         subdomain = self.context["APP_SUBDOMAIN"]
-        new_host = self.target["domain"] if subdomain == "@" else subdomain + "." + self.target["domain"]
+        new_host = application_hostname(self.target, subdomain)
         client_id = self.context["APPLICATION_NAME"] + "-" + self.target["environment"] + "-web"
         desired["clientId"] = client_id
         for field in ("rootUrl", "baseUrl", "webOrigins", "redirectUris"):
@@ -121,10 +121,24 @@ class EnvironmentOnboarding:
         data = {key: base64.b64decode(value).decode() for key, value in secret.get("data", {}).items()}
         metadata = secret.get("metadata", {})
         if (data.get("name") != target["clusterName"] or data.get("server") != target["server"] or
-                data.get("namespaces") != "apps" or data.get("clusterResources") != "false" or
+                data.get("namespaces") != target["namespace"] or data.get("clusterResources") != "false" or
                 data.get("project") != target["project"] or
                 metadata.get("labels", {}).get("bm-cluster.io/application-environment") != environment):
             raise OnboardingError("Registered Argo cluster does not match the selected environment")
+        local = target.get("mode", "remote") == "local"
+        registration_type = metadata.get("labels", {}).get("argocd.argoproj.io/secret-type")
+        if (local and registration_type is not None) or (not local and registration_type != "cluster"):
+            raise OnboardingError("Local operator credentials must not replace Argo CD's built-in cluster registration")
+        if local:
+            # The public Argo destination is stable, while operator requests use
+            # the currently selected kubeconfig's verified, reachable endpoint.
+            current = self.onboarding.kubectl("config", "view", "--minify", "-o", "json")
+            cluster = current["clusters"][0]["cluster"]
+            if (cluster.get("insecure-skip-tls-verify") or not data.get("apiServer") or
+                    data["apiServer"].rstrip("/") != cluster["server"].rstrip("/")):
+                raise OnboardingError("Local environment credentials belong to another platform endpoint")
+        elif data.get("apiServer"):
+            raise OnboardingError("Remote environment credentials cannot override their registered endpoint")
         config = json.loads(data["config"])
         tls = config.get("tlsClientConfig", {})
         if set(config) - {"bearerToken", "tlsClientConfig"} or not config.get("bearerToken") or tls.get("insecure") or not tls.get("caData"):
@@ -139,9 +153,9 @@ class EnvironmentOnboarding:
         with tempfile.TemporaryDirectory(prefix="onboarding-target-") as directory:
             path = Path(directory) / "kubeconfig"
             path.write_text(json.dumps({"apiVersion": "v1", "kind": "Config", "current-context": "target",
-                "clusters": [{"name": "target", "cluster": {"server": data["server"], "certificate-authority-data": config["tlsClientConfig"]["caData"]}}],
+                "clusters": [{"name": "target", "cluster": {"server": data.get("apiServer", data["server"]), "certificate-authority-data": config["tlsClientConfig"]["caData"]}}],
                 "users": [{"name": "target", "user": {"token": config["bearerToken"]}}],
-                "contexts": [{"name": "target", "context": {"cluster": "target", "user": "target", "namespace": "apps"}}]}))
+                "contexts": [{"name": "target", "context": {"cluster": "target", "user": "target", "namespace": self.targets[environment]["namespace"]}}]}))
             path.chmod(0o600)
             yield str(path)
 
@@ -157,7 +171,7 @@ class EnvironmentOnboarding:
         app = copy.deepcopy(template)
         app["metadata"]["name"] = self.name + "-" + self.environment
         app["spec"]["project"] = self.target["project"]
-        app["spec"]["destination"] = {"name": self.target["clusterName"], "namespace": "apps"}
+        app["spec"]["destination"] = {"name": self.target["clusterName"], "namespace": self.target["namespace"]}
         app["spec"]["source"]["path"] = "infra/environments/" + self.environment
         return app
 
@@ -171,16 +185,16 @@ class EnvironmentOnboarding:
         for env, target in self.targets.items():
             project = self.onboarding.kubectl("get", "appproject", target["project"], "-n", "infra", "-o", "json")["spec"]
             destinations = project.get("destinations", [])
-            if destinations not in ([{"name": target["clusterName"], "namespace": "apps"}],
-                                    [{"server": target["server"], "namespace": "apps"}]):
-                raise OnboardingError("Application project must permit exactly its registered apps destination")
+            if destinations not in ([{"name": target["clusterName"], "namespace": target["namespace"]}],
+                                    [{"server": target["server"], "namespace": target["namespace"]}]):
+                raise OnboardingError("Application project must permit exactly its registered environment destination")
             from fnmatch import fnmatchcase
             patterns = project.get("sourceRepos", [])
             url = self.context["GITLAB_REPOSITORY_URL"]
             if not any(not p.startswith("!") and fnmatchcase(url, p) for p in patterns) or any(p.startswith("!") and fnmatchcase(url, p[1:]) for p in patterns):
                 raise OnboardingError("Application project does not allow this shared GitLab repository")
             with self.target_kubeconfig(env) as path:
-                namespace = subprocess.run(["kubectl", "--kubeconfig", path, "get", "namespace", "apps", "-o", "json"],
+                namespace = subprocess.run(["kubectl", "--kubeconfig", path, "get", "namespace", target["namespace"], "-o", "json"],
                                            text=True, capture_output=True, timeout=30, check=True)
                 if json.loads(namespace.stdout)["metadata"].get("labels", {}).get("bm-cluster.io/application-environment") != env:
                     raise OnboardingError("Target namespace environment identity does not match registration")
@@ -196,6 +210,7 @@ class EnvironmentOnboarding:
         with self.target_kubeconfig(env) as path:
             self.invoke("configure-application-dns.py", "--config", str(self.checkout.root / self.contract["deployment"]["inventory"]),
                         "--environment", env, "--target-kubeconfig", path, "--host-label", self.context["APP_SUBDOMAIN"],
+                        "--application-name", self.name,
                         *(["--check"] if check else []),
                         environment={**os.environ, "CLOUDFLARE_API_TOKEN": self.secret_inputs["CLOUDFLARE_API_TOKEN"]})
 
@@ -232,14 +247,14 @@ class EnvironmentOnboarding:
                     if result.returncode:
                         raise ServiceError("Cannot refresh the target application's External Secrets")
                     return json.loads(result.stdout) if arguments[-2:] == ("-o", "json") else None
-                resources = kubectl("get", "externalsecrets", "-n", "apps", "-o", "json")
+                resources = kubectl("get", "externalsecrets", "-n", self.targets[env]["namespace"], "-o", "json")
                 paths = {self.contract["registry"]["path"], *(f"apps/{self.name}/{env}/{service}" for service in ("database", "redis", "kafka"))}
                 for item in resources.get("items", []):
                     spec = item.get("spec", {})
                     references = {field.get("remoteRef", {}).get("key") for field in spec.get("data", [])}
                     references.update(field.get("extract", {}).get("key") for field in spec.get("dataFrom", []))
                     if references & paths:
-                        self.onboarding.refresh_external_secret(item["metadata"]["name"], "apps", kubectl)
+                        self.onboarding.refresh_external_secret(item["metadata"]["name"], self.targets[env]["namespace"], kubectl)
 
     def release_application(self, checkout, release_head):
         from repository_onboarding import OnboardingError
@@ -259,6 +274,6 @@ class EnvironmentOnboarding:
         with self.target_kubeconfig(self.environment) as path:
             for deployment in contract["readiness"]["deployments"]:
                 result = subprocess.run(["kubectl", "--kubeconfig", path, "rollout", "status", "deployment/" + deployment,
-                    "-n", "apps", "--timeout=120s"], text=True, capture_output=True, timeout=150)
+                    "-n", self.target["namespace"], "--timeout=120s"], text=True, capture_output=True, timeout=150)
                 if result.returncode:
-                    raise ServiceError("A selected application cluster deployment is not available")
+                    raise ServiceError("A selected application environment deployment is not available")

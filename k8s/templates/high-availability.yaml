@@ -114,6 +114,9 @@ spec:
               - key: kubernetes.io/metadata.name
                 operator: In
                 values: [infra, apps, corp]
+        - namespaceSelector:
+            matchLabels:
+              bm-cluster.io/application-workloads: "true"
       ports:
         - protocol: TCP
           port: 6379

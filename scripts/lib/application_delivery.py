@@ -98,7 +98,7 @@ class ApplicationDelivery:
                     "object.metadata.name == " + json.dumps(self.app + "-" + env),
                     "object.spec.project == " + json.dumps(target["project"]),
                     "object.spec.destination.name == " + json.dumps(target["clusterName"]),
-                    "object.spec.destination.namespace == 'apps'",
+                    "object.spec.destination.namespace == " + json.dumps(target["namespace"]),
                     "!has(object.spec.destination.server)",
                     "object.spec.source.path == " + json.dumps("infra/environments/" + env),
                 ]) + ")")
@@ -131,7 +131,7 @@ class ApplicationDelivery:
         for env, target in self.environments.targets.items():
             name = self.app + "-" + env
             existing = self.get("application", name, "infra")
-            expected = {"project": target["project"], "destination": {"name": target["clusterName"], "namespace": "apps"}}
+            expected = {"project": target["project"], "destination": {"name": target["clusterName"], "namespace": target["namespace"]}}
             source = {"repoURL": self.context["GITLAB_REPOSITORY_URL"], "path": "infra/environments/" + env}
             if existing:
                 spec = existing.get("spec", {})

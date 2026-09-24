@@ -77,6 +77,8 @@ data:
         K8S-Logging.Exclude       On
         Labels                    On
         Annotations               Off
+        Namespace_Labels          On
+        Kube_Meta_Namespace_Cache_TTL 60s
 
     [FILTER]
         Name                      lua
@@ -157,7 +159,10 @@ data:
         return 0, timestamp, record
       end
 
-      if kubernetes["namespace_name"] == "apps" then
+      local namespace = record["kubernetes_namespace"] or {}
+      local namespace_labels = namespace["labels"] or {}
+      if kubernetes["namespace_name"] == "apps" or
+          namespace_labels["bm-cluster.io/application-workloads"] == "true" then
         record["observability_scope"] = "application"
       end
 
@@ -211,6 +216,7 @@ spec:
       labels:
         app: fluent-bit
       annotations:
+        bm-cluster.io/logging-agent: pending
         bm-cluster.__PUBLIC_DOMAIN__/config-version: "5"
         prometheus.io/scrape: "true"
         prometheus.io/path: /api/v2/metrics/prometheus

@@ -13,7 +13,7 @@ import tempfile
 from urllib.parse import urlencode, quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from deployment_environments import load_inventory, environment_context, InventoryError
+from deployment_environments import load_inventory, environment_context, application_hostname, uses_central_tls, InventoryError
 from onboarding_services import HTTP, ServiceError
 
 
@@ -66,24 +66,69 @@ def certificate_valid(directory, domain):
         return False
 
 
+def verify_hostname_owner(platform_kube, target, hostname, application):
+    """Preserve routes already owned by another local Argo application.
+
+    DNS may have no ownership comment and still serve an existing application.
+    Only a self-referencing Argo tracking annotation proves which deployment owns
+    an Ingress; copied annotations, untracked routes and peer environments fail.
+    """
+    if application is not None and not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", application):
+        raise ServiceError("--application-name must be the application's Kubernetes name")
+    ingresses = json.loads(run([*platform_kube, "get", "ingresses", "--all-namespaces", "-o", "json"]))
+    for ingress in ingresses.get("items", []):
+        if not any(rule.get("host") == hostname for rule in ingress.get("spec", {}).get("rules", [])):
+            continue
+        metadata = ingress.get("metadata", {})
+        namespace, name = metadata.get("namespace", ""), metadata.get("name", "")
+        tracking = metadata.get("annotations", {}).get("argocd.argoproj.io/tracking-id", "")
+        owner, separator, reference = tracking.partition(":")
+        same_resource = separator and reference == f"networking.k8s.io/Ingress:{namespace}/{name}"
+        selected_owner = (application and namespace == target["namespace"] and
+                          owner in {application, application + "-" + target["environment"]})
+        legacy_owner = application and namespace == "apps" and owner == application
+        if not same_resource or not (selected_owner or legacy_owner):
+            raise ServiceError(f"Hostname {hostname} already belongs to another or unverified local Ingress; "
+                               "use its exact --application-name for a same-application cutover, or migrate ownership explicitly")
+
+
 def reconcile(args):
     inventory = load_inventory(args.config, allow_partial=True)
     target = environment_context(inventory, args.environment)
     label = args.host_label
     if label != "@" and not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label):
         raise ServiceError("--host-label must be one DNS label or @")
-    hostname = target["domain"] if label == "@" else label + "." + target["domain"]
+    hostname = application_hostname(target, label)
     token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     if not token:
         raise ServiceError("Set CLOUDFLARE_API_TOKEN; it is never written to configuration")
     kube = ["kubectl", "--kubeconfig", args.target_kubeconfig]
+    platform_kube = ["kubectl"]
+    if getattr(args, "platform_kubeconfig", None):
+        platform_kube.extend(["--kubeconfig", args.platform_kubeconfig])
     config = json.loads(run([*kube, "config", "view", "--minify", "-o", "json"]))
     actual = config["clusters"][0]["cluster"]
-    if actual.get("server", "").rstrip("/") != target["server"] or actual.get("insecure-skip-tls-verify"):
+    expected_server = target["server"]
+    if target.get("mode", "remote") == "local":
+        platform = json.loads(run([*platform_kube, "config", "view", "--minify", "-o", "json"]))["clusters"][0]["cluster"]
+        if platform.get("insecure-skip-tls-verify"):
+            raise ServiceError("The local platform kubeconfig must verify TLS")
+        expected_server = platform["server"].rstrip("/")
+    if actual.get("server", "").rstrip("/") != expected_server or actual.get("insecure-skip-tls-verify"):
         raise ServiceError("Target kubeconfig does not match the selected registered cluster with verified TLS")
-    namespace = json.loads(run([*kube, "get", "namespace", "apps", "-o", "json"]))
+    namespace = json.loads(run([*kube, "get", "namespace", target["namespace"], "-o", "json"]))
     if namespace.get("metadata", {}).get("labels", {}).get("bm-cluster.io/application-environment") != args.environment:
         raise ServiceError("Target namespace does not belong to the selected application environment")
+    if target.get("mode", "remote") == "local" and not args.certificate_only:
+        verify_hostname_owner(platform_kube, target, hostname, getattr(args, "application_name", None))
+    certificate_kube, certificate_namespace = kube, target["namespace"]
+    if uses_central_tls(target):
+        # A branch workload must never receive the shared platform wildcard key.
+        # Only this trusted operator context can access the ingress certificate.
+        certificate_kube, certificate_namespace = platform_kube, "infra"
+        tls_store = json.loads(run([*platform_kube, "get", "tlsstore", "default", "-n", "infra", "-o", "json"]))
+        if tls_store.get("spec", {}).get("defaultCertificate", {}).get("secretName") != target["tlsSecretName"]:
+            raise ServiceError("The central Traefik default certificate does not match the registered TLS Secret")
     api = HTTP("https://api.cloudflare.com/client/v4", {"Authorization": "Bearer " + token})
     zones = cf(api, "GET", "/zones?" + urlencode({"name": inventory["platform"]["domain"], "status": "active"}))["result"]
     if len(zones) != 1:
@@ -105,7 +150,7 @@ def reconcile(args):
         raise ServiceError("Existing DNS points elsewhere or has another owner; migrate that record explicitly before onboarding")
     with tempfile.TemporaryDirectory(prefix="application-origin-") as temporary:
         directory = Path(temporary)
-        secret = json.loads(run([*kube, "get", "secret", target["tlsSecretName"], "-n", "apps",
+        secret = json.loads(run([*certificate_kube, "get", "secret", target["tlsSecretName"], "-n", certificate_namespace,
                                  "--ignore-not-found", "-o", "json"]) or "{}")
         for key in ("tls.crt", "tls.key"):
             path = directory / key
@@ -126,11 +171,13 @@ def reconcile(args):
             if not certificate_valid(directory, target["domain"]):
                 raise ServiceError("Cloudflare returned an invalid origin certificate")
             resource = {"apiVersion": "v1", "kind": "Secret", "type": "kubernetes.io/tls", "metadata": {
-                "name": target["tlsSecretName"], "namespace": "apps", "labels": {"app.kubernetes.io/managed-by": "bm-cluster"}},
+                "name": target["tlsSecretName"], "namespace": certificate_namespace, "labels": {"app.kubernetes.io/managed-by": "bm-cluster"}},
                 "data": {key: base64.b64encode((directory / key).read_bytes()).decode() for key in ("tls.crt", "tls.key")}}
             # Server-side apply keeps private keys out of last-applied annotations.
-            run([*kube, "apply", "--server-side", "--field-manager=application-origin", "-f", "-"], data=json.dumps(resource))
+            run([*certificate_kube, "apply", "--server-side", "--field-manager=application-origin", "-f", "-"], data=json.dumps(resource))
     if not args.certificate_only:
+        if target.get("mode", "remote") == "local":
+            verify_hostname_owner(platform_kube, target, hostname, getattr(args, "application_name", None))
         desired = {"name": hostname, "type": kind, "content": address, "proxied": True, "ttl": 1, "comment": owner}
         path = record_path + ("/" + quote(addresses[0]["id"], safe="") if addresses else "")
         cf(api, "PUT" if addresses else "POST", path, desired)
@@ -146,7 +193,9 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--environment", required=True, choices=("int", "uat", "prod"))
     parser.add_argument("--target-kubeconfig", required=True)
+    parser.add_argument("--platform-kubeconfig", help="Central operator kubeconfig for shared TLS; defaults to the current context")
     parser.add_argument("--host-label", default="devapp")
+    parser.add_argument("--application-name", help="Argo application identity required to reuse an existing local hostname")
     parser.add_argument("--certificate-only", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()

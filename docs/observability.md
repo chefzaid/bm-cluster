@@ -7,33 +7,24 @@ collection, discovery and shared dashboards on the platform cluster.
 
 ## Namespace and discovery
 
-The automatic collection and discovery described here cover workloads on the
-platform cluster. Existing version 1 onboarding places those workloads in
-**`apps`** and their Argo CD Applications in **`infra`**, targeting that cluster:
+Automatic collection and discovery cover managed application namespaces on the
+platform cluster. The existing `apps` namespace and registered local environment
+namespaces carry `bm-cluster.io/application-workloads: "true"`. Registration also
+adds read-only discovery RoleBindings; the label alone grants no workload access.
+App manifests must use their registered namespace. Argo CD Applications remain
+in `infra` and select that cluster and namespace.
 
-```yaml
-metadata:
-  namespace: infra
-spec:
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: apps
-```
+Discovery includes Deployments, StatefulSets, DaemonSets, CronJobs and standalone
+Jobs/Pods, including controllers scaled to zero. It excludes `infra`, `corp`
+(including Odoo) and unlabeled namespaces. Environment dashboards and log filters
+are namespace-specific; repeated component names do not merge environments.
+Sonar analysis deduplicates environments from the same repository.
 
-Set `namespace: apps` in the app's Kustomization or rendered Helm/plain manifests
-too. With the shared services configured, discovery includes Deployments,
-StatefulSets, DaemonSets, CronJobs and standalone Jobs/Pods, including controllers
-scaled to zero. It excludes `infra`, `corp` (including Odoo) and other environments.
-No central application inventory is required.
-
-Version 2 onboarding targets separate `int`, `uat` and `prod` application
-clusters through central Argo CD. Their minimal foundation does not install
-metrics/log collectors or connect remote workloads to central dashboard and
-scheduled Sonar discovery. Those integrations need separate configuration;
-application CI still submits its Sonar analysis. See
-[application deployment clusters](installation.md#application-deployment-clusters).
-Until telemetry is connected, use target-cluster logs and the application's
-delivery health checks; central dashboards do not establish target health.
+Optional remote application clusters need their own metrics/log collection and
+connection to central dashboards and scheduled discovery. Their application CI
+still submits Sonar analysis. See
+[application deployment targets](installation.md#application-deployment-clusters).
+Until remote telemetry is connected, use target logs and deployment health checks.
 
 | Signal | Automatic result | Application requirement |
 |---|---|---|
@@ -52,7 +43,8 @@ failures. Alertmanager sends firing and resolved events to the infrastructure
 project's **Monitor > Alerts** page in GitLab. GitLab and runner metrics appear
 in Grafana's **GitLab Delivery** dashboard.
 
-Fluent Bit adds Kubernetes metadata to container logs; records from `apps` carry
+Fluent Bit adds Kubernetes metadata to container logs; records from managed
+application namespaces carry
 `observability_scope=application`. Filebeat sends host Lynis records through
 Logstash to Kibana's **Lynis Security Audits** dashboard. See
 [storage and retention](operations.md#storage-and-retention) for retention settings.
@@ -99,7 +91,8 @@ Use a shared `app.kubernetes.io/part-of` label to group components deployed with
 Argo CD. Standard controllers use pod-name patterns covering rollouts and future
 Jobs; custom-controller and orphaned pods use observed names. Namespace and pod
 filters scope every panel. Different identity sources with the same display name
-get separate stable dashboard IDs.
+get separate stable dashboard IDs. Existing `apps` IDs are preserved; other
+namespace names form part of the identity.
 
 ### Metrics and logs
 
@@ -133,7 +126,7 @@ files, and Kibana reconciliation overwrites managed objects. Stable IDs survive
 rollouts. Removing a workload retains its dashboards and historical logs under
 the normal retention policy; returning applications update the same IDs.
 
-The sidecar has read-only workload access in `apps`, shares Grafana's dashboard
+The sidecar has read-only workload access in managed local namespaces, shares Grafana's dashboard
 volume and uses the Vault-backed `kibana-bootstrap-credentials` Secret. It needs
 no Grafana API token and cannot read app Secrets or change workloads.
 
@@ -144,8 +137,9 @@ kubectl -n infra exec deployment/grafana -c application-discovery -- \
 ```
 
 The one-shot command exits nonzero on failure; the normal loop logs counts/errors
-and retries. Restart Grafana after changing the JavaScript ConfigMap, but not for
-ordinary workload changes. Discovery/RBAC live in
+and retries. Config checksums automatically roll Grafana and Fluent Bit after
+changes to their managed discovery/log configuration; ordinary workload changes
+need no restart. Discovery/RBAC live in
 [application-observability.yaml](../k8s/platform/application-observability.yaml);
 the sidecar and provisioning provider live in `monitoring.yaml`.
 
@@ -203,7 +197,7 @@ the private service domain. Rerun it before expiry: valid credentials are reused
 and renewed within the script's renewal window. Discovery does not renew them.
 
 The [discovery CronJob](../k8s/platform/sonar-apps-discovery.yaml) can list workloads
-in `apps` and Applications in `infra`, but cannot read app Secrets or corporate
+in managed local namespaces and Applications in `infra`, but cannot read app Secrets or corporate
 workloads. It has no PVC, checkout or build cache; completed Jobs expire according
 to their TTL/history limits.
 

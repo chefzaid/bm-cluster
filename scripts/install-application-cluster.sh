@@ -41,10 +41,20 @@ while (( $# )); do
     esac
 done
 [[ -n "$inventory" && -n "$environment" ]] || { usage >&2; exit 2; }
-for command in python3 curl jq openssl tailscale sudo ip nft; do
+command -v python3 >/dev/null || die "Required command not found: python3"
+python3 -c 'import yaml' || die "Install python3-yaml first"
+# Reject local targets before checking remote tooling or touching host state.
+python3 - "$ROOT" "$inventory" "$environment" <<'PYMODE'
+import sys
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from lib.deployment_environments import environment_context, load_inventory
+target = environment_context(load_inventory(sys.argv[2]), sys.argv[3])
+if target["mode"] == "local":
+    raise SystemExit("Local environments reuse the installed platform; run configure-deployment-environments.py instead of installing K3s")
+PYMODE
+for command in curl jq openssl tailscale sudo ip nft; do
     command -v "$command" >/dev/null || die "Required command not found: $command"
 done
-python3 -c 'import yaml' || die "Install python3-yaml first"
 sudo -n true || die "Passwordless sudo is required"
 work="$(mktemp -d /tmp/application-cluster-install.XXXXXX)"
 trap 'rm -rf -- "$work"' EXIT

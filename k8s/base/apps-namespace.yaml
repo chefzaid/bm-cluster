@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: apps
   labels:
+    bm-cluster.io/application-workloads: "true"
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/enforce-version: v1.36
     pod-security.kubernetes.io/audit: restricted

@@ -95,6 +95,40 @@ class DataContract(unittest.TestCase):
         self.assertNotIn("nopass", second["stringData"]["users.acl"])
         self.assertNotIn("x" * 40, second["stringData"]["users.acl"])
 
+    def test_legacy_auth_staging_preserves_anonymous_access_until_profile_activation(self):
+        admin, legacy = "a" * 40, "l" * 40
+        for authenticated in (False, True):
+            applied, commands = [], []
+            def run(command, payload=None):
+                commands.append((command, payload))
+                return "NOAUTH Authentication required." if authenticated and command[-1] == "PING" else "PONG"
+            with patch.object(data, "credentials", side_effect=[{"username": "default", "password": admin},
+                     {"username": "legacy_platform", "password": legacy}]), \
+                    patch.object(data, "kubectl", return_value={}), patch.object(data, "apply", side_effect=applied.append), \
+                    patch.object(data, "redis_pods", return_value=["redis-0"]), patch.object(data, "run", side_effect=run), \
+                    patch.object(data, "redis_command", return_value="PONG") as authenticated_command:
+                data.prepare_legacy_redis(object())
+            payload = next(payload for command, payload in commands if command[-1] == "--pipe")
+            self.assertEqual(data.resp("AUTH", admin) in payload, authenticated)
+            self.assertIn("legacy_platform", payload)
+            self.assertNotIn("default", payload)
+            self.assertNotIn("nopass", payload)
+            self.assertNotIn(admin, str([command for command, _ in commands]))
+            self.assertEqual(applied[1]["stringData"], {"username": "legacy_platform", "password": legacy})
+            self.assertTrue(any(call.args[2:] == ("--user", "legacy_platform", "PING") for call in authenticated_command.call_args_list))
+            current = {"data": {key: base64.b64encode(value.encode()).decode() for key, value in applied[0]["stringData"].items()}}
+            activated = data.redis_secret(admin, current, data.redis_acl_user("devapp_int", "i" * 40, "devapp:int:"))
+            self.assertIn("user legacy_platform on #", activated["stringData"]["users.acl"])
+            self.assertIn("~devapp:int:*", activated["stringData"]["users.acl"])
+            self.assertNotIn("nopass", activated["stringData"]["users.acl"])
+
+    def test_legacy_acl_exception_does_not_accept_arbitrary_administrators(self):
+        for line in ("user another_admin on #" + "a" * 64 + " ~* &* +@all",
+                     "user legacy_platform on nopass ~* &* +@all"):
+            current = {"data": {"users.acl": base64.b64encode(line.encode()).decode()}}
+            with self.assertRaisesRegex(data.ServiceError, "malformed"):
+                data.redis_secret("a" * 40, current)
+
     def test_kafka_acl_includes_dlt_and_groups_without_wildcard_cluster_access(self):
         commands = data.kafka_acls(data.identity("devapp", "uat"))
         self.assertIn("--resource-pattern-type", commands[0])
@@ -145,6 +179,9 @@ class DataContract(unittest.TestCase):
         app = next(r for r in enabled if r and r["kind"] == "Application" and r["metadata"]["name"] == "bm-cluster")
         values = app["spec"]["source"]["helm"]["valuesObject"]
         self.assertTrue(values["applicationData"]["enabled"])
+        controller_policy = next(r for r in enabled if r and r["kind"] == "NetworkPolicy" and r["metadata"]["name"] == "kafka-controller-access")
+        self.assertEqual(controller_policy["spec"]["podSelector"], {"matchLabels": {"app": "kafka-controller"}})
+        self.assertEqual(controller_policy["spec"]["ingress"], [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "infra"}}}], "ports": [{"protocol": "TCP", "port": 9093}]}])
         self.assertTrue(values["redis-ha"]["auth"])
         self.assertEqual("/etc/redis-acl/users.acl", values["redis-ha"]["redis"]["config"]["aclfile"])
         ha = ["--set", "highAvailabilityEnabled=true", "--values", str(ROOT / "config/kafka-ha-values.yaml"),
@@ -153,6 +190,9 @@ class DataContract(unittest.TestCase):
         for index in (1, 2):
             ha += ["--set", f"applicationData.kafkaBrokers[{index}].id={index}", "--set-string", f"applicationData.kafkaBrokers[{index}].host=100.64.0.{10 + index}", "--set", f"applicationData.kafkaBrokers[{index}].port={30940 + index}"]
         rendered = list(yaml.safe_load_all(subprocess.run(command + profile + ha, text=True, capture_output=True, check=True).stdout))
+        redis_ingress = next(item for item in rendered if item and item["kind"] == "NetworkPolicy" and item["metadata"]["name"] == "shared-redis-ha-clients")
+        self.assertIn({"namespaceSelector": {"matchLabels": {"bm-cluster.io/application-workloads": "true"}}}, redis_ingress["spec"]["ingress"][0]["from"])
+        self.assertEqual(redis_ingress["spec"]["ingress"][0]["ports"], [{"protocol": "TCP", "port": 6379}])
         for item in rendered:
             if item and item["kind"] == "StatefulSet" and item["metadata"]["name"] in ("kafka", "kafka-controller"):
                 pod = item["spec"]["template"]["spec"]

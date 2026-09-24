@@ -1,0 +1,44 @@
+# Separate application clusters sharing one platform. For one cluster, use
+# deployment-environments.example.yaml. Mixed inventories set mode: local
+# and a full services override on local targets; Kafka advertisements stay shared.
+# Copy outside the checkout; replace example addresses with reachable private
+# endpoints. Kubeconfigs, TLS keys and API credentials are separate inputs.
+version: 1
+platform:
+  domain: example.com
+  internalDomain: internal.example.com
+  gateway:
+    address: 100.100.0.10
+    nodeCIDRs: [100.100.0.10/32]
+    transport: tailscale
+  services:
+    postgres: {host: 100.100.0.10, port: 30432}
+    redis: {host: 100.100.0.10, port: 30379}
+    kafka:
+      bootstrapServers: 100.100.0.10:30940
+      securityProtocol: SASL_PLAINTEXT
+      brokers: [{id: 0, host: 100.100.0.10, port: 30940}]
+    vault: {url: "http://100.100.0.10:30820"}
+    registry:
+      host: registry.example.com
+      mirrorEndpoint: http://100.100.0.10:30500
+    keycloak: {url: "https://keycloak.example.com/auth", realm: example}
+environments:
+  int:
+    clusterName: apps-int
+    server: https://100.100.10.10:6443
+    ingressAddress: 203.0.113.10
+    podCIDR: 10.42.0.0/16
+    nodeCIDRs: [100.100.10.10/32]
+  uat:
+    clusterName: apps-uat
+    server: https://100.100.20.10:6443
+    ingressAddress: 203.0.113.20
+    podCIDR: 10.42.0.0/16
+    nodeCIDRs: [100.100.20.10/32]
+  prod:
+    clusterName: apps-prod
+    server: https://100.100.30.10:6443
+    ingressAddress: 203.0.113.30
+    podCIDR: 10.42.0.0/16
+    nodeCIDRs: [100.100.30.10/32]

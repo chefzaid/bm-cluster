@@ -29,9 +29,9 @@ Cloudflare routes public traffic to Traefik. K3s runs shared platform services i
 `infra`, application workloads in `apps`, and centrally managed Odoo in `corp`.
 Longhorn supplies persistent storage; Vault and External Secrets supply credentials.
 One shared GitLab provides source, CI and the registry; one central Argo CD
-reconciles deployments from Git. Dedicated `int`, `uat` and `prod` application
-clusters consume the shared platform services. Choose the destination in GitLab
-CI; only application domains vary by environment. See
+reconciles deployments from Git. Run `int`, `uat` and `prod` in separate namespaces
+on the same cluster, or give an environment its own application cluster. Choose
+the destination in GitLab CI; platform services stay shared. See
 [deployment targets](docs/installation.md#application-deployment-clusters).
 
 Application repositories own their manifests, pipelines and Argo CD Applications.

@@ -692,6 +692,18 @@ spec:
             - --pass-authorization-header=true
             - --skip-provider-button=true
           env:
+            - name: OAUTH2_PROXY_REDIS_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: application-redis-legacy-auth
+                  key: username
+                  optional: true
+            - name: OAUTH2_PROXY_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: application-redis-legacy-auth
+                  key: password
+                  optional: true
             - name: OAUTH2_PROXY_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

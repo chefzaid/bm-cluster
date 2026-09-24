@@ -5,10 +5,9 @@ metadata:
   namespace: infra
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
-  name: sonar-apps-discovery
-  namespace: apps
+  name: sonar-apps-discovery-workloads
 rules:
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets]
@@ -23,7 +22,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: sonar-apps-discovery
+  name: sonar-discovery-workloads
   namespace: apps
 subjects:
   - kind: ServiceAccount
@@ -31,8 +30,8 @@ subjects:
     namespace: infra
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: sonar-apps-discovery
+  kind: ClusterRole
+  name: sonar-apps-discovery-workloads
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -132,11 +131,11 @@ data:
       }
     }
     
-    export function discover(workloads, applications, group, hosts) {
+    export function discover(workloads, applications, group, hosts, namespaces = ['apps']) {
       const apps = new Map(applications.map(app => [app.metadata.name, app]));
       const projects = new Set(); const errors = [];
       for (const workload of workloads) {
-        if (workload.metadata.namespace !== 'apps') continue;
+        if (!namespaces.includes(workload.metadata.namespace)) continue;
         // ReplicaSets, pods and Jobs belonging to a controller share that controller's source.
         if (workload.metadata.ownerReferences?.length) continue;
         const id = `${workload.kind}/${workload.metadata.name}`;
@@ -265,22 +264,25 @@ data:
       const kube = new Api('https://kubernetes.default.svc', {
         Authorization: `Bearer ${readFileSync(serviceAccount + 'token', 'utf8').trim()}`,
       }, readFileSync(serviceAccount + 'ca.crt'));
+      const namespaceList = await kube.call('GET', 'api/v1/namespaces');
+      const namespaces = namespaceList.items.filter(namespace => namespace.metadata.name === 'apps' ||
+        namespace.metadata.labels?.['bm-cluster.io/application-workloads'] === 'true').map(namespace => namespace.metadata.name);
       const workloads = [];
-      for (const path of [
-        'apis/apps/v1/namespaces/apps/deployments', 'apis/apps/v1/namespaces/apps/statefulsets',
-        'apis/apps/v1/namespaces/apps/daemonsets', 'apis/batch/v1/namespaces/apps/cronjobs',
-        'apis/batch/v1/namespaces/apps/jobs', 'api/v1/namespaces/apps/pods',
+      for (const namespace of namespaces) for (const path of [
+        `apis/apps/v1/namespaces/${namespace}/deployments`, `apis/apps/v1/namespaces/${namespace}/statefulsets`,
+        `apis/apps/v1/namespaces/${namespace}/daemonsets`, `apis/batch/v1/namespaces/${namespace}/cronjobs`,
+        `apis/batch/v1/namespaces/${namespace}/jobs`, `api/v1/namespaces/${namespace}/pods`,
       ]) {
         const result = await kube.call('GET', path);
         if (result) workloads.push(...result.items);
       }
       const applications = await kube.call('GET', 'apis/argoproj.io/v1alpha1/namespaces/infra/applications');
       const result = discover(workloads, applications.items, process.env.GITLAB_GROUP_PATH,
-        process.env.GITLAB_REPOSITORY_HOSTS.split(','));
+        process.env.GITLAB_REPOSITORY_HOSTS.split(','), namespaces);
       const gitlab = new Api(process.env.GITLAB_API_URL, { 'PRIVATE-TOKEN': process.env.GITLAB_TOKEN });
       const sonar = new Api(process.env.SONAR_HOST_URL, { Authorization: `Bearer ${process.env.SONAR_ADMIN_TOKEN}` });
       const errors = [...result.errors, ...await reconcile({ gitlab, sonar, projects: result.projects })];
-      console.log(`apps coverage: ${result.projects.length} source repositories, ${errors.length} errors`);
+      console.log(`Application namespace coverage: ${result.projects.length} source repositories, ${errors.length} errors`);
       for (const error of errors) console.error(error);
       if (errors.length) process.exitCode = 1;
     }
