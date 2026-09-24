@@ -509,10 +509,12 @@ def service_boundary(context):
 
 
 def middleware_boundary(context):
+    # Traefik preserves arbitrary plugin configuration; dyn keeps its presence check
+    # available when the CRD type checker omits that schemaless property.
     name = "application-middleware-" + context["environment"]
     return [object_("ValidatingAdmissionPolicy", name, api="admissionregistration.k8s.io/v1", spec={
         "failurePolicy": "Fail", "matchConstraints": {"resourceRules": [{"apiGroups": ["traefik.io"], "apiVersions": ["v1alpha1"], "operations": ["CREATE", "UPDATE"], "resources": ["middlewares"]}]},
-        "validations": [{"expression": "!has(object.spec.forwardAuth) && !has(object.spec.errors) && !has(object.spec.plugin)",
+        "validations": [{"expression": "!has(object.spec.forwardAuth) && !has(object.spec.errors) && !has(dyn(object.spec).plugin)",
             "message": "Application middleware cannot make controller requests to arbitrary services; authentication proxies are platform-managed."}]}),
         object_("ValidatingAdmissionPolicyBinding", name, api="admissionregistration.k8s.io/v1", spec={
             "policyName": name, "validationActions": ["Deny"],
