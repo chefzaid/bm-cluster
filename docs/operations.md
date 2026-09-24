@@ -160,11 +160,11 @@ The first command is offline and requires Bash, Git, ShellCheck, Python 3 with
 PyYAML, Helm, Ansible, Node.js, jq, SQLite's `sqlite3` CLI, and `flock`. CI installs
 these tools. Missing dependencies fail validation rather than silently skipping
 deployment checks. It checks syntax, documentation links, manifest inventories,
-workload policy and platform-owned image digests. Seven installer/GitOps render
+workload policy and platform-owned image digests. Nine installer/GitOps render
 combinations cover HA, Odoo scope, PostgreSQL staging/cutover,
-Kafka migration phases and fencing. Each render checks resource references,
+Kafka migration phases, fencing and authenticated shared application data. Each render checks resource references,
 Service selectors and named ports, Ingress backends, RBAC and installer/GitOps
-parity, then the command runs the [six safety suites](structure.md#validation-policy).
+parity, then the command runs the [deployment and recovery safety suites](structure.md#validation-policy).
 
 The second command adds server-side dry-runs of the rendered profiles, including
 the opted-in database migration and fencing resources, against the active

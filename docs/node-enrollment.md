@@ -6,6 +6,11 @@ Run the node assistant from a registered control plane:
 ./add-node.sh
 ```
 
+This assistant expands the shared platform. Dedicated application targets use
+the [separate bootstrap](installation.md#application-deployment-clusters) and the
+application-node procedure below; the platform enrollment assistant rejects an
+application-cluster host.
+
 Choose the new node's **role** (control plane or worker), then the **execution
 location** (remote enrollment from the existing control plane or a local join
 on the new host). Remote enrollment manages readiness, quorum planning,
@@ -215,3 +220,24 @@ complete options. For initial multi-node planning see [installation](installatio
 [Ansible installation](installation.md#ansible-installation) uses the same enrollment
 workflow. `ansible/deploy.yml` reconciles the installed platform and does not
 add nodes.
+
+## Application cluster nodes
+
+An `int`, `uat` or `prod` target is a separate cluster, not a worker pool joined
+to the platform. Bootstrap its first host with
+[`install-application-cluster.sh`](../scripts/install-application-cluster.sh),
+then register it centrally as described in
+[installation](installation.md#application-deployment-clusters).
+
+The initial application bootstrap supports one control plane per target.
+Additional target nodes require a deliberate native K3s expansion: use that
+target's server/token and exact K3s version, preserve its pod CIDR, API audiences,
+private Tailscale addresses, registry mirror and private-port firewall, and
+configure its own backup/quorum plan before adding servers. Keep central
+platform credentials and storage/HA helpers out of this workflow.
+
+Add each new target node's Tailscale address to its environment's `nodeCIDRs`,
+update tailnet grants, and rerun registration with that target's administrator
+kubeconfig. Registration verifies every registered target node's address,
+readiness and encrypted gateway route before publishing the updated allocation.
+It does not provision extra nodes or copy Vault administrator credentials.

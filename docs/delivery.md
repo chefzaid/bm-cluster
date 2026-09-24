@@ -23,23 +23,65 @@ created token is required.
 
 ### Application delivery
 
+DevApp uses one GitLab project and registry for all environments. In **Build →
+Pipelines → New pipeline**, select `PIPELINE_MODE=full` and the destination:
+
+- `int`: select any branch to build and deploy a snapshot, including source
+  versions ending in `-SNAPSHOT`. All branches share the integration hostname.
+- `uat` or `prod`: select the default branch to publish and deploy a stable
+  release, or set `RELEASE_VERSION` to promote a finalized release without rebuilding.
+
+Existing releases can also deploy to `int`. Snapshots cannot deploy to `uat` or
+`prod`. Older feature branches must first merge or rebase the updated CI helpers.
+
 ```mermaid
 flowchart LR
-    accTitle: Application delivery
-    accDescr: Application CI checks source, publishes an image and commits its selection. Argo CD deploys it and CI verifies that exact revision.
-    Source["App source in GitLab"] --> CI["App-owned checks<br/>Shared Kubernetes runner"]
-    CI --> Publish["Publish image / packages"]
-    Publish --> Commit["Commit image selection<br/>to app desired state"]
-    Commit --> Argo["App Argo CD Application"]
-    Argo --> Runtime["Workloads in apps"]
-    Runtime --> Verify["CI verifies exact revision<br/>health and smoke checks"]
+    GitLab["One GitLab project and registry"] --> CI["Choose int / uat / prod"]
+    CI --> Pin["Commit selected environment and image digests"]
+    Pin --> Argo["One central Argo CD"]
+    Argo --> Int["int application cluster"]
+    Argo --> Uat["uat application cluster"]
+    Argo --> Prod["prod application cluster"]
+    Int --> Data["Shared PostgreSQL, Redis, Kafka, Vault and Keycloak"]
+    Uat --> Data
+    Prod --> Data
 ```
 
-GitHub/GitLab synchronization is configured by [repository onboarding](repository-onboarding.md).
-Each app defines its release policy, artifacts and checks. Publishing an image
-alone does not deploy it: commit image selection and bootstrap path changes in
-its desired state, then verify that revision through Argo CD. See the
-[source-analysis contract](observability.md#source-analysis) for scan-only CI.
+Each Application (`devapp-int`, `devapp-uat`, `devapp-prod`) uses its own restricted
+AppProject, named registered cluster and immutable runtime configuration commit.
+A second commit records that revision in the selected Application. Updating
+shared source or deploying integration therefore does not move the production
+pointer. CI verifies destination, revision, deployment health, image digests and
+public smoke checks; it never patches workloads directly.
+
+The central `infra/deployment-environments` ConfigMap contains only successfully
+registered targets. CI reads this public inventory, without access to remote
+administrator credentials. It rejects missing targets and a changed cluster
+binding. Register targets and provision each application's scoped services
+through [installation](installation.md#application-deployment-clusters) and
+[onboarding](repository-onboarding.md#environment-deployment), then select the
+destination in CI. Shared GitLab, registry, Argo CD and identity URLs keep the
+platform domain; only applications use `int.` or `uat.` domains.
+
+Release/version publication shares one lock because it changes the same branch
+and version counter. Deployments use a lock per environment and reject a stale
+branch before publication. Snapshot GitOps commits live on a dedicated
+`gitops/int/<pipeline-id>` branch and leave the source/default branches and stable
+version counter unchanged.
+
+Version 2 onboarding gives each application project its own integration and
+protected-release runners on the central platform, and disables shared runners
+for that project. Branch jobs can update only their integration Application.
+Protected release jobs can update their application's registered environments;
+Kubernetes admission rules bind those Applications to their assigned destinations.
+Existing version 1 applications keep their current runner configuration.
+
+GitHub/GitLab synchronization still connects one repository pair. Existing
+applications retain their own delivery contracts until explicitly migrated;
+DevApp is the first environment-aware implementation. See the app's deployment
+guide for its job details and the [scanner contract](observability.md#source-analysis)
+for analysis-only pipelines. Remote metrics/log shipping requires a collector;
+central namespace discovery does not automatically extend to another cluster.
 
 ### Infrastructure reconciliation and verification
 

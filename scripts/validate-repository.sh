@@ -51,10 +51,11 @@ printf '[PASS] Ansible playbook syntax\n'
 # These suites exercise data-loss, secret-handling and physical fencing paths.
 # The selection and reason for each exception are documented in docs/structure.md.
 bash tests/test-k3s-backups.sh
-for suite in test-postgres-ha.py test-kafka-ha.py test-vault-unseal.py test-vault-ha.py test-node-fencing.py; do
+for suite in test-postgres-ha.py test-kafka-ha.py test-vault-unseal.py test-vault-ha.py test-node-fencing.py \
+             test-application-clusters.py test-application-data.py test-environment-onboarding.py; do
     python3 "tests/$suite"
 done
-printf '[PASS] Six deployment and recovery safety suites\n'
+printf '[PASS] Nine deployment and recovery safety suites\n'
 
 if [[ "$LIVE" == true ]]; then
     command -v kubectl >/dev/null || { printf 'kubectl is required for --live.\n' >&2; exit 1; }

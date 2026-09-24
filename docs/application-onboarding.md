@@ -3,15 +3,124 @@
 Applications opt into `add-repos.sh` by committing `infra/onboarding.json`.
 This reference is for application authors; the
 [operator guide](repository-onboarding.md) covers setup credentials and reruns.
-Version 1 declares supported platform operations without running repository
-scripts or playbooks. Deploy workloads in `apps` using the
+Contracts declare supported platform operations without running repository
+scripts or playbooks. DevApp uses version 2 for central delivery to independent
+application clusters; version 1 remains compatible with existing applications. Deploy workloads in `apps` using the
 [namespace and discovery contract](observability.md#namespace-and-discovery).
 
-The default branch needs a valid `.gitlab-ci.yml` and one Argo CD Application at
-`infra/argocd/application.yaml` or `argocd/application.yaml`. Its source must be a
-repository-local Kustomize directory or Helm chart using its defaults, with an
-existing AppProject permitting the source/destination. External charts,
-multi-source Applications and custom Helm/Kustomize source overrides are unsupported.
+## Shared-platform contract (version 2)
+
+The application has one default branch, one `.gitlab-ci.yml`, one registry and
+one Argo CD template at `infra/argocd/application.yaml`. The template is an input,
+not a deployable environment: CI renders `infra/argocd/<env>.yaml` and
+`infra/environments/<env>/` for the selected registered cluster. Runtime resources
+stay in the application repository. Shared services stay on the platform.
+
+Version 2 uses the common fields below and adds this declaration:
+
+```json
+{
+  "version": 2,
+  "deployment": {
+    "inventory": "infra/deployment-environments.json",
+    "settingsDirectory": "infra/environments",
+    "defaultEnvironment": "int",
+    "dataServices": ["postgres", "redis", "kafka"]
+  }
+}
+```
+
+This is the current DevApp service contract; other applications keep version 1
+until their delivery and runtime support are explicitly migrated. Version 2
+does not accept arbitrary bootstrap resources or administrator Vault paths.
+The template selects `infra/k8s` or `infra/overlays/ha`; the latter supplies the
+initial replica profile. No application source code is changed during onboarding.
+
+Onboarding reads the authoritative registered inventory from the central
+`infra/deployment-environments` ConfigMap and commits a public copy. Per-target
+`settings.json` contains the shared `appSubdomain` and target-specific
+`trustedProxyCIDRs` and `highAvailability`. Credentials and kubeconfigs never
+enter Git. The shared platform domain, identity realm and existing target
+bindings must match; a cluster migration is a deliberate operation.
+Reruns also reject a changed saved `appSubdomain`: hostname migration must
+preserve DNS and login callbacks for environments still running their pinned release.
+
+Each selected Application must use `applications-<env>`, the registered cluster
+name, namespace `apps`, and a full Git commit for its runtime source. CI must
+expose an `int`/`uat`/`prod` selector, default to `int`, update only that
+Application, and verify the destination, images and exact revision after sync.
+Integration may deploy branch snapshots; `uat` and `prod` require finalized
+releases. Project-scoped runners and Application admission rules enforce the
+integration/protected-release boundary described in [delivery](delivery.md#application-delivery).
+The final pointer commit carries the onboarding trailers described below;
+the pinned runtime commit precedes it. Onboarding verifies both commits and
+checks Deployment readiness on the selected remote cluster.
+
+One registry credential serves all environments. PostgreSQL, Redis and Kafka
+credentials live under `apps/<app>/<env>/{database,redis,kafka}` in central Vault;
+the target's `kubernetes-<env>` auth mount cannot read another environment or
+platform administrator paths. Browser clients use `<app>-<env>-web` in the same
+shared Keycloak realm, with exact environment callbacks and matching JWT audiences.
+[Repository onboarding](repository-onboarding.md#environment-deployment) owns the operator flow.
+
+## Shared application data
+
+There is one shared PostgreSQL service, with separate logical databases and
+restricted logins such as `devapp_int`, `devapp_uat` and `devapp_prod`. Redis is
+one shared cache with environment-prefixed keys and ACL users; Kafka is one
+shared cluster with environment-prefixed topics/groups and SCRAM credentials.
+No data service is installed on an application target.
+
+Redis ACLs restrict value access and writes to each environment's key prefix.
+The `KEYS`/`SCAN` commands needed for cache eviction can still list names from
+other environments in the shared cache; key names must not contain secrets or
+personal data. This is value isolation, not complete metadata isolation.
+
+Remote access is opt-in because existing anonymous Redis consumers must migrate
+before authentication is enabled. On the central platform, prepare the password
+and ACL Secret using the inventory and the existing Vault administrator access:
+
+```bash
+KUBECONFIG=/secure/platform.yaml python3 scripts/configure-application-data.py \
+  --config /secure/deployment-environments.yaml \
+  --prepare-auth --legacy-clients-migrated \
+  --output-values /secure/application-data-values.yaml
+```
+
+That command prepares credentials; it does not expose ports or change a running
+Redis listener. Migrate existing Redis consumers to the platform-only password
+stored at Vault `infra/application-redis`, then enable the generated
+[application-data profile](../config/application-data-values.yaml). Its broker
+endpoints come directly from the inventory. Application consumers receive separate scoped
+users, never this platform password. Use a coordinated maintenance window for the
+existing-client change and authentication activation. The helper writes the public profile outside
+the checkout and refuses to overwrite an existing file. Reconcile through the
+existing platform installer:
+
+```bash
+PLATFORM_HA_VALUES_FILE=/secure/application-data-values.yaml ./install-control-plane.sh
+```
+
+This profile does not enable platform HA. Subsequent installer/Ansible runs retain
+the enabled data authentication settings and reject an implicit downgrade. The gateway remains closed until
+`configure-application-data.py --config ... --check` verifies authenticated Redis
+and the expected Kafka remote listeners on every broker.
+
+Onboarding creates fresh logical databases automatically. Existing production
+`devappdb` is never dropped, emptied or silently re-owned. To retain it, first
+perform a reviewed ownership migration to the dedicated application role and
+store that role's matching credentials at `apps/devapp/prod/database`. Then set
+`"databaseName": "devappdb"` in the production `settings.json` and rerun onboarding.
+The helper's `--adopt-existing-database` check refuses missing ownership or
+credentials. This explicit override keeps CI pointed at the adopted database;
+other targets continue using their separate databases.
+
+## Single-target compatibility (version 1)
+
+Existing version 1 applications declare one local Application, with a
+repository-local Kustomize directory or Helm chart using its defaults. The
+AppProject must permit its repository and destination. External charts,
+multi-source Applications and custom source overrides are unsupported.
 
 ## Onboarding declaration
 
@@ -29,7 +138,6 @@ at `infra/k8s`, and app-owned CI jobs named `verify` and `release`:
   "replacements": [
     {"from": "catalog.example.com", "to": "{{APP_HOST}}"},
     {"from": "example-com-tls", "to": "{{TLS_SECRET_NAME}}"},
-    {"from": "targetRevision: main", "to": "targetRevision: {{DEFAULT_BRANCH}}"},
     {"from": "registry.example.com/team/catalog", "to": "{{REGISTRY_HOST}}/{{GITLAB_PROJECT_PATH}}"}
   ],
   "registry": {"path": "apps/catalog/registry"},
@@ -52,8 +160,8 @@ app's actual pipeline and rendered manifests.
 
 | Field | Contract |
 |---|---|
-| `version` | Must be `1`; unknown top-level fields are rejected. |
-| `application` | Path to the Application described above. It must follow the default branch and target `apps` on `https://kubernetes.default.svc`. |
+| `version` | `1` for the compatibility flow, `2` for shared-platform environment delivery; unknown fields are rejected. |
+| `application` | Version 1 deploys the declared default-branch Application into local `apps`. Version 2 uses it only as the source/HA template described above. |
 | `inputs` | Unique `name` values with optional `label`, `type`, `default`, `required` and `secret`. Declare `APP_SUBDOMAIN` to derive `APP_HOST`. |
 | `files` | Unique, explicit local public files. No symlinks, paths outside the checkout, credential files, contract or saved-settings file. |
 | `replacements` | Literal `from` text and a `to` template; simultaneous longest-match replacement uses prior rendered bindings on reruns. |
@@ -123,9 +231,12 @@ Declared public inputs add context names and cannot override platform values.
 mapping original literals to their last rendered values. These public settings
 contain no secret inputs or credentials; the execution journal stays outside Git.
 Keep the settings with rendered configuration so later pipelines reuse them.
-Rendering normalizes the
-Application's GitLab URL, default-branch revision and `infra` namespace while
-preserving its source path/profile. Release jobs must preserve these choices.
+Declare `spec.source.targetRevision: HEAD` in the source Application; omit revision
+text replacements so YAML-sensitive branch names remain strings. Rendering writes
+the actual default branch, GitLab URL and `infra` namespace while preserving the
+source path/profile. It accepts `HEAD`, the current default branch or the previous
+default branch recorded in saved settings; unrelated revisions are rejected.
+Release jobs must preserve these choices.
 
 ## Required delivery behavior
 
@@ -151,7 +262,7 @@ Onboarding-Source: <CI_COMMIT_SHA>
 
 If release preparation creates several commits, put the trailers on the final
 branch tip. The helper verifies those identifiers and source ancestry before
-accepting that tip as the deployment revision. `ONBOARDING_RUN_ID` identifies
+accepting that tip as a verified delivery output. Version 1 deploys that tip; version 2 reads its selected Application and verifies the preceding pinned runtime commit. `ONBOARDING_RUN_ID` identifies
 the API request for recovery after a lost response; do not override or persist
 it as public application configuration.
 

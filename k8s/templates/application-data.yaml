@@ -1,0 +1,42 @@
+{{- $data := .Values.applicationData | default dict -}}
+{{- if not (kindIs "bool" $data.enabled) }}{{ fail "applicationData.enabled must be boolean" }}{{ end -}}
+{{- if $data.enabled }}
+{{- $redis := index .Values "redis-ha" -}}
+{{- if or (ne $redis.auth true) (ne $redis.existingSecret "application-redis-auth") (ne $redis.authKey "auth") (ne $redis.redis.config.aclfile "/etc/redis-acl/users.acl") }}{{ fail "applicationData requires the complete Redis auth/ACL settings from config/application-data-values.yaml" }}{{ end -}}
+{{- $ha := .Values.kafkaHa | default dict -}}
+{{- $count := 1 -}}
+{{- if and $ha.enabled (ne $ha.phase "dynamic") }}{{- $count = 3 -}}{{- end -}}
+{{- if ne (len $data.kafkaBrokers) $count }}{{ fail "applicationData.kafkaBrokers must match the configured Kafka replica count (one or three)" }}{{ end }}
+{{- $endpoints := list -}}
+{{- range $index, $broker := $data.kafkaBrokers -}}
+{{- if ne (int $broker.id) $index }}{{ fail "applicationData.kafkaBrokers must be ordered by pod ordinal 0..2" }}{{ end -}}
+{{- if not (regexMatch "^[a-zA-Z0-9.-]+$" $broker.host) }}{{ fail "Kafka private broker host must be IPv4 or DNS" }}{{ end -}}
+{{- if or (lt (int $broker.port) 1) (gt (int $broker.port) 65535) }}{{ fail "Kafka broker port is invalid" }}{{ end -}}
+{{- $endpoints = append $endpoints (printf "%s:%d" $broker.host (int $broker.port)) -}}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: application-data-access
+  namespace: infra
+data:
+  BM_REDIS_AUTH_ENABLED: "true"
+  BM_KAFKA_REMOTE_ENABLED: "true"
+  BM_KAFKA_REMOTE_BROKERS: {{ join "," $endpoints | quote }}
+  KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+  KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+  # Only the existing private PLAINTEXT listener can be anonymous; REMOTE
+  # requires SCRAM and receives application-specific topic/group ACLs.
+  KAFKA_SUPER_USERS: User:ANONYMOUS
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-remote-startup
+  namespace: infra
+data:
+  kafka-remote-env.sh: |
+{{ .Files.Get "files/kafka-remote-env.sh" | indent 4 }}
+  kafka-remote-start.sh: |
+{{ .Files.Get "files/kafka-remote-start.sh" | indent 4 }}

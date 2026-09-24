@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Use the GitOps Helm templates for the installer's HA manifests as well."""
+"""Use GitOps Helm templates for native platform workloads and optional profiles."""
 
 import argparse
 import json
@@ -63,6 +63,14 @@ def main():
         for path in (args.root / "k8s" / group).glob("*.yaml"):
             original = list(yaml.safe_load_all(path.read_text()))
             transformed = []
+            # These shared startup/config objects must precede their consumers
+            # in the normal datastore manifest list, including non-HA installs.
+            startup = {"kafka.yaml": "kafka-remote-startup"}.get(path.name)
+            if group == "datastores" and startup:
+                key = ("v1", "ConfigMap", "infra", startup)
+                if key in desired:
+                    transformed.append(desired[key])
+                    existing.add(key)
             for doc in original:
                 if not doc:
                     continue
@@ -70,7 +78,10 @@ def main():
                 existing.add(key)
                 transformed.append(desired.get(key, doc))
             path.write_text(yaml.safe_dump_all(transformed, sort_keys=False))
-    extra = [doc for key, doc in desired.items() if key not in existing and (key not in baseline or key in migrated)]
+    # The auth profile ConfigMap is applied through the installer's existing
+    # profile dependency phase, before Redis reads its environment variables.
+    auth_config = ("v1", "ConfigMap", "infra", "application-data-access")
+    extra = [doc for key, doc in desired.items() if key not in existing and (key not in baseline or key in migrated or key == auth_config)]
     # Migration helpers own initial bootstrap and cutover; ordinary reconciles
     # must also retain/update their verified Cluster, startup config and PDBs.
     extra_dir = args.root / "k8s/ha"

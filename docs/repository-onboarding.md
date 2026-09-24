@@ -42,11 +42,43 @@ CI and the shared runner. Skipped new projects keep CI disabled. Existing projec
 retain their CI setting, so ordinary synchronized source commits can still start
 existing pipelines.
 
-When public configuration changes, an existing automatically synced Application
+For version 1 contracts, when public configuration changes, an existing automatically synced Application
 is paused before the settings commit is published. Workloads remain running.
 The app's release job reapplies its committed Application after publishing images,
 restoring its sync policy. First deployment is also owned by that release job;
 onboarding does not start application workloads ahead of it.
+
+## Environment deployment
+
+DevApp uses contract version 2. First [register the application clusters](installation.md#application-deployment-clusters)
+and enable [shared data access](application-onboarding.md#shared-application-data).
+Run `add-repos.sh` once on the central platform to import the one repository.
+Version 2 needs Cloudflare Zone Read, DNS Edit and SSL and Certificates Edit
+on the managed parent zone for DNS, origin certificates and edge-coverage checks.
+Onboarding provisions registry access, separate data credentials and browser
+clients for every registered target, reconciles their DNS/TLS, and writes the
+public inventory and target settings into the application repository.
+It also provisions project-scoped integration/release runners and their scoped
+Application permissions. The default branch must be protected; the project no
+longer uses the shared instance runner. See [delivery permissions](delivery.md#application-delivery).
+
+`APP_SUBDOMAIN` is one shared app label: `devapp` produces
+`devapp.int.example.com`, `devapp.uat.example.com` and `devapp.example.com`.
+Onboarding applies that label to all registered environments. It defaults the
+initial deployment to `int`; export `ONBOARDING_DEPLOYMENT_ENVIRONMENT=uat` or
+`prod` to choose a different initial target. This does not change the normal CI
+dropdown. Later deployments and release promotions use [GitLab CI](delivery.md#application-delivery).
+
+Onboarding prepares every registered target and checks certificate/DNS
+prerequisites for all of them, even when the initial deployment selects only one.
+For staged adoption, register environments as their infrastructure and DNS
+prerequisites become ready.
+
+Newly registered targets require another application-onboarding run to provision
+their data, identity and DNS before first deployment. Existing Applications keep
+independently pinned revisions while public settings are updated; they need no
+automatic-sync pause. Onboarding verifies the selected runtime commit separately
+from the final Git commit containing its Application pointer.
 
 ## Prerequisites and credentials
 
@@ -55,7 +87,7 @@ installer supplies the Ubuntu/Debian packages. Deployment also needs the
 control-plane kubeconfig, `kubectl`, Argo CD in `infra`, the instance runner and
 requested shared services. Local Helm charts require Helm. Vault must be unsealed
 with its KV-v2 `secret/` mount; External Secrets and public ingress/TLS must work.
-Before publishing configuration, onboarding checks the shared `apps` foundation,
+Before publishing configuration, onboarding checks the selected `apps` foundation,
 the AppProject's repository/destination permissions and certificate coverage for
 the declared hosts. Repository credentials must complete a fresh successful
 ExternalSecret refresh before delivery starts.

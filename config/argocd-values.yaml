@@ -37,6 +37,7 @@ configs:
   params:
     server.insecure: true
   cm:
+    resource.respectRBAC: normal
     url: https://argocd.__PUBLIC_DOMAIN__
     admin.enabled: false
     oidc.config: |

@@ -11,6 +11,7 @@ owning application repository; this repository centrally owns Odoo.
 | `.github/workflows/` | GitHub/GitLab source synchronization. |
 | `ansible/` | Inventory and the installation/reconciliation playbooks. |
 | `config/` | Shared version and service inventories in `platform.env`; Helm release values and the public origin CA certificate. |
+| `config/application-cluster/` | Target firewall policy and temporary route/dependency probes used during registration. |
 | `config/host/` | AppArmor, Longhorn multipath settings, and systemd backup/unseal units copied onto hosts. |
 | `docs/` | Task guides; the root README is the guide index. |
 | `k8s/` | The GitOps Helm chart, shared values. Argo CD continues to use `path: k8s`. |
@@ -46,6 +47,8 @@ The ownership boundaries and declarative source follow Kubernetes'
   Update remote enrollment transfers when changing files copied to new nodes.
 - **Repository onboarding:** `add-repos.sh` collects operator inputs and calls
   `scripts/onboard-repositories.py`; `scripts/lib/` implements the app contract.
+  `scripts/lib/application_delivery.py` reconciles project runners and their
+  Kubernetes permissions from the registered environment inventory.
   `configure-repository-sync.sh` configures ongoing synchronization for one
   repository and remains a separate internal step.
 - **Image versions:** update the owning manifest and Helm values;
@@ -72,6 +75,9 @@ source inputs and rendered deployment output, then runs only these safety suites
 | `test-vault-unseal.py` | Recovery keys leaking into process arguments and false unseal success. |
 | `test-vault-ha.py` | Unsafe peer replacement, loss of recovery access and distributing keys to the wrong host. |
 | `test-node-fencing.py` | Powering off a healthy/wrong host or recovering storage before confirmed fencing. |
+| `test-application-clusters.py` | Registering the platform/wrong cluster, shared network allocations and unsafe gateway or target access. |
+| `test-application-data.py` | Cross-environment data access, anonymous remote cache access and unsafe database adoption; optional disposable datastore checks. |
+| `test-environment-onboarding.py` | Wrong-target publication, runner privilege crossover, credential leakage and accepting a certificate that does not cover an environment hostname. |
 
 Do not restore broad application, UI, source-text assertion or per-image test
 frameworks here. New tests need a concrete deployment or recovery failure that

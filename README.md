@@ -28,11 +28,15 @@ Ansible and reconfiguration.
 Cloudflare routes public traffic to Traefik. K3s runs shared platform services in
 `infra`, application workloads in `apps`, and centrally managed Odoo in `corp`.
 Longhorn supplies persistent storage; Vault and External Secrets supply credentials.
-GitLab provides source and CI, while Argo CD reconciles deployments from Git.
+One shared GitLab provides source, CI and the registry; one central Argo CD
+reconciles deployments from Git. Dedicated `int`, `uat` and `prod` application
+clusters consume the shared platform services. Choose the destination in GitLab
+CI; only application domains vary by environment. See
+[deployment targets](docs/installation.md#application-deployment-clusters).
 
 Application repositories own their manifests, pipelines and Argo CD Applications.
 Use [`add-repos.sh`](docs/repository-onboarding.md) to import and onboard them.
-The platform discovers applications from Kubernetes metadata; the
+The platform discovers local applications from Kubernetes metadata; the
 [application contract](docs/application-onboarding.md) defines the integration.
 
 Nodes communicate over a private network. Adding nodes and enabling service

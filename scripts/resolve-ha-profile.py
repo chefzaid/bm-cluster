@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Read durable HA settings before installers render or mutate workloads."""
+"""Preserve durable availability and shared-data settings before reconciliation."""
 import argparse
+import copy
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,56 @@ def application_values():
     return app.get("spec", {}).get("source", {}).get("helm", {}).get("valuesObject", {})
 
 
+def shared_data_profile(previous, supplied):
+    previous_data = previous.get("applicationData", {})
+    if not isinstance(previous_data, dict):
+        raise ValueError("Stored applicationData must be a mapping")
+    selected = copy.deepcopy(previous_data)
+    if "applicationData" in supplied:
+        if not isinstance(supplied["applicationData"], dict):
+            raise ValueError("applicationData must be a mapping")
+        selected.update(supplied["applicationData"])
+    if not selected:
+        return {}
+    if set(selected) - {"enabled", "kafkaBrokers"} or type(selected.get("enabled")) is not bool:
+        raise ValueError("applicationData requires boolean enabled and the managed Kafka broker list")
+    if previous_data.get("enabled") and not selected["enabled"]:
+        raise ValueError("Shared application authentication is enabled; refusing an implicit downgrade")
+    if not selected["enabled"]:
+        return {"applicationData": selected}
+    brokers = selected.get("kafkaBrokers")
+    if not isinstance(brokers, list) or len(brokers) not in (1, 3):
+        raise ValueError("Shared application access requires one or three private Kafka broker endpoints")
+    # Keep only the managed auth fragment; credentials are never Helm inputs.
+    redis = copy.deepcopy(previous.get("redis-ha", {}))
+    def merge(target, source):
+        for key, value in source.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                merge(target[key], value)
+            else:
+                target[key] = copy.deepcopy(value)
+    if not isinstance(redis, dict) or not isinstance(supplied.get("redis-ha", {}), dict):
+        raise ValueError("Redis authentication settings must be a mapping")
+    merge(redis, supplied.get("redis-ha", {}))
+    redis_config = redis.get("redis", {})
+    if not isinstance(redis_config, dict) or not isinstance(redis_config.get("config", {}), dict):
+        raise ValueError("Redis authentication configuration must be a mapping")
+    if (redis.get("auth") is not True or redis.get("existingSecret") != "application-redis-auth" or
+            redis.get("authKey") != "auth" or redis_config.get("config", {}).get("aclfile") != "/etc/redis-acl/users.acl"):
+        raise ValueError("Preserve the complete authenticated Redis profile from config/application-data-values.yaml")
+    mounts = redis_config.get("extraVolumeMounts", [])
+    volumes = redis.get("extraVolumes", [])
+    if not isinstance(mounts, list) or not isinstance(volumes, list):
+        raise ValueError("Redis ACL volumes and mounts must be lists")
+    if ({"name": "application-redis-acl", "mountPath": "/etc/redis-acl", "readOnly": True} not in mounts or
+            {"name": "application-redis-acl", "secret": {"secretName": "application-redis-auth"}} not in volumes):
+        raise ValueError("The authenticated Redis ACL volume and mount must be preserved")
+    return {"applicationData": selected, "redis-ha": {
+        "auth": True, "existingSecret": "application-redis-auth", "authKey": "auth",
+        "redis": {"config": {"aclfile": redis_config["config"]["aclfile"]}, "extraVolumeMounts": mounts},
+        "extraVolumes": volumes}}
+
+
 def resolve(topology, postgres, requested, supplied=None, kafka=None, previous=None):
     stored = topology.get("highAvailabilityEnabled", "false")
     if stored not in ("true", "false") or requested not in ("", "true", "false"):
@@ -40,6 +91,7 @@ def resolve(topology, postgres, requested, supplied=None, kafka=None, previous=N
     supplied = supplied or {}
     if not isinstance(supplied, dict):
         raise ValueError("PLATFORM_HA_VALUES_FILE must contain a mapping")
+    profile.update(shared_data_profile(previous or {}, supplied))
     for label, key, record in (("PostgreSQL", "postgresHa", postgres),
                                ("Kafka", "kafkaHa", kafka or {})):
         phase = record.get("phase", "")
@@ -75,7 +127,7 @@ def main():
     profile = resolve(state("bm-cluster-topology"), state("postgres-ha-state"),
                       os.environ.get("HIGH_AVAILABILITY_ENABLED", ""), supplied,
                       state("kafka-ha-state"), application_values())
-    if profile["highAvailabilityEnabled"] or profile.get("postgresHa") or profile.get("kafkaHa"):
+    if profile["highAvailabilityEnabled"] or profile.get("postgresHa") or profile.get("kafkaHa") or profile.get("applicationData", {}).get("enabled"):
         descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as output:
             json.dump(profile, output)

@@ -31,6 +31,8 @@ spec:
     metadata:
       labels:
         app: kafka-controller
+      annotations:
+        bm-cluster.io/application-data: disabled
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -63,6 +65,10 @@ spec:
         ports:
         - name: controller
           containerPort: 9093
+        envFrom:
+        - configMapRef:
+            name: application-data-access
+            optional: true
         env:
         - name: CLUSTER_ID
           value: "8ipNY9RxQtWkattTais5yQ"
@@ -148,6 +154,8 @@ spec:
     metadata:
       labels:
         app: kafka
+      annotations:
+        bm-cluster.io/application-data: disabled
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -159,6 +167,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kafka
+        command: ["/bin/bash", "/opt/bm-cluster/kafka-remote-start.sh"]
         image: docker.io/confluentinc/cp-kafka@sha256:0ad069035863aa1b090f4d9af47bfd2c08dc32864f3575d7d8579e3155c2586d
         securityContext:
           allowPrivilegeEscalation: false
@@ -167,6 +176,12 @@ spec:
         ports:
         - name: broker
           containerPort: 9092
+        - name: remote
+          containerPort: 9094
+        envFrom:
+        - configMapRef:
+            name: application-data-access
+            optional: true
         env:
         - name: CLUSTER_ID
           value: "8ipNY9RxQtWkattTais5yQ"
@@ -193,6 +208,9 @@ spec:
         volumeMounts:
         - name: kafka-data
           mountPath: /var/lib/kafka/data
+        - name: remote-startup
+          mountPath: /opt/bm-cluster
+          readOnly: true
         startupProbe:
           tcpSocket:
             port: 9092
@@ -213,6 +231,10 @@ spec:
           limits:
             cpu: "1"
             memory: 2Gi
+      volumes:
+      - name: remote-startup
+        configMap:
+          name: kafka-remote-startup
   volumeClaimTemplates:
   - metadata:
       name: kafka-data

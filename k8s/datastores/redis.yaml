@@ -31,6 +31,8 @@ spec:
     metadata:
       labels:
         app: redis
+      annotations:
+        bm-cluster.io/application-data: disabled
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -42,6 +44,17 @@ spec:
         fsGroup: 10001
       containers:
       - name: redis
+        command: ["sh", "-ec"]
+        args:
+        - |
+          if [ "${BM_REDIS_AUTH_ENABLED:-false}" = true ]; then
+            exec redis-server --aclfile /etc/redis-acl/users.acl
+          fi
+          exec redis-server
+        envFrom:
+        - configMapRef:
+            name: application-data-access
+            optional: true
         image: docker.io/library/redis:8.10.0-alpine@sha256:978f0e01593e65eed801f2402944efcd936d43b5027e4908a7897baf88ed6241
         securityContext:
           allowPrivilegeEscalation: false
@@ -70,7 +83,14 @@ spec:
         volumeMounts:
         - name: redis-data
           mountPath: /data
+        - name: redis-acl
+          mountPath: /etc/redis-acl
+          readOnly: true
       volumes:
+      - name: redis-acl
+        secret:
+          secretName: application-redis-auth
+          optional: true
       - name: redis-data
         emptyDir:
           sizeLimit: 256Mi

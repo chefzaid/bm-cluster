@@ -1,0 +1,20 @@
+# Opt-in shared application data access. First run configure-application-data.py
+# --prepare-auth --legacy-clients-migrated and migrate existing Redis clients.
+# Replace broker endpoints with the deployment inventory; use three for Kafka HA.
+applicationData:
+  enabled: true
+  kafkaBrokers:
+    - {id: 0, host: 100.64.0.10, port: 30940}
+redis-ha:
+  auth: true
+  existingSecret: application-redis-auth
+  authKey: auth
+  redis:
+    config:
+      aclfile: /etc/redis-acl/users.acl
+    extraVolumeMounts:
+      - {name: application-redis-acl, mountPath: /etc/redis-acl, readOnly: true}
+  extraVolumes:
+    - name: application-redis-acl
+      secret:
+        secretName: application-redis-auth

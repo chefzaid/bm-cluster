@@ -3,12 +3,13 @@
 Use Grafana for metrics, Kibana for logs and audits, and SonarQube for source
 analysis. The [service directory](operations.md#services-and-urls) lists their
 URLs. Applications own instrumentation and scanner jobs; the platform owns
-collection, discovery and shared dashboards.
+collection, discovery and shared dashboards on the platform cluster.
 
 ## Namespace and discovery
 
-Deploy application workloads in **`apps`** and their Argo CD Applications in
-**`infra`**, targeting the local cluster:
+The automatic collection and discovery described here cover workloads on the
+platform cluster. Existing version 1 onboarding places those workloads in
+**`apps`** and their Argo CD Applications in **`infra`**, targeting that cluster:
 
 ```yaml
 metadata:
@@ -24,6 +25,15 @@ too. With the shared services configured, discovery includes Deployments,
 StatefulSets, DaemonSets, CronJobs and standalone Jobs/Pods, including controllers
 scaled to zero. It excludes `infra`, `corp` (including Odoo) and other environments.
 No central application inventory is required.
+
+Version 2 onboarding targets separate `int`, `uat` and `prod` application
+clusters through central Argo CD. Their minimal foundation does not install
+metrics/log collectors or connect remote workloads to central dashboard and
+scheduled Sonar discovery. Those integrations need separate configuration;
+application CI still submits its Sonar analysis. See
+[application deployment clusters](installation.md#application-deployment-clusters).
+Until telemetry is connected, use target-cluster logs and the application's
+delivery health checks; central dashboards do not establish target health.
 
 | Signal | Automatic result | Application requirement |
 |---|---|---|

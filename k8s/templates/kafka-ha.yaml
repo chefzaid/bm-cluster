@@ -21,6 +21,12 @@
 {{- $_ := set $resource.spec "replicas" $replicas }}
 {{- $pod := $resource.spec.template.spec }}
 {{- $container := index $pod.containers 0 }}
+{{- $mounts := list }}
+{{- range $mount := $container.volumeMounts }}{{- if ne $mount.name "remote-startup" }}{{- $mounts = append $mounts $mount }}{{- end }}{{- end }}
+{{- $_ := set $container "volumeMounts" $mounts }}
+{{- $volumes := list }}
+{{- range $volume := ($pod.volumes | default list) }}{{- if ne $volume.name "remote-startup" }}{{- $volumes = append $volumes $volume }}{{- end }}{{- end }}
+{{- $_ := set $pod "volumes" $volumes }}
 {{- $selector := dict "matchLabels" (dict "app" $resource.metadata.name) }}
 {{- $_ := set $pod "affinity" (dict "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list (dict "labelSelector" $selector "topologyKey" "kubernetes.io/hostname")))) }}
 {{- $_ := set $container "command" (list "/bin/bash" "/opt/bm-cluster/kafka-start.sh") }}
@@ -77,6 +83,8 @@ metadata:
 data:
   kafka-start.sh: |
 {{ .Files.Get "files/kafka-start.sh" | indent 4 }}
+  kafka-remote-env.sh: |
+{{ .Files.Get "files/kafka-remote-env.sh" | indent 4 }}
 {{- if eq $ha.phase "active" }}
 {{- range $name := list "kafka" "kafka-controller" }}
 ---

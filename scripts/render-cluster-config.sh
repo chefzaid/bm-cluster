@@ -79,13 +79,13 @@ install -m 0600 "$REPOSITORY_ROOT/config/traefik-values.yaml" "$OUTPUT_DIR/confi
 
 python3 "$SCRIPT_DIR/render-identity.py" --root "$OUTPUT_DIR"
 
-if [[ "${HIGH_AVAILABILITY_ENABLED:-false}" == true || -n "${PLATFORM_HA_VALUES_FILE:-}" ]]; then
-  profile_args=(--root "$OUTPUT_DIR")
-  [[ -z "${PLATFORM_HA_VALUES_FILE:-}" ]] || profile_args+=(--values "$PLATFORM_HA_VALUES_FILE")
-  PLATFORM_DOMAIN="$PLATFORM_DOMAIN" INTERNAL_DNS_ZONE="$INTERNAL_DNS_ZONE" \
-    GITOPS_REPOSITORY_URL="$GITOPS_REPOSITORY_URL" CLOUDFLARE_ACCESS_TEAM_NAME="$CLOUDFLARE_ACCESS_TEAM_NAME" \
-    INSTALL_APPS="$INSTALL_APPS" INSTALL_DESCHEDULER="$INSTALL_DESCHEDULER" \
-    python3 "$SCRIPT_DIR/render-platform-ha.py" "${profile_args[@]}"
-fi
+# Reuse Helm's workload rendering for native installs too, including startup
+# ConfigMaps required by the default (non-HA) Kafka deployment.
+profile_args=(--root "$OUTPUT_DIR")
+[[ -z "${PLATFORM_HA_VALUES_FILE:-}" ]] || profile_args+=(--values "$PLATFORM_HA_VALUES_FILE")
+PLATFORM_DOMAIN="$PLATFORM_DOMAIN" INTERNAL_DNS_ZONE="$INTERNAL_DNS_ZONE" \
+  GITOPS_REPOSITORY_URL="$GITOPS_REPOSITORY_URL" CLOUDFLARE_ACCESS_TEAM_NAME="$CLOUDFLARE_ACCESS_TEAM_NAME" \
+  INSTALL_APPS="$INSTALL_APPS" INSTALL_DESCHEDULER="$INSTALL_DESCHEDULER" \
+  python3 "$SCRIPT_DIR/render-platform-ha.py" "${profile_args[@]}"
 
 printf '%s\n' "$OUTPUT_DIR"

@@ -895,10 +895,8 @@ if [[ "$INSTALL_K3S" == "true" || "$ENROLL_K3S_NODES" == "true" || "$INSTALL_LON
     RUN_K8S_FEATURES=true
 fi
 
-NEEDS_HELM=false
-if [[ "$INSTALL_LONGHORN" == "true" || "$INSTALL_INGRESS" == "true" || "$INSTALL_VAULT_STACK" == "true" || "$INSTALL_ARGOCD" == "true" ]]; then
-    NEEDS_HELM=true
-fi
+# Native manifests and Argo use the same Helm renderer for every profile.
+NEEDS_HELM=true
 
 # ---------- Prerequisites section ----------------------------------------------
 if [[ "$INSTALL_PREREQS" == "true" ]]; then
@@ -941,9 +939,13 @@ else
     warn "Skipping system prerequisites."
 fi
 
-# Rendering uses Python/YAML and must follow prerequisite installation on a
-# fresh host. Explicitly skipping prerequisites requires these tools already.
+# Rendering uses Python/YAML and Helm, including the default non-HA profile.
 python3 -c 'import yaml' >/dev/null 2>&1 || error "Configuration rendering requires python3-yaml; enable prerequisite installation."
+if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
+    info "Installing Helm 3..."
+    download_installer https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 helm-install.sh helm_installer
+    bash "$helm_installer" > /dev/null 2>&1
+fi
 if [[ "$RUN_K8S_FEATURES" == true ]] && command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
     "$SCRIPT_DIR/scripts/check-platform-migration.sh"
 fi
@@ -1013,12 +1015,6 @@ if [[ "$INSTALL_LONGHORN" == "true" ]]; then
     [[ -x "$LONGHORN_HOST_SCRIPT" ]] || error "Longhorn host configurator is not executable: $LONGHORN_HOST_SCRIPT"
     step "Configuring Longhorn host storage prerequisites..."
     "$LONGHORN_HOST_SCRIPT"
-fi
-
-if [[ "$NEEDS_HELM" == "true" ]] && ! command -v helm &>/dev/null; then
-    info "Installing Helm 3..."
-    download_installer https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 helm-install.sh helm_installer
-    bash "$helm_installer" > /dev/null 2>&1
 fi
 
 if [[ -x "$SECURITY_HARDEN_SCRIPT" ]]; then

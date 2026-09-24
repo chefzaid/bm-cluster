@@ -234,3 +234,8 @@ trivy-operator:
   - name: policy-data
     mountPath: /etc/trivy-policy-data
     readOnly: true
+
+# Enable only after the shared cache authentication migration is prepared.
+applicationData:
+  enabled: false
+  kafkaBrokers: []

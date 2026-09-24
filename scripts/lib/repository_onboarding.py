@@ -80,9 +80,14 @@ def load_json(path):
 def validate_contract(root):
     contract = load_json(local_path(root, CONTRACT))
     allowed = {"version", "application", "inputs", "files", "replacements", "registry",
-               "vault", "keycloak", "dns", "bootstrap", "pipeline", "readiness"}
-    if contract.get("version") != 1 or set(contract) - allowed:
+               "vault", "keycloak", "dns", "bootstrap", "pipeline", "readiness", "deployment"}
+    if contract.get("version") not in (1, 2) or set(contract) - allowed:
         raise OnboardingError("Unsupported onboarding contract version or fields")
+    if contract["version"] == 2:
+        from environment_onboarding import validate_declaration
+        validate_declaration(contract)
+    elif "deployment" in contract:
+        raise OnboardingError("Multiple deployment environments require contract version 2")
     app_path = contract.get("application")
     if app_path not in ("infra/argocd/application.yaml", "argocd/application.yaml"):
         raise OnboardingError("Declare one supported Argo CD Application path")
@@ -248,20 +253,30 @@ def render(root, contract, context, previous):
     if not isinstance(source, dict) or set(source) - {"repoURL", "path", "targetRevision"}:
         raise OnboardingError("Version 1 requires a plain local Kustomize source or Helm chart using its defaults")
     if (spec.get("sources") or source.get("chart") or not source.get("path")
-            or spec.get("destination", {}).get("server") != "https://kubernetes.default.svc"
+            or (contract.get("version", 1) == 1 and spec.get("destination", {}).get("server") != "https://kubernetes.default.svc")
             or spec.get("destination", {}).get("namespace") != "apps" or not spec.get("project")):
         raise OnboardingError("Onboarding requires one repository-local Application in the apps namespace")
     source_path = local_path(root, source["path"], existing=False)
     if not source_path.is_dir():
         raise OnboardingError("Argo CD source directory is missing")
     old_revision = source.get("targetRevision", "HEAD")
-    if old_revision not in ("HEAD", context["DEFAULT_BRANCH"]):
+    allowed_revisions = ["HEAD", context["DEFAULT_BRANCH"]]
+    previous_branch = previous.get("context", {}).get("DEFAULT_BRANCH")
+    if isinstance(previous_branch, str) and previous_branch:
+        allowed_revisions.append(previous_branch)
+    if old_revision not in allowed_revisions:
         raise OnboardingError("Onboarding release pipelines require the Application to follow the default branch")
     if not LABEL.fullmatch(app.get("metadata", {}).get("name", "")):
         raise OnboardingError("Invalid Application name")
     app["metadata"]["namespace"] = "infra"
     source["repoURL"] = context["GITLAB_REPOSITORY_URL"]
     source["targetRevision"] = context["DEFAULT_BRANCH"]
+    if contract.get("version", 1) == 2:
+        # This is a public template, never a fallback into the shared platform.
+        spec["destination"] = {"name": "select-environment-in-ci", "namespace": "apps"}
+        spec["project"] = "applications-unconfigured"
+        policy = spec.setdefault("syncPolicy", {})
+        policy["syncOptions"] = [item for item in policy.get("syncOptions", []) if not item.startswith("CreateNamespace=")]
     options = spec.setdefault("syncPolicy", {}).setdefault("syncOptions", [])
     if "FailOnSharedResource=true" not in options:
         options.append("FailOnSharedResource=true")
@@ -425,6 +440,7 @@ class Onboarding:
         self.runner = runner
         self.api = runner.gitlab
         self.kubectl = runner.kubectl
+        self.environments = None
         try:
             self.timeout = int(os.environ.get("ONBOARDING_TIMEOUT", "3600"))
         except ValueError:
@@ -445,6 +461,8 @@ class Onboarding:
         return values
 
     def validate_local(self, checkout, contract, app):
+        if self.environments:
+            return self.environments.validate(checkout, contract, app)
         root = checkout.root
         ci = local_path(root, ".gitlab-ci.yml").read_text()
         if not isinstance(yaml.load(ci, Loader=yaml.BaseLoader), dict):
@@ -536,22 +554,23 @@ class Onboarding:
             if metadata.get("namespace") in ("apps", "infra") and references & paths:
                 self.refresh_external_secret(metadata["name"], metadata["namespace"])
 
-    def refresh_external_secret(self, name, namespace):
-        before = self.kubectl("get", "externalsecret", name, "-n", namespace, "-o", "json")
+    def refresh_external_secret(self, name, namespace, kubectl=None):
+        kubectl = kubectl or self.kubectl
+        before = kubectl("get", "externalsecret", name, "-n", namespace, "-o", "json")
         old_refresh = before.get("status", {}).get("refreshTime")
         # ESO's refreshTime has whole-second precision. A first reconciliation
         # and our forced refresh must be distinguishable even on a fast cluster.
         if old_refresh:
             time.sleep(1.05)
-        self.kubectl("annotate", "externalsecret", name, "-n", namespace, "force-sync=" + str(time.time_ns()), "--overwrite")
+        kubectl("annotate", "externalsecret", name, "-n", namespace, "force-sync=" + str(time.time_ns()), "--overwrite")
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            current = self.kubectl("get", "externalsecret", name, "-n", namespace, "-o", "json")
+            current = kubectl("get", "externalsecret", name, "-n", namespace, "-o", "json")
             status = current.get("status", {})
             if (status.get("refreshTime") and status["refreshTime"] != old_refresh
                     and any(item.get("type") == "Ready" and item.get("status") == "True" for item in status.get("conditions", []))):
                 target = current.get("spec", {}).get("target", {}).get("name", name)
-                secret = self.kubectl("get", "secret", target, "-n", namespace, "-o", "json")
+                secret = kubectl("get", "secret", target, "-n", namespace, "-o", "json")
                 if secret.get("data"):
                     return
             time.sleep(2)
@@ -580,13 +599,19 @@ class Onboarding:
         while time.monotonic() < deadline:
             current = self.kubectl("get", "application", name, "-n", "infra", "-o", "json")
             source = current.get("spec", {}).get("source", {})
+            if self.environments and (current.get("spec", {}).get("destination") != app["spec"]["destination"]
+                                     or current.get("spec", {}).get("project") != app["spec"]["project"]):
+                raise OnboardingError("The deployed Application changed environment destination or project")
             if any(source.get(key) != app["spec"]["source"].get(key) for key in ("repoURL", "path", "targetRevision")):
                 raise OnboardingError("The deployed Application does not match this repository's selected source")
             status = current.get("status", {})
             if (status.get("sync", {}).get("revision") == expected_revision
                     and status.get("sync", {}).get("status") == "Synced" and status.get("health", {}).get("status") == "Healthy"):
-                for deployment in contract["readiness"]["deployments"]:
-                    self.kubectl("rollout", "status", "deployment/" + deployment, "-n", "apps", "--timeout=120s")
+                if self.environments:
+                    self.environments.wait_deployments(contract)
+                else:
+                    for deployment in contract["readiness"]["deployments"]:
+                        self.kubectl("rollout", "status", "deployment/" + deployment, "-n", "apps", "--timeout=120s")
                 return status.get("sync", {}).get("revision", "")
             time.sleep(10)
         raise OnboardingError("Application did not become Synced/Healthy; rerun after resolving its rollout")
@@ -672,6 +697,17 @@ class Onboarding:
             app, settings = render(checkout.root, contract, context, previous)
             resolved = expand(contract, context)
             context = {**context, "APPLICATION_NAME": app["metadata"]["name"], "PREVIOUS_HOSTS": previous_hosts}
+            self.environments = None
+            if contract["version"] == 2:
+                from environment_onboarding import EnvironmentOnboarding
+                from deployment_environments import InventoryError
+                try:
+                    self.environments = EnvironmentOnboarding(self, checkout, resolved, context)
+                except InventoryError as error:
+                    raise OnboardingError(str(error)) from error
+                app = self.environments.application(app)
+                settings["deploymentInventory"] = self.environments.inventory
+                settings["deploymentEnvironment"] = self.environments.environment
             print(f"[SETUP] {slug}@{checkout.sha[:12]} -> {', '.join(resolved['dns']['hosts'])}", flush=True)
             ci = self.validate_local(checkout, resolved, app)
             existing = self.kubectl("get", "application", app["metadata"]["name"], "-n", "infra", "--ignore-not-found", "-o", "json")
@@ -687,7 +723,7 @@ class Onboarding:
             if not cf_token:
                 raise OnboardingError("Set CLOUDFLARE_API_TOKEN to configure the declared DNS records")
             secrets["CLOUDFLARE_API_TOKEN"] = cf_token
-            services = Services(self.api, self.kubectl, context, secrets)
+            services = self.environments.services(secrets) if self.environments else Services(self.api, self.kubectl, context, secrets)
             services.preflight(resolved, checkout.root)
             project_id = project["id"]
             previous_builds = project.get("builds_access_level", "enabled")
@@ -702,8 +738,10 @@ class Onboarding:
                 if pipeline["status"] not in ("failed", "canceled", "success", "skipped"):
                     raise OnboardingError("An earlier onboarding pipeline is still active; finish it before changing settings")
             paths = [*contract["files"], contract["application"], SETTINGS]
+            if self.environments:
+                paths.extend(self.environments.paths)
             changed = bool(checkout.git("status", "--porcelain", "--", *paths))
-            if changed and existing and existing.get("spec", {}).get("syncPolicy", {}).get("automated") is not None:
+            if not self.environments and changed and existing and existing.get("spec", {}).get("syncPolicy", {}).get("automated") is not None:
                 state["paused_application"] = {"name": app["metadata"]["name"], "uid": existing["metadata"]["uid"],
                     "automated": existing["spec"]["syncPolicy"]["automated"], "source_sha": checkout.sha}
                 save()
@@ -719,10 +757,16 @@ class Onboarding:
             save()
             services.provision(resolved, checkout.root)
             self.repository_credentials(resolved, context)
-            self.bootstrap(checkout.root, resolved)
+            if not self.environments:
+                self.bootstrap(checkout.root, resolved)
             self.refresh_credentials(resolved)
-            self.api.call("PUT", f"projects/{project_id}", {"shared_runners_enabled": True,
-                          "ci_config_path": ".gitlab-ci.yml", "ci_push_repository_for_job_token_allowed": True})
+            if self.environments:
+                self.environments.refresh_credentials()
+            if self.environments:
+                self.environments.configure_delivery()
+            else:
+                self.api.call("PUT", f"projects/{project_id}", {"shared_runners_enabled": True,
+                              "ci_config_path": ".gitlab-ci.yml", "ci_push_repository_for_job_token_allowed": True})
             services.publish_dns(resolved)
             state["phase"] = "provisioned"
             save()
@@ -747,6 +791,8 @@ class Onboarding:
                 state["pipeline_intent"] = intent
                 save()
                 variables = {**resolved["pipeline"]["variables"], "ONBOARDING_EXPECTED_SHA": sha, "ONBOARDING_RUN_ID": intent["id"]}
+                if self.environments:
+                    variables["DEPLOYMENT_ENVIRONMENT"] = self.environments.environment
                 pipeline = self.api.call("POST", f"projects/{project_id}/pipeline", {
                     "ref": project["default_branch"], "variables": [{"key": key, "value": value} for key, value in variables.items()]})
                 state.update(pipeline_id=pipeline["id"], pipeline_sha=pipeline["sha"], pipeline_configuration=configuration)
@@ -764,8 +810,12 @@ class Onboarding:
                 raise OnboardingError("The branch tip is not a verified output of this onboarding pipeline; rerun for its current source")
             state["head_after_release"] = release_head
             save()
-            revision = self.wait_application(app, resolved, release_head)
-            if checkout.remote_head() != revision:
+            runtime_revision = release_head
+            if self.environments:
+                app = self.environments.release_application(checkout, release_head)
+                runtime_revision = app["spec"]["source"]["targetRevision"]
+            revision = self.wait_application(app, resolved, runtime_revision)
+            if checkout.remote_head() != release_head:
                 raise OnboardingError("The source changed during rollout verification; rerun for its current revision")
             state.update(phase="complete", deployed_revision=revision)
             state.pop("paused_application", None)

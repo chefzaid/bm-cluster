@@ -5,6 +5,7 @@
 {{- $root := index . 0 -}}
 {{- $path := index . 1 -}}
 {{- $content := $root.Files.Get $path -}}
+{{- $content = replace "bm-cluster.io/application-data: disabled" (printf "bm-cluster.io/application-data: %s" (toJson ($root.Values.applicationData | default dict) | sha256sum)) $content -}}
 {{- range $token, $value := (include "bm-cluster.identity" $root | fromJson) -}}
 {{- $content = replace $token $value $content -}}
 {{- end -}}
@@ -18,10 +19,16 @@
 {{- if $root.Values.postgresHa -}}
 {{- $_ := set $ha "postgresHa" $root.Values.postgresHa -}}
 {{- end -}}
-{{- range $key := list "kafkaHa" "nodeFencing" -}}
+{{- range $key := list "kafkaHa" "nodeFencing" "applicationData" -}}
 {{- if hasKey $root.Values $key -}}
 {{- $_ := set $ha $key (index $root.Values $key) -}}
 {{- end -}}
+{{- end -}}
+{{- if ($root.Values.applicationData | default dict).enabled -}}
+{{- $redis := index $root.Values "redis-ha" -}}
+{{- $_ := set $ha "redis-ha" (dict "auth" $redis.auth "existingSecret" $redis.existingSecret "authKey" $redis.authKey
+    "redis" (dict "config" (dict "aclfile" $redis.redis.config.aclfile) "extraVolumeMounts" $redis.redis.extraVolumeMounts)
+    "extraVolumes" $redis.extraVolumes) -}}
 {{- end -}}
 {{- $content = replace "__HA_VALUES_OBJECT__" (toJson $ha) $content -}}
 {{ $content }}

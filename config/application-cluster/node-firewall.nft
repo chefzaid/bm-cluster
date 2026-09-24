@@ -1,0 +1,11 @@
+# Only private, encrypted peers may reach the K3s control/overlay ports.
+# Public application ingress and existing SSH policy are independent.
+table inet application_cluster {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        # kube-proxy DNATs kubernetes.default.svc:443 to the node API before INPUT.
+        iifname { "cni0", "flannel.1", "flannel-v6.1" } __POD_FAMILY__ saddr __POD_CIDR__ tcp dport 6443 accept
+        iifname != "tailscale0" iifname != "lo" tcp dport { 2379, 2380, 6443, 10250 } drop
+        iifname != "tailscale0" iifname != "lo" udp dport 8472 drop
+    }
+}

@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 import yaml
@@ -131,6 +132,9 @@ def resource_wiring(resources):
         ("ClusterRole", "", "cluster-admin"): {},
         ("ClusterRole", "", "system:auth-delegator"): {},
         ("Secret", "infra", "fixture-inventory"): {},
+        # configure-application-data.py owns this persistent Secret; its guarded
+        # preparation must complete before the opt-in Redis auth profile runs.
+        ("Secret", "infra", "application-redis-auth"): {"data": {"auth": "fixture", "users.acl": "fixture"}},
         # The separately installed Traefik chart owns this entrypoint middleware.
         ("Middleware", "infra", "forwarded-headers"): {},
         ("ConfigMap", "infra", "ingress-proxy-trust"): {"data": {"trustedIPs": "fixture-edge-cidrs"}},
@@ -327,21 +331,31 @@ def render_profiles(output):
                                 text=True, capture_output=True, env=env)
         require(result.returncode != 0 and "Legacy ingress/image settings require explicit migration" in result.stderr,
                 f"Retired {legacy} profile did not stop reconciliation")
-    profiles = [(ha, apps, None) for ha, apps in itertools.product((False, True), repeat=2)]
-    profiles += [(True, True, phase) for phase in ("dynamic", "expanded", "active")]
-    for ha, apps, phase in profiles:
+    profiles = [(ha, apps, None, False) for ha, apps in itertools.product((False, True), repeat=2)]
+    profiles += [(True, True, phase, False) for phase in ("dynamic", "expanded", "active")]
+    profiles += [(False, True, None, True), (True, True, "active", True)]
+    for ha, apps, phase, shared_data in profiles:
         label = f"upstream-{'ha' if ha else 'single'}-{'corp' if apps else 'infra'}"
         if phase:
             label += f"-{phase}-fencing"
+        if shared_data:
+            label += "-shared-data"
         stage = output / label
         flag = lambda value: str(value).lower()
         profile_env = dict(env, HIGH_AVAILABILITY_ENABLED=flag(ha))
+        migration = {}
         if phase:
             migration = yaml.safe_load((ROOT / "config/postgres-ha-values.yaml").read_text())
             migration["postgresHa"]["active"] = phase == "active"
             migration.update(yaml.safe_load((ROOT / "config/kafka-ha-values.yaml").read_text()))
             migration["kafkaHa"].update(phase=phase, clusterId="8ipNY9RxQtWkattTais5yQ")
             migration["nodeFencing"] = {"enabled": True, "inventorySecret": "fixture-inventory", "nodeNames": ["fixture-node"]}
+        if shared_data:
+            migration.update(yaml.safe_load((ROOT / "config/application-data-values.yaml").read_text()))
+            migration["applicationData"]["kafkaBrokers"] = [
+                {"id": ordinal, "host": "100.100.0.10", "port": 30940 + ordinal}
+                for ordinal in range(3 if phase == "active" else 1)]
+        if migration:
             migration_file = output / f"{label}-values.json"
             migration_file.write_text(json.dumps(migration))
             profile_env["PLATFORM_HA_VALUES_FILE"] = str(migration_file)
@@ -397,12 +411,66 @@ def render_profiles(output):
         print(f"[PASS] {label}: Helm lint, {len(runtime)} wired resources and installer/GitOps parity", flush=True)
 
 
+def render_onboarding(output):
+    # Exercise the real renderer: raw YAML substitutions can silently turn valid
+    # Git branch names into booleans/numbers or prevent a default-branch switch.
+    sys.path.insert(0, str(ROOT / "scripts/lib"))
+    from repository_onboarding import OnboardingError, render
+
+    fixture = output / "onboarding"
+    (fixture / "infra/k8s").mkdir(parents=True)
+    (fixture / "infra/argocd").mkdir()
+    app_path = fixture / "infra/argocd/application.yaml"
+    settings_path = fixture / "infra/onboarding-values.json"
+    contract = {"application": "infra/argocd/application.yaml", "files": ["infra/argocd/application.yaml"]}
+    application = {
+        "apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+        "metadata": {"name": "fixture"},
+        "spec": {
+            "project": "default",
+            "source": {"repoURL": "https://example.com/source.git", "path": "infra/k8s", "targetRevision": "HEAD"},
+            "destination": {"server": "https://kubernetes.default.svc", "namespace": "apps"},
+        },
+    }
+    context = {"DEFAULT_BRANCH": "main", "GITLAB_REPOSITORY_URL": "http://gitlab.example.internal/team/nested/app.git"}
+    for branch in ("no", "true", "null", "123", "release/stable", "release's"):
+        app_path.write_text(yaml.safe_dump(application))
+        current = dict(context, DEFAULT_BRANCH=branch)
+        render(fixture, contract, current, {})
+        rendered = yaml.safe_load(app_path.read_text())
+        require(rendered["spec"]["source"]["targetRevision"] == branch,
+                f"Onboarding did not preserve the branch string {branch!r}")
+        saved = json.loads(settings_path.read_text())
+        first = app_path.read_bytes()
+        render(fixture, contract, current, {})
+        require(app_path.read_bytes() == first, f"Onboarding changed a current-branch rerun for {branch!r}")
+        switched = dict(current, DEFAULT_BRANCH=f"next/{branch}")
+        render(fixture, contract, switched, saved)
+        require(yaml.safe_load(app_path.read_text())["spec"]["source"]["targetRevision"] == switched["DEFAULT_BRANCH"],
+                f"Onboarding did not follow a default-branch switch from {branch!r}")
+        before = (app_path.read_bytes(), settings_path.read_bytes())
+        render(fixture, contract, switched, json.loads(settings_path.read_text()))
+        require((app_path.read_bytes(), settings_path.read_bytes()) == before,
+                f"Onboarding changed a saved-settings rerun for {branch!r}")
+    for revision, previous_branch in (("unrelated", "old-default"), ("", ""), (None, None), (True, True), (123, 123)):
+        application["spec"]["source"]["targetRevision"] = revision
+        app_path.write_text(yaml.safe_dump(application))
+        try:
+            render(fixture, contract, context, {"context": {"DEFAULT_BRANCH": previous_branch}})
+        except OnboardingError as error:
+            require("follow the default branch" in str(error), f"Unexpected onboarding failure: {error}")
+        else:
+            raise ValueError(f"Onboarding accepted an unrelated or invalid revision {revision!r}")
+    print("[PASS] Onboarding branch rendering, saved-settings reruns and unrelated-revision rejection", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path, help="Private temporary directory for rendered validation manifests")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True, mode=0o700)
     source_inputs()
+    render_onboarding(args.output)
     render_profiles(args.output)
 
 

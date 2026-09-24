@@ -106,6 +106,9 @@ if [[ "$show_help" == true && ( -z "$role" || -z "$mode" ) ]]; then
     usage
     exit 0
 fi
+if [[ "$show_help" != true ]] && sudo -n test -f /etc/rancher/k3s/application-cluster.json 2>/dev/null; then
+    error "This assistant manages shared-platform nodes. Application clusters use the separate procedure in docs/node-enrollment.md#application-cluster-nodes."
+fi
 if [[ -z "$role" || -z "$mode" ]]; then
     [[ "$non_interactive" == false && "$secret_stdin" == false && -t 0 ]] || \
         error "Specify --role control-plane|worker and --mode remote|local before using automation or secret stdin."
