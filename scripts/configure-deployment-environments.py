@@ -274,9 +274,9 @@ def cluster_registration(context, identity, token):
 
 
 def argo_project(context, platform_domain, internal_domain=None):
-    repositories = [f"https://gitlab.{platform_domain}/*"]
+    repositories = [f"https://gitlab.{platform_domain}/**"]
     if internal_domain:
-        repositories.append(f"http://gitlab.{internal_domain}/*")
+        repositories.append(f"http://gitlab.{internal_domain}/**")
     return object_("AppProject", context["project"], namespace="infra", api="argoproj.io/v1alpha1", spec={
         "description": f"Application workloads in {context['environment']}; foundation is managed separately",
         "sourceRepos": repositories,

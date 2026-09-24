@@ -340,7 +340,8 @@ class ApplicationClusterSafety(unittest.TestCase):
         self.assertEqual(secret["stringData"]["clusterResources"], "false")
         self.assertEqual(secret["stringData"]["project"], "applications-int")
         project = registration.argo_project(self.context, "example.com", "internal.example.com")["spec"]
-        self.assertIn("http://gitlab.internal.example.com/*", project["sourceRepos"])
+        self.assertIn("http://gitlab.internal.example.com/**", project["sourceRepos"])
+        self.assertIn("https://gitlab.example.com/**", project["sourceRepos"])
         self.assertEqual(project["destinations"], [{"server": self.context["server"], "namespace": "apps"}])
         self.assertEqual(project["clusterResourceWhitelist"], [])
         public = registration.publish_inventory(None, self.inventory, "int")

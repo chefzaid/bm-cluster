@@ -16,7 +16,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts/lib"))
 from deployment_environments import load_inventory, validate_inventory, environment_context
-from environment_onboarding import EnvironmentOnboarding, EnvironmentServices
+from environment_onboarding import EnvironmentOnboarding, EnvironmentServices, repository_permitted
 from repository_onboarding import OnboardingError
 from onboarding_services import ServiceError
 from application_delivery import ApplicationDelivery
@@ -94,6 +94,20 @@ class OnboardingTests(unittest.TestCase):
     def manager(self):
         with patch.dict(os.environ, {"ONBOARDING_DEPLOYMENT_ENVIRONMENT":"int"}):
             return EnvironmentOnboarding(self.platform, self.checkout, CONTRACT, CONTEXT)
+    def test_repository_rules_match_argocd_slash_globs_and_denials(self):
+        repository = "http://gitlab.internal.example.com/team/devapp.git"
+        self.assertFalse(repository_permitted(["http://gitlab.internal.example.com/*"], repository))
+        self.assertTrue(repository_permitted(["http://gitlab.internal.example.com/**"], repository))
+        self.assertTrue(repository_permitted(["http://gitlab.internal.example.com/*/*"], repository))
+        self.assertTrue(repository_permitted([repository.removesuffix(".git").upper()], repository))
+        nested = "http://gitlab.internal.example.com/team/subgroup/devapp.git"
+        self.assertTrue(repository_permitted(["http://gitlab.internal.example.com/**"], nested))
+        self.assertFalse(repository_permitted(["http://gitlab.internal.example.com/*/*"], nested))
+        self.assertFalse(repository_permitted(["http://gitlab.internal.example.com/**", "!http://gitlab.internal.example.com/team/**"], nested))
+        self.assertFalse(repository_permitted(["https://gitlab.example.com/**"], repository))
+        self.assertFalse(repository_permitted(["http://gitlab.internal.example.com/**"], "http://gitlab.internal.example.com.attacker.test/team/devapp.git"))
+        self.assertTrue(repository_permitted(["*"], repository))
+
     def test_public_inventory_never_contains_registration_credentials(self):
         manager = self.manager()
         for path in manager.paths:

@@ -15,6 +15,21 @@ from deployment_environments import validate_inventory, environment_context, inv
 from onboarding_services import Services, ServiceError
 
 
+def repository_permitted(patterns, repository):
+    """Match exact/*/** HTTP repository rules with Argo's slash separator semantics."""
+    def matches(pattern):
+        # Argo normalizes Git URLs to lowercase and removes the optional .git suffix.
+        pattern = pattern.strip().lower().removesuffix(".git")
+        value = repository.strip().lower().removesuffix(".git")
+        if pattern == "*":
+            return True
+        expression = "".join(".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part)
+                             for part in re.split(r"(\*\*|\*)", pattern))
+        return re.fullmatch(expression, value) is not None
+    return (any(not pattern.startswith("!") and matches(pattern) for pattern in patterns)
+            and not any(pattern.startswith("!") and matches(pattern[1:]) for pattern in patterns))
+
+
 def validate_declaration(contract):
     from repository_onboarding import OnboardingError
     declaration = contract.get("deployment")
@@ -188,10 +203,9 @@ class EnvironmentOnboarding:
             if destinations not in ([{"name": target["clusterName"], "namespace": target["namespace"]}],
                                     [{"server": target["server"], "namespace": target["namespace"]}]):
                 raise OnboardingError("Application project must permit exactly its registered environment destination")
-            from fnmatch import fnmatchcase
             patterns = project.get("sourceRepos", [])
             url = self.context["GITLAB_REPOSITORY_URL"]
-            if not any(not p.startswith("!") and fnmatchcase(url, p) for p in patterns) or any(p.startswith("!") and fnmatchcase(url, p[1:]) for p in patterns):
+            if not repository_permitted(patterns, url):
                 raise OnboardingError("Application project does not allow this shared GitLab repository")
             with self.target_kubeconfig(env) as path:
                 namespace = subprocess.run(["kubectl", "--kubeconfig", path, "get", "namespace", target["namespace"], "-o", "json"],
